@@ -27,6 +27,7 @@ export const config = {
   workerPollMs: toNumber(process.env.WORKER_POLL_MS, 2000),
   workerConcurrency: toNumber(process.env.WORKER_CONCURRENCY, 1),
   processingStaleMinutes: toNumber(process.env.PROCESSING_STALE_MIN, 30),
+  uploadPartsConcurrency: toNumber(process.env.UPLOAD_PARTS_CONCURRENCY, 2),
   uploadRetryMax: toNumber(process.env.UPLOAD_RETRY_MAX, 5),
   uploadRetryBaseMs: toNumber(process.env.UPLOAD_RETRY_BASE_MS, 1500),
   uploadRetryMaxMs: toNumber(process.env.UPLOAD_RETRY_MAX_MS, 15000)

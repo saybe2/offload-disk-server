@@ -10,7 +10,8 @@ import { deriveKey, encryptFile } from "./crypto.js";
 import { deleteWebhookMessage, uploadToWebhook } from "./discord.js";
 import { uniqueParts } from "./parts.js";
 
-let running = false;
+let running = 0;
+let deleting = false;
 
 function log(message: string) {
   console.log(`[worker] ${new Date().toISOString()} ${message}`);
@@ -139,37 +140,43 @@ async function processNextArchive() {
     }
 
     const uploadedParts = archive.parts || [];
+    const uploadedIndex = new Set(uploadedParts.map((p) => p.index));
+    const pendingParts = parts.filter((p) => !uploadedIndex.has(p.index));
+    const totalParts = archive.totalParts;
+    let completed = archive.uploadedParts || uploadedParts.length;
 
-    for (const part of parts) {
-      if (uploadedParts.find((p) => p.index === part.index)) {
-        continue;
-      }
-      const webhook = webhooks[part.index % webhooks.length];
-      const content = `archive:${archive.id} part:${part.index}`;
-      const result = await uploadWithRetry(part.path, webhook.url, content);
-      const partDoc = {
-        index: part.index,
-        size: part.size,
-        hash: part.hash,
-        url: result.url,
-        messageId: result.messageId,
-        webhookId: webhook.id
-      };
-      uploadedParts.push(partDoc);
-      await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc } });
-      archive.uploadedBytes += part.size;
-      archive.uploadedParts += 1;
-      await Archive.updateOne(
-        { _id: archive.id },
-        { $set: { uploadedBytes: archive.uploadedBytes, uploadedParts: archive.uploadedParts } }
-      );
-      if (archive.uploadedParts % 10 === 0 || archive.uploadedParts === archive.totalParts) {
-        log(`progress ${archive.id} ${archive.uploadedParts}/${archive.totalParts}`);
-      }
-    }
+    const concurrency = Math.max(1, Math.min(config.uploadPartsConcurrency, webhooks.length));
 
-    archive.status = "ready";
-    await archive.save();
+    const workers = Array.from({ length: concurrency }, () => (async () => {
+      while (true) {
+        const part = pendingParts.shift();
+        if (!part) return;
+
+        const webhook = webhooks[part.index % webhooks.length];
+        const content = `archive:${archive.id} part:${part.index}`;
+        const result = await uploadWithRetry(part.path, webhook.url, content);
+        const partDoc = {
+          index: part.index,
+          size: part.size,
+          hash: part.hash,
+          url: result.url,
+          messageId: result.messageId,
+          webhookId: webhook.id
+        };
+        await Archive.updateOne(
+          { _id: archive.id },
+          { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } }
+        );
+        completed += 1;
+        if (completed % 10 === 0 || completed === totalParts) {
+          log(`progress ${archive.id} ${completed}/${totalParts}`);
+        }
+      }
+    })());
+
+    await Promise.all(workers);
+
+    await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     log(`ready ${archive.id}`);
 
     if (config.cacheDeleteAfterUpload) {
@@ -190,10 +197,8 @@ async function processNextArchive() {
       );
       log(`retry queued ${archive.id} (${archive.retryCount + 1}/${config.uploadRetryMax}) ${message}`);
     } else {
-      archive.status = "error";
-      archive.error = message;
-      await archive.save();
-      log(`error ${archive.id} ${archive.error}`);
+      await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: message } });
+      log(`error ${archive.id} ${message}`);
     }
   }
 }
@@ -256,18 +261,26 @@ async function processDelete() {
 
 export function startWorker() {
   setInterval(async () => {
-    if (running) return;
-    running = true;
-    try {
-      await resetStaleProcessing();
-      const before = await Archive.countDocuments({ status: "queued", deletedAt: null, trashedAt: null });
-      if (before > 0) {
-        await processNextArchive();
-      } else {
-        await processDelete();
-      }
-    } finally {
-      running = false;
+    while (running < config.workerConcurrency) {
+      running += 1;
+      (async () => {
+        try {
+          await resetStaleProcessing();
+          const before = await Archive.countDocuments({ status: "queued", deletedAt: null, trashedAt: null });
+          if (before > 0) {
+            await processNextArchive();
+          } else if (!deleting) {
+            deleting = true;
+            try {
+              await processDelete();
+            } finally {
+              deleting = false;
+            }
+          }
+        } finally {
+          running -= 1;
+        }
+      })();
     }
   }, config.workerPollMs);
 }
