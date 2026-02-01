@@ -4,6 +4,7 @@ const quotaEl = document.getElementById('quota');
 const uploadForm = document.getElementById('uploadForm');
 const uploadStatus = document.getElementById('uploadStatus');
 const serverProgress = document.getElementById('serverProgress');
+const uploadEta = document.getElementById('uploadEta');
 const logoutBtn = document.getElementById('logoutBtn');
 const adminLink = document.getElementById('adminLink');
 const uploadArea = document.getElementById('uploadArea');
@@ -57,6 +58,7 @@ let lastRenderedItems = [];
 let pendingDeleteResolve = null;
 let shareTarget = null;
 let priorityTarget = null;
+const archiveProgress = new Map();
 
 const priorities = [
   { value: 0, label: 'lowest' },
@@ -124,6 +126,50 @@ function formatSize(bytes) {
     unit += 1;
   }
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 2)} ${units[unit]}`;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  const total = Math.max(0, Math.round(seconds));
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hrs > 0) {
+    return `${hrs}h ${String(mins).padStart(2, '0')}m`;
+  }
+  if (mins > 0) {
+    return `${mins}m ${String(secs).padStart(2, '0')}s`;
+  }
+  return `${secs}s`;
+}
+
+function updateArchiveProgress(archives) {
+  const now = Date.now();
+  const activeIds = new Set();
+  for (const archive of archives) {
+    activeIds.add(archive._id);
+    const entry = archiveProgress.get(archive._id) || { lastBytes: 0, lastTs: 0, speed: 0 };
+    const uploaded = Number(archive.uploadedBytes || 0);
+    if (entry.lastTs && uploaded >= entry.lastBytes) {
+      const deltaBytes = uploaded - entry.lastBytes;
+      const deltaTime = (now - entry.lastTs) / 1000;
+      if (deltaTime > 0 && deltaBytes > 0) {
+        const instant = deltaBytes / deltaTime;
+        entry.speed = entry.speed ? (entry.speed * 0.7 + instant * 0.3) : instant;
+      }
+    }
+    entry.lastBytes = uploaded;
+    entry.lastTs = now;
+    if (archive.status === 'ready') {
+      entry.speed = 0;
+    }
+    archiveProgress.set(archive._id, entry);
+  }
+  for (const id of archiveProgress.keys()) {
+    if (!activeIds.has(id)) {
+      archiveProgress.delete(id);
+    }
+  }
 }
 
 function buildFolderPath(folderId) {
@@ -330,6 +376,7 @@ async function loadArchives() {
   const res = await fetch(`/api/archives?${params.toString()}`);
   const data = await res.json();
   archivesCache = data.archives || [];
+  updateArchiveProgress(archivesCache);
   renderArchives();
 }
 
@@ -478,7 +525,32 @@ function renderArchives() {
     }
 
     const discordTd = document.createElement('td');
-    discordTd.textContent = a.status === 'ready' ? '100%' : discordProgress(a);
+    const progressWrap = document.createElement('div');
+    progressWrap.className = 'mini-progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'mini-bar';
+    const progressFill = document.createElement('div');
+    progressFill.className = 'mini-bar-fill';
+    const totalBytes = a.encryptedSize || 0;
+    const uploadedBytes = a.uploadedBytes || 0;
+    const pct = totalBytes > 0 ? Math.min(100, Math.floor((uploadedBytes / totalBytes) * 100)) : 0;
+    progressFill.style.width = `${a.status === 'ready' ? 100 : pct}%`;
+    progressBar.appendChild(progressFill);
+    const progressMeta = document.createElement('div');
+    progressMeta.className = 'mini-meta';
+    const entry = archiveProgress.get(a._id);
+    let etaText = '';
+    if (a.status !== 'ready' && totalBytes > 0 && uploadedBytes < totalBytes && entry?.speed) {
+      const remaining = totalBytes - uploadedBytes;
+      const eta = formatDuration(remaining / entry.speed);
+      if (eta) etaText = `ETA ${eta}`;
+    }
+    progressMeta.textContent = a.status === 'ready'
+      ? '100%'
+      : `${pct}%${etaText ? ` · ${etaText}` : ''}`;
+    progressWrap.appendChild(progressBar);
+    progressWrap.appendChild(progressMeta);
+    discordTd.appendChild(progressWrap);
 
     const priorityTd = document.createElement('td');
     const prioritySelect = document.createElement('select');
@@ -601,6 +673,11 @@ async function uploadFiles(fileList) {
   if (!fileList || fileList.length === 0) return;
   uploadStatus.textContent = 'Uploading to server...';
   serverProgress.value = 0;
+  uploadEta.textContent = '';
+  let startTime = 0;
+  let lastTime = 0;
+  let lastLoaded = 0;
+  let lastSpeed = 0;
 
   const data = new FormData();
   for (const file of fileList) {
@@ -614,8 +691,24 @@ async function uploadFiles(fileList) {
   xhr.open('POST', '/api/upload');
   xhr.upload.onprogress = (event) => {
     if (event.lengthComputable) {
+      const now = Date.now();
+      if (!startTime) startTime = now;
       const pct = Math.floor((event.loaded / event.total) * 100);
       serverProgress.value = pct;
+      const deltaBytes = event.loaded - lastLoaded;
+      const deltaTime = (now - (lastTime || now)) / 1000;
+      if (deltaTime > 0 && deltaBytes >= 0) {
+        const instant = deltaBytes / deltaTime;
+        lastSpeed = lastSpeed ? (lastSpeed * 0.7 + instant * 0.3) : instant;
+      }
+      lastLoaded = event.loaded;
+      lastTime = now;
+      const avgSpeed = event.loaded / Math.max(1, (now - startTime) / 1000);
+      const speed = lastSpeed || avgSpeed;
+      const remaining = Math.max(0, event.total - event.loaded);
+      const eta = speed > 0 ? formatDuration(remaining / speed) : '';
+      uploadStatus.textContent = `Uploading to server... ${pct}% (${formatSize(event.loaded)} / ${formatSize(event.total)})`;
+      uploadEta.textContent = eta ? `ETA ${eta}` : '';
     }
   };
 
@@ -623,6 +716,7 @@ async function uploadFiles(fileList) {
     if (xhr.status >= 200 && xhr.status < 300) {
       uploadStatus.textContent = 'Queued for Discord upload';
       serverProgress.value = 100;
+      uploadEta.textContent = '';
       uploadForm.reset();
       await loadMe();
       await loadArchives();
@@ -633,11 +727,13 @@ async function uploadFiles(fileList) {
         err = data.error || err;
       } catch (e) {}
       uploadStatus.textContent = `Error: ${err}`;
+      uploadEta.textContent = '';
     }
   };
 
   xhr.onerror = () => {
     uploadStatus.textContent = 'Upload failed';
+    uploadEta.textContent = '';
   };
 
   xhr.send(data);
