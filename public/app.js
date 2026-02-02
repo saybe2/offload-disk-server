@@ -15,6 +15,7 @@ const folderPrioritySave = document.getElementById('folderPrioritySave');
 const searchInput = document.getElementById('searchInput');
 const newFolderBtn = document.getElementById('newFolderBtn');
 const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
 const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
 const navTrash = document.getElementById('navTrash');
@@ -630,6 +631,8 @@ function updateSelectionUI() {
   const isFiles = currentView === 'files';
   downloadSelectedBtn.disabled = selectedItems.size === 0 || !isFiles;
   downloadSelectedBtn.classList.toggle('hidden', !isFiles);
+  deleteSelectedBtn.disabled = selectedItems.size === 0 || !isFiles;
+  deleteSelectedBtn.classList.toggle('hidden', !isFiles);
   newFolderBtn.classList.toggle('hidden', !isFiles);
 }
 
@@ -832,6 +835,14 @@ async function openFileContextMenu(item, x, y) {
 
   if (selectedItems.size > 1) {
     items.push({ label: `Download selected (${selectedItems.size})`, onClick: async () => submitDownloadSelected() });
+    items.push({ label: `Delete selected (${selectedItems.size})`, onClick: async () => {
+      const ok = await confirmDelete();
+      if (!ok) return;
+      const archiveIds = new Set(Array.from(selectedItems.values()).map((it) => it.archiveId));
+      await Promise.all(Array.from(archiveIds).map((id) => fetch(`/api/archives/${id}/trash`, { method: 'POST' })));
+      selectedItems.clear();
+      await loadArchives();
+    } });
   }
 
   if (a.status === 'ready') {
@@ -1131,6 +1142,16 @@ newFolderBtn.addEventListener('click', async () => {
 
 downloadSelectedBtn.addEventListener('click', () => {
   submitDownloadSelected();
+});
+
+deleteSelectedBtn.addEventListener('click', async () => {
+  if (selectedItems.size === 0) return;
+  const ok = await confirmDelete();
+  if (!ok) return;
+  const archiveIds = new Set(Array.from(selectedItems.values()).map((item) => item.archiveId));
+  await Promise.all(Array.from(archiveIds).map((id) => fetch(`/api/archives/${id}/trash`, { method: 'POST' })));
+  selectedItems.clear();
+  await loadArchives();
 });
 
 folderPrioritySave.addEventListener('click', async () => {
