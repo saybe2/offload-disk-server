@@ -28,8 +28,8 @@ case "$ACTION" in
     if ! id "$USERNAME" >/dev/null 2>&1; then
       useradd -M -s /usr/sbin/nologin "$USERNAME"
     fi
-    printf "%s\n%s\n" "$PASSWORD" "$PASSWORD" | smbpasswd -a -s "$USERNAME" >/dev/null
-    smbpasswd -e "$USERNAME" >/dev/null 2>&1 || true
+    printf "%s\n%s\n" "$PASSWORD" "$PASSWORD" | smbpasswd -c "$SMB_CONF_PATH" -a -s "$USERNAME" >/dev/null
+    smbpasswd -c "$SMB_CONF_PATH" -e "$USERNAME" >/dev/null 2>&1 || true
     mkdir -p "$SMB_MOUNT/$USERNAME"
     chown "$USERNAME":"$USERNAME" "$SMB_MOUNT/$USERNAME" 2>/dev/null || true
     chmod 750 "$SMB_MOUNT/$USERNAME" 2>/dev/null || true
