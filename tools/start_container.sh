@@ -54,6 +54,19 @@ cat > "$CONF_PATH" <<EOF
 EOF
 
 if command -v smbd >/dev/null 2>&1; then
+  if command -v pdbedit >/dev/null 2>&1; then
+    while IFS= read -r smb_user; do
+      if [[ -z "$smb_user" ]]; then
+        continue
+      fi
+      if ! id "$smb_user" >/dev/null 2>&1; then
+        useradd -M -s /usr/sbin/nologin "$smb_user" >/dev/null 2>&1 || true
+      fi
+      mkdir -p "/home/container/offload_mount/$smb_user" >/dev/null 2>&1 || true
+      chown "$smb_user":"$smb_user" "/home/container/offload_mount/$smb_user" >/dev/null 2>&1 || true
+      chmod 750 "/home/container/offload_mount/$smb_user" >/dev/null 2>&1 || true
+    done < <(pdbedit -L -s "$CONF_PATH" 2>/dev/null | awk -F: '{print $1}')
+  fi
   /usr/sbin/smbd -F --no-process-group -s "$CONF_PATH" &
 else
   echo "smbd not found in PATH"

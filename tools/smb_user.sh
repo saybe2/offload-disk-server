@@ -36,7 +36,7 @@ case "$ACTION" in
     ;;
   delete)
     if id "$USERNAME" >/dev/null 2>&1; then
-      smbpasswd -x "$USERNAME" >/dev/null 2>&1 || true
+      smbpasswd -c "$SMB_CONF_PATH" -x "$USERNAME" >/dev/null 2>&1 || true
       userdel "$USERNAME" >/dev/null 2>&1 || true
     fi
     ;;
