@@ -312,6 +312,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       });
 
       archiveId = archive.id;
+      log("stream", `upload start archive=${archive.id} user=${user.id} name=${safeName}`);
 
       const workDir = path.join(config.cacheDir, "work", `stream_${archive.id}`);
       const partsDir = path.join(workDir, "parts");
@@ -324,6 +325,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       let partIndex = 0;
       let originalSize = 0;
       let failed: Error | null = null;
+      let uploadedPartsCount = 0;
 
       let active = 0;
       const pending: { index: number; path: string; size: number; hash: string }[] = [];
@@ -357,10 +359,15 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
               webhookId: webhook.id
             };
             await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } });
+            uploadedPartsCount += 1;
+            if (uploadedPartsCount % 10 === 0) {
+              log("stream", `upload progress archive=${archive.id} parts=${uploadedPartsCount}`);
+            }
             await fs.promises.unlink(part.path).catch(() => undefined);
           })()
             .catch((err) => {
               failed = err instanceof Error ? err : new Error("upload_failed");
+              log("stream", `upload error archive=${archive.id} err=${failed.message}`);
             })
             .finally(() => {
               active -= 1;
@@ -410,6 +417,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       }
 
       finishedAdding = true;
+      log("stream", `upload queued archive=${archive.id} parts=${partIndex}`);
       if (active === 0 && pending.length === 0) {
         resolveUploadsFinished();
       }
@@ -434,9 +442,11 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       uploadDone = uploadsFinished.then(async () => {
         if (failed) {
           await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: failed?.message || "upload_failed" } });
+          log("stream", `upload failed archive=${archive.id} err=${failed?.message || "upload_failed"}`);
           return;
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
+        log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
         if (config.cacheDeleteAfterUpload) {
           await fs.promises.rm(stagingDir, { recursive: true, force: true });
           await fs.promises.rm(workDir, { recursive: true, force: true });
