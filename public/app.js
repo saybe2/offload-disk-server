@@ -421,6 +421,23 @@ function renderArchives() {
         loadFolders();
         loadArchives();
       });
+      trUp.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        trUp.classList.add('drop');
+      });
+      trUp.addEventListener('dragleave', () => trUp.classList.remove('drop'));
+      trUp.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        trUp.classList.remove('drop');
+        if (!dragArchiveId) return;
+        await fetch(`/api/archives/${dragArchiveId}/move`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderId: parentId })
+        });
+        dragArchiveId = null;
+        loadArchives();
+      });
       archiveList.appendChild(trUp);
     }
 
