@@ -690,8 +690,11 @@ async function uploadFiles(fileList) {
     data.append('folderId', currentFolderId);
   }
 
+  const streamSingle = fileList.length === 1 && fileList[0].size >= (8 * 1024 * 1024);
+  const uploadUrl = streamSingle ? '/api/upload-stream' : '/api/upload';
+
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload');
+  xhr.open('POST', uploadUrl);
   xhr.upload.onprogress = (event) => {
     if (event.lengthComputable) {
       const now = Date.now();

@@ -3,6 +3,8 @@ import path from "path";
 import fs from "fs";
 import archiver from "archiver";
 import multer from "multer";
+import busboy from "busboy";
+import crypto from "crypto";
 import { nanoid } from "nanoid";
 import { checkDiskSpace } from "../services/disk.js";
 import { requireAuth } from "../auth.js";
@@ -15,6 +17,9 @@ import { restoreArchiveFileToFile, restoreArchiveToFile, streamArchiveFileToResp
 import { uniqueParts } from "../services/parts.js";
 import { log } from "../logger.js";
 import { getDescendantFolderIds } from "../services/folders.js";
+import { Webhook } from "../models/Webhook.js";
+import { deriveKey } from "../services/crypto.js";
+import { uploadToWebhook } from "../services/discord.js";
 
 const upload = multer({ dest: path.join(config.cacheDir, "uploads_tmp") });
 
@@ -29,6 +34,35 @@ function makeDisplayName(files: Express.Multer.File[]) {
     return files[0].originalname.replace(/[\\/]/g, "_");
   }
   return `Bundle (${files.length} files)`;
+}
+
+function isTransientError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/fetch failed/i.test(message)) return true;
+  if (/ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up/i.test(message)) return true;
+  const match = message.match(/webhook_upload_failed:(\d{3})/);
+  if (match) {
+    const code = Number(match[1]);
+    if (code === 429) return true;
+    if (code >= 500 && code <= 599) return true;
+  }
+  return false;
+}
+
+async function uploadWithRetry(partPath: string, webhookUrl: string, content: string) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await uploadToWebhook(partPath, webhookUrl, content);
+    } catch (err) {
+      attempt += 1;
+      if (!isTransientError(err) || attempt > config.uploadRetryMax) {
+        throw err;
+      }
+      const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
 }
 
 function splitUploads(files: Express.Multer.File[]) {
@@ -200,6 +234,247 @@ apiRouter.post("/upload", requireAuth, upload.array("files", 200), async (req, r
 
   log("api", `upload queued archives=${archiveIds.length} files=${files.length} size=${totalSize}`);
   return res.json({ ok: true, archiveIds });
+});
+
+apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
+  const user = await User.findById(req.session.userId);
+  if (!user) {
+    return res.status(401).json({ error: "auth_required" });
+  }
+
+  const webhooks = await Webhook.find({ enabled: true });
+  if (webhooks.length === 0) {
+    return res.status(400).json({ error: "no_webhooks" });
+  }
+
+  let folderId: string | null = null;
+  let archiveId: string | null = null;
+  let receiveDone: Promise<{ originalSize: number }> | null = null;
+  let uploadDone: Promise<void> | null = null;
+  let receiveError: Error | null = null;
+
+  const bb = busboy({ headers: req.headers, limits: { files: 1 } });
+
+  bb.on("field", (name: string, value: string) => {
+    if (name === "folderId") {
+      folderId = value || null;
+    }
+  });
+
+  bb.on("file", (name: string, file: NodeJS.ReadableStream, info: { filename?: string }) => {
+    const filename = (info?.filename || "file").toString();
+    const safeName = filename.replace(/[\\/]/g, "_");
+
+    file.pause();
+
+    receiveDone = (async () => {
+      let folderRef: any = null;
+      let basePriority = 2;
+      if (folderId) {
+        const folder = await Folder.findById(folderId);
+        if (!folder || (req.session.role !== "admin" && folder.userId.toString() !== req.session.userId)) {
+          throw new Error("invalid_folder");
+        }
+        folderRef = folder._id;
+        basePriority = folder.priority ?? 2;
+      }
+
+      const stagingDir = path.join(
+        config.cacheDir,
+        "uploads",
+        new Date().toISOString().slice(0, 10),
+        `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_stream`
+      );
+      await fs.promises.mkdir(stagingDir, { recursive: true });
+
+      const rawPath = path.join(stagingDir, `0_${sanitizeName(filename)}`);
+      const rawWrite = fs.createWriteStream(rawPath);
+
+      const archive = await Archive.create({
+        userId: user.id,
+        name: sanitizeName(safeName),
+        displayName: safeName,
+        downloadName: safeName,
+        isBundle: false,
+        folderId: folderRef,
+        priority: basePriority,
+        priorityOverride: false,
+        status: "processing",
+        originalSize: 0,
+        encryptedSize: 0,
+        uploadedBytes: 0,
+        uploadedParts: 0,
+        totalParts: 0,
+        chunkSizeBytes: computed.chunkSizeBytes,
+        stagingDir,
+        files: [{ path: rawPath, name: path.basename(rawPath), originalName: safeName, size: 0 }],
+        parts: []
+      });
+
+      archiveId = archive.id;
+
+      const workDir = path.join(config.cacheDir, "work", `stream_${archive.id}`);
+      const partsDir = path.join(workDir, "parts");
+      await fs.promises.mkdir(partsDir, { recursive: true });
+
+      const key = deriveKey(config.masterKey);
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+      let encryptedBytes = 0;
+      let partIndex = 0;
+      let originalSize = 0;
+      let failed: Error | null = null;
+
+      let active = 0;
+      const pending: { index: number; path: string; size: number; hash: string }[] = [];
+      let uploadsFinishedResolve: (() => void) | null = null;
+      const uploadsFinished = new Promise<void>((resolve) => {
+        uploadsFinishedResolve = resolve;
+      });
+      const resolveUploadsFinished = () => {
+        if (uploadsFinishedResolve) {
+          uploadsFinishedResolve();
+          uploadsFinishedResolve = null;
+        }
+      };
+      let finishedAdding = false;
+
+      const scheduleUploads = () => {
+        if (failed) return;
+        while (active < config.uploadPartsConcurrency && pending.length > 0) {
+          const part = pending.shift()!;
+          active += 1;
+          (async () => {
+            const webhook = webhooks[part.index % webhooks.length];
+            const content = `archive:${archive.id} part:${part.index}`;
+            const result = await uploadWithRetry(part.path, webhook.url, content);
+            const partDoc = {
+              index: part.index,
+              size: part.size,
+              hash: part.hash,
+              url: result.url,
+              messageId: result.messageId,
+              webhookId: webhook.id
+            };
+            await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } });
+            await fs.promises.unlink(part.path).catch(() => undefined);
+          })()
+            .catch((err) => {
+              failed = err instanceof Error ? err : new Error("upload_failed");
+            })
+            .finally(() => {
+              active -= 1;
+              if (finishedAdding && active === 0 && pending.length === 0) {
+                resolveUploadsFinished();
+              } else {
+                scheduleUploads();
+              }
+            });
+        }
+      };
+
+      const enqueuePart = async (buffer: Buffer, index: number) => {
+        const partPath = path.join(partsDir, `part_${index}`);
+        const hash = crypto.createHash("sha256").update(buffer).digest("hex");
+        await fs.promises.writeFile(partPath, buffer);
+        pending.push({ index, path: partPath, size: buffer.length, hash });
+        scheduleUploads();
+      };
+
+      file.on("data", (chunk: Buffer) => {
+        originalSize += chunk.length;
+      });
+
+      file.pipe(rawWrite);
+      file.pipe(cipher);
+      file.resume();
+
+      let buffer = Buffer.alloc(0);
+      for await (const chunk of cipher) {
+        if (failed) break;
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any);
+        buffer = Buffer.concat([buffer, data]);
+        while (buffer.length >= computed.chunkSizeBytes) {
+          const part = buffer.subarray(0, computed.chunkSizeBytes);
+          buffer = buffer.subarray(computed.chunkSizeBytes);
+          encryptedBytes += part.length;
+          await enqueuePart(part, partIndex);
+          partIndex += 1;
+        }
+      }
+
+      if (!failed && buffer.length > 0) {
+        encryptedBytes += buffer.length;
+        await enqueuePart(buffer, partIndex);
+        partIndex += 1;
+      }
+
+      finishedAdding = true;
+      if (active === 0 && pending.length === 0) {
+        resolveUploadsFinished();
+      }
+
+      const authTag = cipher.getAuthTag();
+      await Archive.updateOne(
+        { _id: archive.id },
+        {
+          $set: {
+            iv: iv.toString("base64"),
+            authTag: authTag.toString("base64"),
+            encryptedSize: encryptedBytes,
+            totalParts: partIndex,
+            originalSize,
+            "files.0.size": originalSize
+          }
+        }
+      );
+
+      await User.updateOne({ _id: user.id }, { $inc: { usedBytes: originalSize } });
+
+      uploadDone = uploadsFinished.then(async () => {
+        if (failed) {
+          await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: failed?.message || "upload_failed" } });
+          return;
+        }
+        await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
+        if (config.cacheDeleteAfterUpload) {
+          await fs.promises.rm(stagingDir, { recursive: true, force: true });
+          await fs.promises.rm(workDir, { recursive: true, force: true });
+        }
+      });
+
+      return { originalSize };
+    })().catch((err) => {
+      receiveError = err instanceof Error ? err : new Error("stream_failed");
+      return { originalSize: 0 };
+    });
+  });
+
+  bb.on("finish", async () => {
+    if (!receiveDone) {
+      return res.status(400).json({ error: "no_files" });
+    }
+
+    const result = await receiveDone;
+    if (receiveError) {
+      if (archiveId) {
+        await Archive.updateOne({ _id: archiveId }, { $set: { status: "error", error: receiveError.message } });
+      }
+      return res.status(500).json({ error: "upload_failed" });
+    }
+
+    const quotaBytes = user.quotaBytes || 0;
+    if (quotaBytes > 0 && user.usedBytes + result.originalSize > quotaBytes) {
+      if (archiveId) {
+        await Archive.updateOne({ _id: archiveId }, { $set: { status: "error", error: "quota_exceeded", deleteRequestedAt: new Date() } });
+      }
+      return res.status(413).json({ error: "quota_exceeded" });
+    }
+
+    return res.json({ ok: true, archiveIds: archiveId ? [archiveId] : [] });
+  });
+
+  req.pipe(bb);
 });
 
 apiRouter.get("/archives", requireAuth, async (req, res) => {
