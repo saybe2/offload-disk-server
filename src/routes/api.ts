@@ -19,7 +19,7 @@ import { log } from "../logger.js";
 import { getDescendantFolderIds } from "../services/folders.js";
 import { Webhook } from "../models/Webhook.js";
 import { deriveKey } from "../services/crypto.js";
-import { uploadToWebhook } from "../services/discord.js";
+import { uploadBufferToWebhook, uploadToWebhook } from "../services/discord.js";
 
 const upload = multer({ dest: path.join(config.cacheDir, "uploads_tmp") });
 
@@ -54,6 +54,22 @@ async function uploadWithRetry(partPath: string, webhookUrl: string, content: st
   while (true) {
     try {
       return await uploadToWebhook(partPath, webhookUrl, content);
+    } catch (err) {
+      attempt += 1;
+      if (!isTransientError(err) || attempt > config.uploadRetryMax) {
+        throw err;
+      }
+      const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await uploadBufferToWebhook(buffer, filename, webhookUrl, content);
     } catch (err) {
       attempt += 1;
       if (!isTransientError(err) || attempt > config.uploadRetryMax) {
@@ -300,6 +316,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       if (clientAborted) {
         throw new Error("client_aborted");
       }
+      const useDisk = config.streamUseDisk;
       let folderRef: any = null;
       let basePriority = 2;
       if (folderId) {
@@ -320,7 +337,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       await fs.promises.mkdir(stagingDir, { recursive: true });
 
       const rawPath = path.join(stagingDir, `0_${sanitizeName(filename)}`);
-      const rawWrite = fs.createWriteStream(rawPath);
+      const rawWrite = useDisk ? fs.createWriteStream(rawPath) : null;
       activeRawWrite = rawWrite;
 
       const archive = await Archive.create({
@@ -348,8 +365,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       log("stream", `upload start archive=${archive.id} user=${user.id} name=${safeName}`);
 
       const workDir = path.join(config.cacheDir, "work", `stream_${archive.id}`);
-      const partsDir = path.join(workDir, "parts");
-      await fs.promises.mkdir(partsDir, { recursive: true });
+      if (useDisk) {
+        await fs.promises.mkdir(workDir, { recursive: true });
+      }
 
       const key = deriveKey(config.masterKey);
       const iv = crypto.randomBytes(12);
@@ -361,7 +379,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       let uploadedPartsCount = 0;
 
       let active = 0;
-      const pending: { index: number; path: string; size: number; hash: string }[] = [];
+      const pending: { index: number; buffer: Buffer; size: number; hash: string }[] = [];
       let uploadsFinishedResolve: (() => void) | null = null;
       const uploadsFinished = new Promise<void>((resolve) => {
         uploadsFinishedResolve = resolve;
@@ -382,7 +400,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           (async () => {
             const webhook = webhooks[part.index % webhooks.length];
             const content = `archive:${archive.id} part:${part.index}`;
-            const result = await uploadWithRetry(part.path, webhook.url, content);
+            const result = await uploadBufferWithRetry(part.buffer, `part_${part.index}`, webhook.url, content);
             const partDoc = {
               index: part.index,
               size: part.size,
@@ -396,7 +414,6 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
             if (uploadedPartsCount % 10 === 0) {
               log("stream", `upload progress archive=${archive.id} parts=${uploadedPartsCount}`);
             }
-            await fs.promises.unlink(part.path).catch(() => undefined);
           })()
             .catch((err) => {
               failed = err instanceof Error ? err : new Error("upload_failed");
@@ -413,12 +430,18 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
       };
 
+      const maxPending = Math.max(2, config.uploadPartsConcurrency * 2);
+      const waitForPendingSpace = async () => {
+        while (!failed && pending.length >= maxPending) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      };
+
       const enqueuePart = async (buffer: Buffer, index: number) => {
-        const partPath = path.join(partsDir, `part_${index}`);
         const hash = crypto.createHash("sha256").update(buffer).digest("hex");
-        await fs.promises.writeFile(partPath, buffer);
-        pending.push({ index, path: partPath, size: buffer.length, hash });
+        pending.push({ index, buffer, size: buffer.length, hash });
         scheduleUploads();
+        await waitForPendingSpace();
       };
 
       file.on("data", (chunk: Buffer) => {
@@ -428,7 +451,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         failed = err instanceof Error ? err : new Error("stream_failed");
       });
 
-      file.pipe(rawWrite);
+      if (rawWrite) {
+        file.pipe(rawWrite);
+      }
       file.pipe(cipher);
       file.resume();
 
@@ -485,7 +510,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
         if (config.cacheDeleteAfterUpload) {
           await fs.promises.rm(stagingDir, { recursive: true, force: true });
-          await fs.promises.rm(workDir, { recursive: true, force: true });
+          if (useDisk) {
+            await fs.promises.rm(workDir, { recursive: true, force: true });
+          }
         }
       });
 
