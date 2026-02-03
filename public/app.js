@@ -763,7 +763,20 @@ async function uploadFiles(fileList, targetFolderId) {
   }
 
   const streamSingle = fileList.length === 1 && fileList[0].size >= (8 * 1024 * 1024);
-  const uploadUrl = streamSingle ? '/api/upload-stream' : '/api/upload';
+  let uploadUrl = streamSingle ? '/api/upload-stream' : '/api/upload';
+  if (streamSingle) {
+    const params = new URLSearchParams();
+    if (folderId) {
+      params.set('folderId', folderId);
+    }
+    if (hasRelative && fileEntries[0]?.webkitRelativePath) {
+      params.set('path', fileEntries[0].webkitRelativePath);
+    }
+    const query = params.toString();
+    if (query) {
+      uploadUrl += `?${query}`;
+    }
+  }
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', uploadUrl);

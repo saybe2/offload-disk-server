@@ -414,8 +414,8 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "no_webhooks" });
   }
 
-  let folderId: string | null = null;
-  let relativePath: string | null = null;
+  let folderId: string | null = typeof req.query.folderId === "string" ? req.query.folderId : null;
+  let relativePath: string | null = typeof req.query.path === "string" ? req.query.path : null;
   let clientName: string | null = null;
   let archiveId: string | null = null;
   let receiveDone: Promise<{ originalSize: number }> | null = null;
