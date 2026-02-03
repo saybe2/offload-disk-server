@@ -78,6 +78,10 @@ start_smb() {
   if [[ "$SMB_ENABLED" != "true" ]]; then
     return 0
   fi
+  if [[ ! -f /home/container/runtime/fuse_ready ]]; then
+    echo "FUSE not ready, skipping SMB start" >> /home/container/logs/samba.log
+    return 1
+  fi
   if command -v smbd >/dev/null 2>&1; then
     if command -v pdbedit >/dev/null 2>&1; then
       while IFS= read -r smb_user; do

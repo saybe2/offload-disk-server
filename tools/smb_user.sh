@@ -30,9 +30,6 @@ case "$ACTION" in
     fi
     printf "%s\n%s\n" "$PASSWORD" "$PASSWORD" | smbpasswd -c "$SMB_CONF_PATH" -a -s "$USERNAME" >/dev/null
     smbpasswd -c "$SMB_CONF_PATH" -e "$USERNAME" >/dev/null 2>&1 || true
-    mkdir -p "$SMB_MOUNT/$USERNAME" >/dev/null 2>&1 || true
-    chown "$USERNAME":"$USERNAME" "$SMB_MOUNT/$USERNAME" 2>/dev/null || true
-    chmod 750 "$SMB_MOUNT/$USERNAME" 2>/dev/null || true
     ;;
   delete)
     if id "$USERNAME" >/dev/null 2>&1; then
