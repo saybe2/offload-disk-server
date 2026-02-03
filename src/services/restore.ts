@@ -15,6 +15,15 @@ import { startRestore, endRestore } from "./activity.js";
 import { uniqueParts } from "./parts.js";
 import { log } from "../logger.js";
 
+function contentDisposition(filename: string) {
+  const fallback = filename
+    .split("")
+    .map((ch) => (/[a-zA-Z0-9._ -]/.test(ch) ? ch : "_"))
+    .join("");
+  const encoded = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, "%2A");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 async function hashFile(filePath: string) {
   const hash = crypto.createHash("sha256");
   await new Promise<void>((resolve, reject) => {
@@ -260,14 +269,10 @@ export async function streamArchiveFileToResponse(
   });
 
   const downloadName = (file.originalName || file.name || "file").replace(/[\\/]/g, "_");
-  const safeName = downloadName
-    .split("")
-    .map((ch) => (/[a-zA-Z0-9._ -]/.test(ch) ? ch : "_"))
-    .join("");
   const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
 
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", `attachment; filename=\"${safeName}\"`);
+  res.setHeader("Content-Disposition", contentDisposition(downloadName));
   if (file.size) {
     res.setHeader("Content-Length", file.size);
   }
@@ -362,16 +367,12 @@ export async function streamArchiveToResponse(
   });
 
   const downloadName = archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
-  const safeName = downloadName
-    .split("")
-    .map((ch) => (/[a-zA-Z0-9._ -]/.test(ch) ? ch : "_"))
-    .join("");
   const contentType = archive.isBundle
     ? "application/zip"
     : (mime.lookup(downloadName) as string) || "application/octet-stream";
 
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", `attachment; filename=\"${safeName}\"`);
+  res.setHeader("Content-Disposition", contentDisposition(downloadName));
   if (!archive.isBundle && archive.files?.[0]?.size) {
     res.setHeader("Content-Length", archive.files[0].size);
   }
