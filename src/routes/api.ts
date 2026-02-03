@@ -33,9 +33,19 @@ function sanitizeName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+function normalizeFilename(name: string) {
+  if (!name) return name;
+  const looksMojibake = /[ÃÂÐÑ]/.test(name);
+  if (!looksMojibake) return name;
+  const decoded = Buffer.from(name, "latin1").toString("utf8");
+  if (decoded.includes("�")) return name;
+  if (/[\u0400-\u04FF]/.test(decoded)) return decoded;
+  return decoded !== name ? decoded : name;
+}
+
 function makeDisplayName(files: Express.Multer.File[]) {
   if (files.length === 1) {
-    return files[0].originalname.replace(/[\\/]/g, "_");
+    return normalizeFilename(files[0].originalname).replace(/[\\/]/g, "_");
   }
   return `Bundle (${files.length} files)`;
 }
@@ -268,7 +278,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
     const displayName = makeDisplayName(ordered.map((item) => item.file));
     const downloadName = isBundle
       ? `bundle_${Date.now()}_${groupIndex}.zip`
-      : ordered[0].file.originalname.replace(/[\\/]/g, "_");
+      : normalizeFilename(ordered[0].file.originalname).replace(/[\\/]/g, "_");
     const archiveName = sanitizeName(downloadName);
     stagingDir = path.join(
       config.cacheDir,
@@ -281,10 +291,11 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
     const archiveFiles = [] as { path: string; name: string; originalName: string; size: number }[];
     for (const [index, item] of ordered.entries()) {
       const file = item.file;
-      const safeName = `${index}_${sanitizeName(file.originalname)}`;
+      const safeOriginal = normalizeFilename(file.originalname);
+      const safeName = `${index}_${sanitizeName(safeOriginal)}`;
       const dest = path.join(stagingDir, safeName);
       await fs.promises.rename(file.path, dest);
-      archiveFiles.push({ path: dest, name: safeName, originalName: file.originalname, size: file.size });
+      archiveFiles.push({ path: dest, name: safeName, originalName: safeOriginal, size: file.size });
     }
 
     if (aborted || req.aborted) {
@@ -383,7 +394,8 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
   });
 
   bb.on("file", (name: string, file: NodeJS.ReadableStream, info: { filename?: string }) => {
-    const filename = (info?.filename || "file").toString();
+    const rawFilename = (info?.filename || "file").toString();
+    const filename = normalizeFilename(rawFilename);
     const safeName = filename.replace(/[\\/]/g, "_");
 
     activeFile = file;
