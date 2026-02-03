@@ -426,6 +426,7 @@ function renderArchives() {
         loadArchives();
       });
       trUp.addEventListener('dragover', (e) => {
+        e.stopPropagation();
         if (dragArchiveId) {
           e.preventDefault();
           trUp.classList.add('drop');
@@ -445,6 +446,7 @@ function renderArchives() {
       });
       trUp.addEventListener('drop', async (e) => {
         e.preventDefault();
+        e.stopPropagation();
         trUp.classList.remove('drop');
         if (dragArchiveId) {
           await fetch(`/api/archives/${dragArchiveId}/move`, {
@@ -484,6 +486,7 @@ function renderArchives() {
       });
 
       tr.addEventListener('dragover', (e) => {
+        e.stopPropagation();
         if (dragArchiveId) {
           e.preventDefault();
           tr.classList.add('drop');
@@ -503,6 +506,7 @@ function renderArchives() {
       });
       tr.addEventListener('drop', async (e) => {
         e.preventDefault();
+        e.stopPropagation();
         tr.classList.remove('drop');
         if (dragArchiveId) {
           await fetch(`/api/archives/${dragArchiveId}/move`, {
@@ -748,7 +752,11 @@ async function uploadFiles(fileList, targetFolderId) {
   let lastSpeed = 0;
 
   const data = new FormData();
-  const folderId = targetFolderId === undefined ? currentFolderId : targetFolderId;
+  let folderId = targetFolderId === undefined ? currentFolderId : targetFolderId;
+  if (!folderId && currentView === 'files') {
+    const params = new URLSearchParams(location.search);
+    folderId = params.get('folder');
+  }
   if (folderId) {
     data.append('folderId', folderId);
   }
