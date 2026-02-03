@@ -11,6 +11,7 @@ import { deriveKey } from "./crypto.js";
 import { zipEntryName } from "./archive.js";
 import { startRestore, endRestore } from "./activity.js";
 import { uniqueParts } from "./parts.js";
+import { log } from "../logger.js";
 
 async function hashFile(filePath: string) {
   const hash = crypto.createHash("sha256");
@@ -95,6 +96,9 @@ async function restoreArchiveToFileInternal(
       output.on("finish", () => resolve());
       output.on("error", reject);
     });
+  } catch (err) {
+    log("restore", `file restore failed ${archive.id} ${(err as Error).message}`);
+    throw err;
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
   }
@@ -178,6 +182,9 @@ export async function restoreArchiveFileToFile(
 
     await entryDonePromise;
     encryptedStream.end();
+  } catch (err) {
+    log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
+    throw err;
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
     endRestore();
@@ -246,6 +253,7 @@ export async function streamArchiveFileToResponse(
     entry.autodrain();
   });
   parser.on("error", () => {
+    log("restore", `bundle stream parse error ${archive.id}`);
     res.destroy();
   });
   parser.on("close", () => {
@@ -282,6 +290,9 @@ export async function streamArchiveFileToResponse(
     if (!aborted) {
       encryptedStream.end();
     }
+  } catch (err) {
+    log("restore", `bundle stream failed ${archive.id} ${(err as Error).message}`);
+    res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
     endRestore();
@@ -350,7 +361,8 @@ export async function streamArchiveToResponse(
     if (!aborted) {
       encryptedStream.end();
     }
-  } catch {
+  } catch (err) {
+    log("restore", `stream failed ${archive.id} ${(err as Error).message}`);
     res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });

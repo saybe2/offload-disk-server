@@ -591,8 +591,10 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
   }
 
   try {
+    log("download", `start ${archive.id}`);
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
   } catch (err) {
+    log("download", `error ${archive.id} ${(err as Error).message}`);
     return res.status(500).json({ error: "restore_failed" });
   }
 });
@@ -701,12 +703,14 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
   }
 
   try {
+    log("download", `start ${archive.id} file=${index}`);
     if (!archive.isBundle) {
       await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
       return;
     }
     await streamArchiveFileToResponse(archive, index, res, config.cacheDir, config.masterKey);
   } catch (err) {
+    log("download", `error ${archive.id} file=${index} ${(err as Error).message}`);
     return res.status(500).json({ error: "restore_failed" });
   }
 });
