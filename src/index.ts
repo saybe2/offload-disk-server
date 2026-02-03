@@ -22,6 +22,14 @@ import { startFuse } from "./smb/fuse.js";
 
 const app = express();
 
+app.use((req, _res, next) => {
+  req.on("error", (err) => {
+    if ((err as Error)?.message === "aborted") return;
+    log("server", `request error ${err instanceof Error ? err.message : err}`);
+  });
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -59,6 +67,17 @@ app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/admin", adminRouter);
 app.use(publicRouter);
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const code = err && typeof err === "object" ? (err as any).code : undefined;
+  if (message === "aborted" || code === "ECONNRESET") {
+    return;
+  }
+  log("server", `error ${message}`);
+  if (!res.headersSent) {
+    res.status(500).send("server_error");
+  }
+});
 
 async function ensureAdminUser() {
   const existing = await User.findOne({ username: config.adminUsername });
