@@ -49,20 +49,54 @@ export async function splitFileIntoParts(filePath: string, chunkSizeBytes: numbe
   let currentStream: fs.WriteStream | null = null;
   let currentPath = "";
   let hash = crypto.createHash("sha256");
+  let streamError: Error | null = null;
 
   const openNewPart = () => {
     currentPath = path.join(outDir, `part_${partIndex}`);
     currentStream = fs.createWriteStream(currentPath);
+    currentStream.on("error", (err) => {
+      streamError = err;
+    });
     currentSize = 0;
     hash = crypto.createHash("sha256");
   };
 
-  openNewPart();
+  const writeToStream = async (stream: fs.WriteStream, data: Buffer) => {
+    if (streamError) throw streamError;
+    const ok = stream.write(data);
+    if (streamError) throw streamError;
+    if (!ok) {
+      await new Promise<void>((resolve, reject) => {
+        const onDrain = () => {
+          cleanup();
+          resolve();
+        };
+        const onErr = (err: Error) => {
+          cleanup();
+          reject(err);
+        };
+        const cleanup = () => {
+          stream.off("drain", onDrain);
+          stream.off("error", onErr);
+        };
+        stream.once("drain", onDrain);
+        stream.once("error", onErr);
+      });
+    }
+    if (streamError) throw streamError;
+  };
 
-  await new Promise<void>((resolve, reject) => {
+  const closeStream = (stream: fs.WriteStream) =>
+    new Promise<void>((resolve, reject) => {
+      stream.on("error", reject);
+      stream.on("finish", resolve);
+      stream.end();
+    });
+
+  openNewPart();
+  try {
     const rs = fs.createReadStream(filePath);
-    rs.on("error", reject);
-    rs.on("data", (chunk: Buffer | string) => {
+    for await (const chunk of rs) {
       const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       let offset = 0;
       while (offset < data.length) {
@@ -71,13 +105,13 @@ export async function splitFileIntoParts(filePath: string, chunkSizeBytes: numbe
         }
         const remaining = chunkSizeBytes - currentSize;
         const slice = data.subarray(offset, offset + remaining);
-        currentStream!.write(slice);
+        await writeToStream(currentStream!, slice);
         hash.update(slice);
         currentSize += slice.length;
         offset += slice.length;
 
         if (currentSize >= chunkSizeBytes) {
-          currentStream!.end();
+          await closeStream(currentStream!);
           parts.push({
             index: partIndex,
             path: currentPath,
@@ -88,20 +122,24 @@ export async function splitFileIntoParts(filePath: string, chunkSizeBytes: numbe
           currentStream = null;
         }
       }
+    }
+  } catch (err) {
+    if (currentStream) {
+      currentStream.destroy();
+      currentStream = null;
+    }
+    throw err;
+  }
+
+  if (currentStream) {
+    await closeStream(currentStream);
+    parts.push({
+      index: partIndex,
+      path: currentPath,
+      size: currentSize,
+      hash: hash.digest("hex")
     });
-    rs.on("end", () => {
-      if (currentStream) {
-        currentStream.end();
-        parts.push({
-          index: partIndex,
-          path: currentPath,
-          size: currentSize,
-          hash: hash.digest("hex")
-        });
-      }
-      resolve();
-    });
-  });
+  }
 
   return parts;
 }
