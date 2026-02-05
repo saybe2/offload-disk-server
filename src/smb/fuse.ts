@@ -13,7 +13,7 @@ import { sanitizeFilename } from "../utils/names.js";
 
 const READ_DIR = "smb_read";
 const WRITE_DIR = "smb_write";
-const UNLIMITED_BYTES = Math.floor(159.2 * 1024 * 1024 * 1024 * 1024);
+const UNLIMITED_BYTES = 18 * 1024 * 1024 * 1024 * 1024;
 
 type FileItem = {
   archive: any;

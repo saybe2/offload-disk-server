@@ -849,6 +849,7 @@ async function uploadFiles(fileList, targetFolderId) {
       uploadEta.textContent = '';
       uploadForm.reset();
       await loadMe();
+      await loadFolders();
       await loadArchives();
     } else {
       let err = 'upload_failed';
