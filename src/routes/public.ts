@@ -5,6 +5,7 @@ import { Share } from "../models/Share.js";
 import { config } from "../config.js";
 import { getDescendantFolderIds } from "../services/folders.js";
 import { streamArchiveFileToResponse, streamArchiveToResponse } from "../services/restore.js";
+import { bumpDownloadCounts } from "../services/downloadCounts.js";
 
 export const publicRouter = Router();
 
@@ -81,9 +82,19 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
       return;
     }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    const targets: { archiveId: string; fileIndex: number }[] = [];
+    if (archive.isBundle && archive.files && archive.files.length > 1) {
+      for (let i = 0; i < archive.files.length; i += 1) {
+        targets.push({ archiveId: archive.id, fileIndex: i });
+      }
+    } else {
+      targets.push({ archiveId: archive.id, fileIndex: 0 });
+    }
+    await bumpDownloadCounts(targets);
   } catch {
     return res.status(500).json({ error: "restore_failed" });
   }
@@ -108,9 +119,19 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
       return;
     }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    const targets: { archiveId: string; fileIndex: number }[] = [];
+    if (archive.isBundle && archive.files && archive.files.length > 1) {
+      for (let i = 0; i < archive.files.length; i += 1) {
+        targets.push({ archiveId: archive.id, fileIndex: i });
+      }
+    } else {
+      targets.push({ archiveId: archive.id, fileIndex: 0 });
+    }
+    await bumpDownloadCounts(targets);
   } catch {
     return res.status(500).json({ error: "restore_failed" });
   }

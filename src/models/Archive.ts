@@ -7,6 +7,7 @@ export interface ArchiveFile {
   name: string;
   originalName: string;
   size: number;
+  downloadCount?: number;
 }
 
 export interface ArchivePart {
@@ -56,7 +57,8 @@ const FileSchema = new Schema<ArchiveFile>(
     path: { type: String, required: true },
     name: { type: String, required: true },
     originalName: { type: String, required: true },
-    size: { type: Number, required: true }
+    size: { type: Number, required: true },
+    downloadCount: { type: Number, default: 0 }
   },
   { _id: false }
 );

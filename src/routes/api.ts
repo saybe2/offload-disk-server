@@ -25,6 +25,7 @@ import { deriveKey } from "../services/crypto.js";
 import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../services/discord.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
+import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { fetch } from "undici";
 
 const upload = multer({
@@ -816,6 +817,15 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
   try {
     log("download", `start ${archive.id}`);
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    const countTargets = [] as { archiveId: string; fileIndex: number }[];
+    if (archive.isBundle && archive.files && archive.files.length > 1) {
+      for (let i = 0; i < archive.files.length; i += 1) {
+        countTargets.push({ archiveId: archive.id, fileIndex: i });
+      }
+    } else {
+      countTargets.push({ archiveId: archive.id, fileIndex: 0 });
+    }
+    await bumpDownloadCounts(countTargets);
   } catch (err) {
     log("download", `error ${archive.id} ${(err as Error).message}`);
     return res.status(500).json({ error: "restore_failed" });
@@ -865,6 +875,7 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
   });
 
   try {
+    const downloadTargets: { archiveId: string; fileIndex: number }[] = [];
     let index = 0;
     const nameCounts = new Map<string, number>();
     for (const item of items) {
@@ -896,14 +907,17 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
 
       if (archive.isBundle && archive.files?.length > 1) {
         await restoreArchiveFileToFile(archive, fileIndex, outputPath, config.cacheDir, config.masterKey);
+        downloadTargets.push({ archiveId: archive.id, fileIndex });
       } else {
         await restoreArchiveToFile(archive, outputPath, config.cacheDir, config.masterKey);
+        downloadTargets.push({ archiveId: archive.id, fileIndex: 0 });
       }
 
       zip.file(outputPath, { name: finalName });
     }
 
     await zip.finalize();
+    await bumpDownloadCounts(downloadTargets);
   } finally {
     // cleanup handled on close
   }
@@ -929,9 +943,11 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
     log("download", `start ${archive.id} file=${index}`);
     if (!archive.isBundle) {
       await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
       return;
     }
     await streamArchiveFileToResponse(archive, index, res, config.cacheDir, config.masterKey);
+    await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: index }]);
   } catch (err) {
     log("download", `error ${archive.id} file=${index} ${(err as Error).message}`);
     return res.status(500).json({ error: "restore_failed" });
@@ -1306,6 +1322,7 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
   });
 
   try {
+    const downloadTargets: { archiveId: string; fileIndex: number }[] = [];
     let index = 0;
     for (const archive of archives) {
       const relPath = archive.folderId ? buildRelativePath(archive.folderId.toString()) : "";
@@ -1319,6 +1336,7 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
           await restoreArchiveFileToFile(archive as any, i, outputPath, config.cacheDir, config.masterKey);
           const entryName = relPath ? `${relPath}/${outputName}` : outputName;
           zip.file(outputPath, { name: entryName });
+          downloadTargets.push({ archiveId: archive._id.toString(), fileIndex: i });
         }
       } else {
         const file = archive.files?.[0];
@@ -1329,10 +1347,12 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
         await restoreArchiveToFile(archive as any, outputPath, config.cacheDir, config.masterKey);
         const entryName = relPath ? `${relPath}/${outputName}` : outputName;
         zip.file(outputPath, { name: entryName });
+        downloadTargets.push({ archiveId: archive._id.toString(), fileIndex: 0 });
       }
     }
 
     await zip.finalize();
+    await bumpDownloadCounts(downloadTargets);
   } finally {
     // cleanup on close
   }

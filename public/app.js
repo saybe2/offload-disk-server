@@ -303,6 +303,7 @@ function renderHead() {
       <th>Name</th>
       <th>Status</th>
       <th>Processed</th>
+      <th>Downloads</th>
       <th>Priority</th>
       <th>Date</th>
       <th>Size</th>
@@ -418,7 +419,7 @@ function renderArchives() {
       wrap.appendChild(icon);
       wrap.appendChild(text);
       nameTd.appendChild(wrap);
-      nameTd.colSpan = 7;
+      nameTd.colSpan = 8;
       trUp.appendChild(nameTd);
       trUp.addEventListener('click', () => {
         currentFolderId = parentId;
@@ -568,7 +569,7 @@ function renderArchives() {
       wrap.appendChild(icon);
       wrap.appendChild(text);
       nameTd.appendChild(wrap);
-      nameTd.colSpan = 7;
+      nameTd.colSpan = 8;
       tr.appendChild(nameTd);
       archiveList.appendChild(tr);
     }
@@ -653,6 +654,12 @@ function renderArchives() {
     progressWrap.appendChild(progressMeta);
     discordTd.appendChild(progressWrap);
 
+    const downloadsTd = document.createElement('td');
+    const downloadCount = (item.file && typeof item.file.downloadCount === 'number')
+      ? item.file.downloadCount
+      : 0;
+    downloadsTd.textContent = String(downloadCount);
+
     const priorityTd = document.createElement('td');
     const prioritySelect = document.createElement('select');
     for (const p of priorities) {
@@ -718,6 +725,7 @@ function renderArchives() {
     tr.appendChild(nameTd);
     tr.appendChild(statusTd);
     tr.appendChild(discordTd);
+    tr.appendChild(downloadsTd);
     tr.appendChild(priorityTd);
     tr.appendChild(dateTd);
     tr.appendChild(sizeTd);
@@ -1021,6 +1029,7 @@ async function openFileContextMenu(item, x, y) {
     showInfoModal(`File: ${fileName}`, [
       { label: 'Status', value: a.status },
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
+      { label: 'Downloads', value: String((item.file && typeof item.file.downloadCount === 'number') ? item.file.downloadCount : 0) },
       { label: 'Size', value: formatSize(item.file?.size ?? a.originalSize) },
       { label: 'Created', value: formatDate(a.createdAt) },
       { label: 'Priority', value: priorityLabel(a.priority ?? 2) },
