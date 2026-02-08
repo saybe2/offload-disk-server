@@ -153,18 +153,31 @@ function formatDuration(seconds) {
 function updateArchiveProgress(archives) {
   const now = Date.now();
   const activeIds = new Set();
+  const maxWindowMs = 30000;
+  const maxSamples = 10;
+
   for (const archive of archives) {
     activeIds.add(archive._id);
-    const entry = archiveProgress.get(archive._id) || { lastBytes: 0, lastTs: 0, speed: 0 };
+    const entry = archiveProgress.get(archive._id) || { lastBytes: 0, lastTs: 0, speed: 0, samples: [] };
     const uploaded = Number(archive.uploadedBytes || 0);
-    if (entry.lastTs && uploaded >= entry.lastBytes) {
-      const deltaBytes = uploaded - entry.lastBytes;
-      const deltaTime = (now - entry.lastTs) / 1000;
-      if (deltaTime > 0 && deltaBytes > 0) {
-        const instant = deltaBytes / deltaTime;
-        entry.speed = entry.speed ? (entry.speed * 0.7 + instant * 0.3) : instant;
+
+    entry.samples.push({ ts: now, bytes: uploaded });
+    entry.samples = entry.samples.filter((s) => now - s.ts <= maxWindowMs);
+    if (entry.samples.length > maxSamples) {
+      entry.samples = entry.samples.slice(entry.samples.length - maxSamples);
+    }
+
+    if (entry.samples.length >= 2) {
+      const first = entry.samples[0];
+      const last = entry.samples[entry.samples.length - 1];
+      const deltaBytes = last.bytes - first.bytes;
+      const deltaTime = (last.ts - first.ts) / 1000;
+      if (deltaTime > 0 && deltaBytes >= 0) {
+        const windowSpeed = deltaBytes / deltaTime;
+        entry.speed = entry.speed ? (entry.speed * 0.5 + windowSpeed * 0.5) : windowSpeed;
       }
     }
+
     entry.lastBytes = uploaded;
     entry.lastTs = now;
     if (archive.status === 'ready') {
