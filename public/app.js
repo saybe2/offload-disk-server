@@ -153,8 +153,8 @@ function formatDuration(seconds) {
 function updateArchiveProgress(archives) {
   const now = Date.now();
   const activeIds = new Set();
-  const maxWindowMs = 30000;
-  const maxSamples = 10;
+  const maxWindowMs = 120000;
+  const maxSamples = 30;
 
   for (const archive of archives) {
     activeIds.add(archive._id);
@@ -174,7 +174,7 @@ function updateArchiveProgress(archives) {
       const deltaTime = (last.ts - first.ts) / 1000;
       if (deltaTime > 0 && deltaBytes >= 0) {
         const windowSpeed = deltaBytes / deltaTime;
-        entry.speed = entry.speed ? (entry.speed * 0.5 + windowSpeed * 0.5) : windowSpeed;
+        entry.speed = entry.speed ? (entry.speed * 0.7 + windowSpeed * 0.3) : windowSpeed;
       }
     }
 
