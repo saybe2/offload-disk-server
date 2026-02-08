@@ -36,6 +36,7 @@ export const config = {
   uploadTmpTtlHours: toNumber(process.env.UPLOAD_TMP_TTL_HOURS, 6),
   uploadTmpCleanupMinutes: toNumber(process.env.UPLOAD_TMP_CLEANUP_MINUTES, 30),
   streamUseDisk: (process.env.STREAM_USE_DISK || "false") === "true",
+  deleteStagingAfterEncrypt: (process.env.DELETE_STAGING_AFTER_ENCRYPT || "true") === "true",
   streamUploadsEnabled: (process.env.STREAM_UPLOADS_ENABLED || "false") === "true",
   streamSingleMinMiB: toNumber(process.env.STREAM_SINGLE_MIN_MIB, 8),
   uiRefreshMs: toNumber(process.env.UI_REFRESH_MS, 5000),

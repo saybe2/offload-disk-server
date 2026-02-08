@@ -134,6 +134,16 @@ async function processNextArchive() {
       archive.iv = encMeta.iv;
       archive.authTag = encMeta.authTag;
       done();
+      if (config.deleteStagingAfterEncrypt && inputPath === archive.files[0]?.path) {
+        await fs.promises.unlink(inputPath).catch(() => undefined);
+        const stagingDir = archive.stagingDir;
+        if (stagingDir) {
+          const entries = await fs.promises.readdir(stagingDir).catch(() => []);
+          if (entries.length === 0) {
+            await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+          }
+        }
+      }
     } else {
       log(`stage ${archive.id} encrypt reuse`);
     }
