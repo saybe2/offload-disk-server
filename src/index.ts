@@ -19,6 +19,7 @@ import { Archive } from "./models/Archive.js";
 import { Folder } from "./models/Folder.js";
 import { uniqueParts } from "./services/parts.js";
 import { startFuse } from "./smb/fuse.js";
+import { startCacheCleanup } from "./services/cleanup.js";
 
 const app = express();
 
@@ -205,6 +206,7 @@ async function main() {
 
   startWorker();
   startFuse();
+  startCacheCleanup();
 
   app.listen(config.port, () => {
     log("server", `listening on ${config.port}`);
