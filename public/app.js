@@ -50,7 +50,7 @@ const priorityCloseBtn = document.getElementById('priorityCloseBtn');
 
 let currentFolderId = null;
 let currentView = 'files'; // files | trash | shared
-const STREAM_UPLOADS_ENABLED = true;
+const STREAM_UPLOADS_ENABLED = false;
 let dragArchiveId = null;
 let dragFolderId = null;
 let foldersById = {};
