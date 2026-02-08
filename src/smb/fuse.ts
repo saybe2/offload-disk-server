@@ -13,7 +13,6 @@ import { sanitizeFilename } from "../utils/names.js";
 
 const READ_DIR = "smb_read";
 const WRITE_DIR = "smb_write";
-const UNLIMITED_BYTES = 18 * 1000 * 1000 * 1000 * 1000;
 
 type FileItem = {
   archive: any;
@@ -269,7 +268,7 @@ function releaseReadable(key?: string) {
 
 async function handleStatfs(username: string) {
   const user = await getUserByName(username);
-  const totalBytes = user && user.quotaBytes > 0 ? user.quotaBytes : UNLIMITED_BYTES;
+  const totalBytes = user && user.quotaBytes > 0 ? user.quotaBytes : config.smbUnlimitedBytes;
   const usedBytes = user ? user.usedBytes || 0 : 0;
   const freeBytes = Math.max(0, totalBytes - usedBytes);
   let blockSize = 4096;

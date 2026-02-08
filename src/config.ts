@@ -38,7 +38,8 @@ export const config = {
   streamUseDisk: (process.env.STREAM_USE_DISK || "false") === "true",
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
-  smbShareName: process.env.SMB_SHARE_NAME || "offload"
+  smbShareName: process.env.SMB_SHARE_NAME || "offload",
+  smbUnlimitedBytes: toNumber(process.env.SMB_UNLIMITED_BYTES, 18 * 1000 * 1000 * 1000 * 1000)
 };
 
 const safeChunkMiB = Math.min(config.chunkSizeMiB, config.webhookMaxMiB);
