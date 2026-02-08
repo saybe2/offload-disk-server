@@ -50,7 +50,11 @@ const priorityCloseBtn = document.getElementById('priorityCloseBtn');
 
 let currentFolderId = null;
 let currentView = 'files'; // files | trash | shared
-const STREAM_UPLOADS_ENABLED = false;
+let STREAM_UPLOADS_ENABLED = false;
+let STREAM_SINGLE_MIN_MIB = 8;
+let UI_REFRESH_MS = 5000;
+let UI_ETA_WINDOW_MS = 120000;
+let UI_ETA_MAX_SAMPLES = 30;
 let dragArchiveId = null;
 let dragFolderId = null;
 let foldersById = {};
@@ -153,8 +157,8 @@ function formatDuration(seconds) {
 function updateArchiveProgress(archives) {
   const now = Date.now();
   const activeIds = new Set();
-  const maxWindowMs = 120000;
-  const maxSamples = 30;
+  const maxWindowMs = UI_ETA_WINDOW_MS;
+  const maxSamples = UI_ETA_MAX_SAMPLES;
 
   for (const archive of archives) {
     activeIds.add(archive._id);
@@ -822,7 +826,7 @@ async function uploadFiles(fileList, targetFolderId) {
     }
   }
 
-  const streamSingle = STREAM_UPLOADS_ENABLED && fileList.length === 1 && fileList[0].size >= (8 * 1024 * 1024);
+  const streamSingle = STREAM_UPLOADS_ENABLED && fileList.length === 1 && fileList[0].size >= (STREAM_SINGLE_MIN_MIB * 1024 * 1024);
   let uploadUrl = streamSingle ? '/api/upload-stream' : '/api/upload';
   if (streamSingle) {
     const params = new URLSearchParams();
@@ -1419,6 +1423,27 @@ document.addEventListener('scroll', () => hideContextMenu());
 window.addEventListener('resize', () => hideContextMenu());
 
 (async () => {
+  try {
+    const res = await fetch('/api/ui-config');
+    if (res.ok) {
+      const cfg = await res.json();
+      if (typeof cfg.streamUploadsEnabled === 'boolean') {
+        STREAM_UPLOADS_ENABLED = cfg.streamUploadsEnabled;
+      }
+      if (typeof cfg.streamSingleMinMiB === 'number') {
+        STREAM_SINGLE_MIN_MIB = cfg.streamSingleMinMiB;
+      }
+      if (typeof cfg.refreshMs === 'number') {
+        UI_REFRESH_MS = cfg.refreshMs;
+      }
+      if (typeof cfg.etaWindowMs === 'number') {
+        UI_ETA_WINDOW_MS = cfg.etaWindowMs;
+      }
+      if (typeof cfg.etaMaxSamples === 'number') {
+        UI_ETA_MAX_SAMPLES = cfg.etaMaxSamples;
+      }
+    }
+  } catch (err) {}
   const params = new URLSearchParams(location.search);
   const view = params.get('view');
   const folder = params.get('folder');
@@ -1438,5 +1463,5 @@ window.addEventListener('resize', () => hideContextMenu());
   await loadMe();
   await loadFolders();
   await loadArchives();
-  setInterval(loadArchives, 5000);
+  setInterval(loadArchives, UI_REFRESH_MS);
 })();

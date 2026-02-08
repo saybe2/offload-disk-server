@@ -43,6 +43,16 @@ app.use(
   })
 );
 
+app.get("/api/ui-config", (_req, res) => {
+  res.json({
+    streamUploadsEnabled: config.streamUploadsEnabled,
+    streamSingleMinMiB: config.streamSingleMinMiB,
+    refreshMs: config.uiRefreshMs,
+    etaWindowMs: config.uiEtaWindowMs,
+    etaMaxSamples: config.uiEtaMaxSamples
+  });
+});
+
 const publicDir = path.resolve("public");
 app.use(express.static(publicDir));
 
