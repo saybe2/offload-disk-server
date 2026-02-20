@@ -126,7 +126,8 @@ async function migrateArchives() {
       { "files.originalName": { $exists: false } },
       { priority: { $exists: false } },
       { priorityOverride: { $exists: false } },
-      { retryCount: { $exists: false } }
+      { retryCount: { $exists: false } },
+      { encryptionVersion: { $exists: false } }
     ]
   }).lean();
 
@@ -152,6 +153,7 @@ async function migrateArchives() {
           priority: typeof doc.priority === "number" ? doc.priority : 2,
           priorityOverride: doc.priorityOverride ?? false,
           retryCount: doc.retryCount ?? 0,
+          encryptionVersion: doc.encryptionVersion ?? 1,
           deleteTotalParts: doc.deleteTotalParts ?? 0,
           deletedParts: doc.deletedParts ?? 0,
           ...(partsChanged ? { parts } : {})

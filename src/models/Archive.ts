@@ -13,10 +13,13 @@ export interface ArchiveFile {
 export interface ArchivePart {
   index: number;
   size: number;
+  plainSize?: number;
   hash: string;
   url: string;
   messageId: string;
   webhookId: string;
+  iv?: string;
+  authTag?: string;
 }
 
 export interface ArchiveDoc extends mongoose.Document {
@@ -25,6 +28,7 @@ export interface ArchiveDoc extends mongoose.Document {
   displayName: string;
   downloadName: string;
   isBundle: boolean;
+  encryptionVersion?: number;
   folderId?: mongoose.Types.ObjectId | null;
   priority: number;
   priorityOverride: boolean;
@@ -67,10 +71,13 @@ const PartSchema = new Schema<ArchivePart>(
   {
     index: { type: Number, required: true },
     size: { type: Number, required: true },
+    plainSize: { type: Number, default: null },
     hash: { type: String, required: true },
     url: { type: String, required: true },
     messageId: { type: String, required: true },
-    webhookId: { type: String, required: true }
+    webhookId: { type: String, required: true },
+    iv: { type: String, default: "" },
+    authTag: { type: String, default: "" }
   },
   { _id: false }
 );
@@ -82,6 +89,7 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     displayName: { type: String, required: true },
     downloadName: { type: String, required: true },
     isBundle: { type: Boolean, default: false },
+    encryptionVersion: { type: Number, default: 2 },
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null, index: true },
     priority: { type: Number, default: 2, index: true },
     priorityOverride: { type: Boolean, default: false },

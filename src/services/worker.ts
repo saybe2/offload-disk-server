@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { checkDiskSpace } from "./disk.js";
 import { Archive } from "../models/Archive.js";
 import { User } from "../models/User.js";
@@ -7,7 +8,7 @@ import { Webhook } from "../models/Webhook.js";
 import { config, computed } from "../config.js";
 import { createZip, splitFileIntoParts } from "./archive.js";
 import { deriveKey, encryptFile } from "./crypto.js";
-import { deleteWebhookMessage, uploadToWebhook } from "./discord.js";
+import { deleteWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "./discord.js";
 import { uniqueParts } from "./parts.js";
 
 let running = 0;
@@ -48,6 +49,23 @@ async function uploadWithRetry(partPath: string, webhookUrl: string, content: st
   while (true) {
     try {
       return await uploadToWebhook(partPath, webhookUrl, content);
+    } catch (err) {
+      attempt += 1;
+      if (!isTransientError(err) || attempt > config.uploadRetryMax) {
+        throw err;
+      }
+      const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
+      log(`retry upload attempt=${attempt} delay=${delay}ms`);
+      await sleep(delay);
+    }
+  }
+}
+
+async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await uploadBufferToWebhook(buffer, filename, webhookUrl, content);
     } catch (err) {
       attempt += 1;
       if (!isTransientError(err) || attempt > config.uploadRetryMax) {
@@ -125,6 +143,89 @@ async function processNextArchive() {
         throw new Error("missing_file");
       }
       inputPath = archive.files[0].path;
+    }
+
+    const encryptionVersion = archive.encryptionVersion || 1;
+    if (encryptionVersion >= 2) {
+      const webhooks = await Webhook.find({ enabled: true });
+      if (webhooks.length === 0) {
+        throw new Error("no_webhooks_configured");
+      }
+      const uploadedParts = uniqueParts(archive.parts || []);
+      const uploadedIndex = new Set(uploadedParts.map((p) => p.index));
+      const completedFromParts = uploadedParts.length;
+      if (!archive.uploadedParts || archive.uploadedParts < completedFromParts) {
+        archive.uploadedParts = completedFromParts;
+      }
+      if (!archive.uploadedBytes || archive.uploadedBytes === 0) {
+        archive.uploadedBytes = uploadedParts.reduce((sum, p) => sum + (p.size || 0), 0);
+      }
+
+      const key = deriveKey(config.masterKey);
+      const rs = fs.createReadStream(inputPath, { highWaterMark: computed.chunkSizeBytes });
+      let partIndex = 0;
+      let totalEncryptedSize = 0;
+      let uploadedNow = archive.uploadedParts || 0;
+
+      for await (const chunk of rs) {
+        const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalEncryptedSize += plainChunk.length;
+
+        if (uploadedIndex.has(partIndex)) {
+          partIndex += 1;
+          continue;
+        }
+
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+        const encrypted = Buffer.concat([cipher.update(plainChunk), cipher.final()]);
+        const authTag = cipher.getAuthTag();
+        const hash = crypto.createHash("sha256").update(encrypted).digest("hex");
+        const webhook = webhooks[partIndex % webhooks.length];
+        const content = `archive:${archive.id} part:${partIndex}`;
+        const result = await uploadBufferWithRetry(encrypted, `part_${partIndex}`, webhook.url, content);
+
+        const partDoc = {
+          index: partIndex,
+          size: encrypted.length,
+          plainSize: plainChunk.length,
+          hash,
+          url: result.url,
+          messageId: result.messageId,
+          webhookId: webhook.id,
+          iv: iv.toString("base64"),
+          authTag: authTag.toString("base64")
+        };
+        await Archive.updateOne(
+          { _id: archive.id },
+          { $push: { parts: partDoc }, $inc: { uploadedBytes: encrypted.length, uploadedParts: 1 } }
+        );
+        uploadedNow += 1;
+        if (uploadedNow % 10 === 0) {
+          log(`progress ${archive.id} ${uploadedNow}/${partIndex + 1}`);
+        }
+        partIndex += 1;
+      }
+
+      archive.encryptedSize = totalEncryptedSize;
+      archive.totalParts = partIndex;
+      archive.iv = "";
+      archive.authTag = "";
+      archive.encryptionVersion = 2;
+      await archive.save();
+
+      await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
+      log(`ready ${archive.id}`);
+
+      if (config.cacheDeleteAfterUpload) {
+        await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
+        await fs.promises.rm(workDir, { recursive: true, force: true });
+      }
+
+      if (disk.mode === "soft") {
+        await new Promise((r) => setTimeout(r, config.workerPollMs));
+      }
+      return;
     }
 
     if (!fs.existsSync(encPath) || !archive.iv || !archive.authTag) {
