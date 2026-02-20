@@ -1,96 +1,134 @@
 # Offload Disk Server
 
-Discord-backed storage with encryption, chunking, web UI, sharing, and optional SMB access.
+Discord-backed storage server with encryption, chunking, web UI, share links, trash, quotas, and optional SMB.
 
-## What it does
-- Encrypts files (AES-256-GCM), chunks them, and uploads to Discord webhooks.
-- Stores metadata in MongoDB (files themselves live in Discord).
-- Web UI for uploads, folders, trash (30 days), sharing, and priorities.
-- Background workers for upload and delete queues.
-- Optional SMB share (read/write) backed by a FUSE view of your files.
+## Project status
+- Server is the primary product.
+- Desktop client is considered archived/frozen.
+- Recommended download flow: web UI links + Free Download Manager (FDM).
 
-## Quick start (local)
-1) Install deps
-```
+## Features
+- AES-256-GCM encryption.
+- Chunked upload to Discord webhooks (default chunk limit ~9.8 MiB).
+- MongoDB metadata storage (Discord stores file parts only).
+- Folders, nested folders, trash (30 days), share links, priorities.
+- Background workers for upload/delete jobs.
+- Optional SMB 2/3 access via FUSE view.
+
+## Quick start
+1) Install dependencies:
+```bash
 npm install
 ```
 
-2) Create .env
-```
+2) Create config:
+```bash
 cp .env.example .env
 ```
-Set at least:
-- MONGODB_URI
-- SESSION_SECRET
-- MASTER_KEY
-- ADMIN_USERNAME / ADMIN_PASSWORD
-- DISCORD_WEBHOOK_URL (optional seed)
 
-3) Run
-```
+3) Fill required values in `.env`:
+- `MONGODB_URI`
+- `SESSION_SECRET`
+- `MASTER_KEY`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+
+4) Start:
+```bash
 npm run dev
 ```
-Open http://localhost:PORT
+
+Open `http://localhost:<PORT>`.
+
+## Deploy/update (Docker)
+One-line update/build/restart:
+```bash
+git pull && docker build -t offload-smb . && docker restart offload && docker logs -f offload
+```
+
+## Download + resume behavior
+- HTTP resume (Range) is implemented for `v2` non-bundle files.
+- For bundle extraction routes, byte-range resume is not guaranteed.
+- FDM should use direct file links from the web UI.
+
+## Recommended FDM settings
+- Connections per download: `4-8`
+- Retry count: `10`
+- Retry interval: `5s`
+- Auto-resume unfinished downloads on startup: `ON`
+- Do not force mirror search for local/private links
+
+## Nginx reverse proxy (large uploads/downloads)
+For large uploads through domain proxy, use:
+- `client_max_body_size` large enough (for example `20G`)
+- `proxy_request_buffering off`
+- `proxy_buffering off`
+- `proxy_read_timeout 600s`
+- `proxy_send_timeout 600s`
+- `proxy_force_ranges on`
 
 ## Admin bootstrap
-ADMIN_USERNAME and ADMIN_PASSWORD are only used on first boot to create the initial admin user.
-If the admin already exists, changing .env will NOT change the password. Use the admin panel to update users.
+- `ADMIN_USERNAME`/`ADMIN_PASSWORD` are used only on first startup for initial admin creation.
+- After first boot, change user passwords from admin panel/API, not from `.env`.
 
 ## Environment variables
 Core:
-- PORT: HTTP port (default 3000)
-- MONGODB_URI: Mongo connection string
-- MONGODB_DB: Database name
-- SESSION_SECRET: Express session secret
-- ADMIN_USERNAME / ADMIN_PASSWORD: bootstrap admin credentials
-- MASTER_KEY: encryption key seed (any strong random string)
-- MASTER_KEY_EXPORT: set true to allow the client app to fetch the key after login
+- `PORT`
+- `MONGODB_URI`
+- `MONGODB_DB`
+- `SESSION_SECRET`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `MASTER_KEY`
+- `MASTER_KEY_EXPORT` (legacy desktop client flow; keep `false` if not needed)
 
-Discord / chunking:
-- DISCORD_WEBHOOK_URL: optional seed webhook (first run only)
-- DISCORD_WEBHOOK_MAX_MIB: max upload size per webhook message (default 9.8)
-- CHUNK_SIZE_MIB: chunk size for uploads (default 9.8)
-- UPLOAD_PARTS_CONCURRENCY: parallel uploads per archive
-- UPLOAD_RETRY_MAX / UPLOAD_RETRY_BASE_MS / UPLOAD_RETRY_MAX_MS: retry policy
+Discord/chunking:
+- `DISCORD_WEBHOOK_URL` (optional seed webhook, first run only)
+- `DISCORD_WEBHOOK_MAX_MIB`
+- `CHUNK_SIZE_MIB`
+- `UPLOAD_PARTS_CONCURRENCY`
+- `UPLOAD_RETRY_MAX`
+- `UPLOAD_RETRY_BASE_MS`
+- `UPLOAD_RETRY_MAX_MS`
 
-Bundles:
-- BUNDLE_SINGLE_FILE_MIB: files >= this go into their own archive
-- BUNDLE_MAX_MIB: max size of a small-file bundle
+Bundling:
+- `BUNDLE_SINGLE_FILE_MIB`
+- `BUNDLE_MAX_MIB`
 
-Cache / disk:
-- CACHE_DIR: where staging/work files live
-- CACHE_DELETE_AFTER_UPLOAD: delete staging/work after upload
-- STREAM_USE_DISK: when true, stream uploads are also written to disk
-- DISK_SOFT_LIMIT_GB: below this free space, workers slow down
-- DISK_HARD_LIMIT_GB: below this free space, uploads are rejected
+Cache/disk:
+- `CACHE_DIR`
+- `CACHE_DELETE_AFTER_UPLOAD`
+- `STREAM_USE_DISK`
+- `DISK_SOFT_LIMIT_GB`
+- `DISK_HARD_LIMIT_GB`
 
 Worker:
-- WORKER_CONCURRENCY: number of archives processed in parallel
-- WORKER_POLL_MS: worker loop interval
-- PROCESSING_STALE_MIN: reset stuck processing jobs after this time
+- `WORKER_CONCURRENCY`
+- `WORKER_POLL_MS`
+- `PROCESSING_STALE_MIN`
 
 SMB:
-- SMB_ENABLED: enable FUSE + SMB share
-- SMB_PORT: SMB port (use 445 for Windows default)
-- SMB_SHARE_NAME: share name (default offload)
-- SMB_MOUNT: FUSE mount path inside container
+- `SMB_ENABLED`
+- `SMB_PORT`
+- `SMB_SHARE_NAME`
+- `SMB_MOUNT`
 
 ## SMB notes
-- SMB users are synced from app users (same username/password).
-- Unlimited quota is reported as 18 TB (18e12 bytes) in SMB views.
-- Requires /dev/fuse and smbd in the runtime image.
-- Typical Docker run needs:
-  - --device /dev/fuse
-  - --cap-add SYS_ADMIN
-  - --cap-add NET_BIND_SERVICE
-  - --security-opt apparmor:unconfined
+- SMB users sync from app users (same login/password).
+- Unlimited users are exposed as fixed virtual disk size in SMB.
+- Container needs FUSE and Samba runtime.
+- Typical Docker flags:
+  - `--device /dev/fuse`
+  - `--cap-add SYS_ADMIN`
+  - `--cap-add NET_BIND_SERVICE`
+  - `--security-opt apparmor:unconfined`
 
 ## Scripts
-- npm run dev: start dev server
-- npm run build: build TypeScript
-- npm run start: run built server
+- `npm run dev` - dev server
+- `npm run build` - TypeScript build
+- `npm run start` - run built server
 
-## Security
-- Keep .env private.
-- MASTER_KEY is required to decrypt files. If it is lost, files cannot be restored.
-- Webhook URLs are stored unencrypted in MongoDB by design.
+## Security notes
+- Never commit `.env`.
+- `MASTER_KEY` is mandatory to decrypt data; losing it means data loss.
+- Discord webhook URLs are intentionally stored in MongoDB as plain text.
