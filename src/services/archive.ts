@@ -125,7 +125,7 @@ export async function splitFileIntoParts(filePath: string, chunkSizeBytes: numbe
     }
   } catch (err) {
     if (currentStream) {
-      currentStream.destroy();
+      (currentStream as fs.WriteStream).destroy();
       currentStream = null;
     }
     throw err;

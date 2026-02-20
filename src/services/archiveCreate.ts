@@ -48,6 +48,7 @@ export async function createArchiveFromLocalFile(params: {
     displayName: safeName,
     downloadName,
     isBundle: false,
+    encryptionVersion: 2,
     folderId: folderRef,
     priority: basePriority,
     priorityOverride: false,

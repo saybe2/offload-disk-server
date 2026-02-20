@@ -417,6 +417,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       displayName,
       downloadName,
       isBundle,
+      encryptionVersion: 2,
       folderId: group.folderId,
       priority: basePriority,
       priorityOverride: false,
@@ -565,6 +566,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         displayName: safeName,
         downloadName: safeName,
         isBundle: false,
+        encryptionVersion: 2,
         folderId: folderRef,
         priority: basePriority,
         priorityOverride: false,
@@ -589,8 +591,6 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       }
 
       const key = deriveKey(config.masterKey);
-      const iv = crypto.randomBytes(12);
-      const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
       let encryptedBytes = 0;
       let partIndex = 0;
       let originalSize = 0;
@@ -598,7 +598,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       let uploadedPartsCount = 0;
 
       let active = 0;
-      const pending: { index: number; buffer: Buffer; size: number; hash: string }[] = [];
+      const pending: { index: number; buffer: Buffer; size: number; plainSize: number; hash: string; iv: string; authTag: string }[] = [];
       let uploadsFinishedResolve: (() => void) | null = null;
       const uploadsFinished = new Promise<void>((resolve) => {
         uploadsFinishedResolve = resolve;
@@ -623,10 +623,13 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
             const partDoc = {
               index: part.index,
               size: part.size,
+              plainSize: part.plainSize,
               hash: part.hash,
               url: result.url,
               messageId: result.messageId,
-              webhookId: webhook.id
+              webhookId: webhook.id,
+              iv: part.iv,
+              authTag: part.authTag
             };
             await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } });
             uploadedPartsCount += 1;
@@ -656,19 +659,50 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
       };
 
-      const enqueuePart = async (buffer: Buffer, index: number) => {
-        const hash = crypto.createHash("sha256").update(buffer).digest("hex");
-        pending.push({ index, buffer, size: buffer.length, hash });
+      const enqueuePart = async (plain: Buffer, index: number) => {
+        const partIv = crypto.randomBytes(12);
+        const partCipher = crypto.createCipheriv("aes-256-gcm", key, partIv);
+        const encrypted = Buffer.concat([partCipher.update(plain), partCipher.final()]);
+        const hash = crypto.createHash("sha256").update(encrypted).digest("hex");
+        pending.push({
+          index,
+          buffer: encrypted,
+          size: encrypted.length,
+          plainSize: plain.length,
+          hash,
+          iv: partIv.toString("base64"),
+          authTag: partCipher.getAuthTag().toString("base64")
+        });
         scheduleUploads();
         await waitForPendingSpace();
       };
 
-      file.on("data", (chunk: Buffer) => {
-        originalSize += chunk.length;
-      });
       file.on("error", (err) => {
         failed = err instanceof Error ? err : new Error("stream_failed");
       });
+
+      const writeRawChunk = async (chunk: Buffer) => {
+        if (!rawWrite) return;
+        const ok = rawWrite.write(chunk);
+        if (!ok) {
+          await new Promise<void>((resolve, reject) => {
+            const onDrain = () => {
+              cleanup();
+              resolve();
+            };
+            const onErr = (err: Error) => {
+              cleanup();
+              reject(err);
+            };
+            const cleanup = () => {
+              rawWrite.off("drain", onDrain);
+              rawWrite.off("error", onErr);
+            };
+            rawWrite.once("drain", onDrain);
+            rawWrite.once("error", onErr);
+          });
+        }
+      };
 
       if (rawWrite) {
         rawWrite.on("error", (err) => {
@@ -676,15 +710,18 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           failed = err instanceof Error ? err : new Error("write_failed");
           log("stream", `write error archive=${archive.id} err=${failed.message}`);
         });
-        file.pipe(rawWrite);
       }
-      file.pipe(cipher);
       file.resume();
 
       let buffer = Buffer.alloc(0);
-      for await (const chunk of cipher) {
+      for await (const chunk of file) {
         if (failed) break;
         const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any);
+        originalSize += data.length;
+        if (rawWrite) {
+          await writeRawChunk(data);
+          if (failed) break;
+        }
         buffer = Buffer.concat([buffer, data]);
         while (buffer.length >= computed.chunkSizeBytes) {
           const part = buffer.subarray(0, computed.chunkSizeBytes);
@@ -693,6 +730,10 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           await enqueuePart(part, partIndex);
           partIndex += 1;
         }
+      }
+
+      if (rawWrite) {
+        await new Promise<void>((resolve) => rawWrite.end(() => resolve()));
       }
 
       if (!failed && buffer.length > 0) {
@@ -707,13 +748,13 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         resolveUploadsFinished();
       }
 
-      const authTag = cipher.getAuthTag();
       await Archive.updateOne(
         { _id: archive.id },
         {
           $set: {
-            iv: iv.toString("base64"),
-            authTag: authTag.toString("base64"),
+            iv: "",
+            authTag: "",
+            encryptionVersion: 2,
             encryptedSize: encryptedBytes,
             totalParts: partIndex,
             originalSize,
@@ -969,13 +1010,17 @@ apiRouter.get("/archives/:id/parts", requireAuth, async (req, res) => {
   const parts = uniqueParts(archive.parts || []).map((part) => ({
     index: part.index,
     size: part.size,
+    plainSize: part.plainSize || part.size,
     hash: part.hash,
-    url: part.url
+    url: part.url,
+    iv: part.iv || "",
+    authTag: part.authTag || ""
   }));
 
   return res.json({
     archiveId: archive._id,
     status: archive.status,
+    encryptionVersion: archive.encryptionVersion || 1,
     isBundle: archive.isBundle,
     chunkSizeBytes: archive.chunkSizeBytes || computed.chunkSizeBytes,
     iv: archive.iv,
