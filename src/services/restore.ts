@@ -95,6 +95,53 @@ function archiveEncryptionVersion(archive: ArchiveDoc | any) {
   return archive.encryptionVersion || 1;
 }
 
+function parseByteRange(rangeHeader: string, size: number) {
+  const match = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/);
+  if (!match) {
+    return null;
+  }
+
+  const rawStart = match[1];
+  const rawEnd = match[2];
+  if (!rawStart && !rawEnd) {
+    return null;
+  }
+
+  let start = 0;
+  let end = size - 1;
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(0, size - suffixLength);
+  } else {
+    start = Number(rawStart);
+    if (!Number.isFinite(start) || start < 0) {
+      return null;
+    }
+    if (rawEnd) {
+      end = Number(rawEnd);
+      if (!Number.isFinite(end) || end < 0) {
+        return null;
+      }
+    }
+  }
+
+  if (start >= size) {
+    return null;
+  }
+  if (end >= size) {
+    end = size - 1;
+  }
+  if (start > end) {
+    return null;
+  }
+
+  return { start, end };
+}
+
 async function decryptPartToBuffer(
   partPath: string,
   part: { iv?: string; authTag?: string; index: number },
@@ -111,6 +158,100 @@ async function decryptPartToBuffer(
   decipher.setAuthTag(authTag);
   const encrypted = await fs.promises.readFile(partPath);
   return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+export async function streamArchiveRangeToResponse(
+  archive: ArchiveDoc,
+  rangeHeader: string,
+  res: Response,
+  tempBaseDir: string,
+  masterKey: string
+) {
+  if (archiveEncryptionVersion(archive) < 2 || archive.isBundle) {
+    throw new Error("range_not_supported");
+  }
+
+  const parts = uniqueParts(archive.parts);
+  const partRanges = parts.map((part) => ({
+    part,
+    plainSize: part.plainSize || part.size
+  }));
+  const inferredTotalSize = partRanges.reduce((sum, item) => sum + item.plainSize, 0);
+  const fileSize = archive.files?.[0]?.size || inferredTotalSize;
+  const range = parseByteRange(rangeHeader, fileSize);
+  const downloadName = archive.downloadName || archive.name;
+  const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
+
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Disposition", contentDisposition(downloadName));
+  res.setHeader("Accept-Ranges", "bytes");
+
+  if (!range) {
+    res.status(416).setHeader("Content-Range", `bytes */${fileSize}`).end();
+    return;
+  }
+
+  startRestore();
+  const workDir = path.join(
+    tempBaseDir,
+    "restore",
+    `${archive.id}_range_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  );
+  await fs.promises.mkdir(workDir, { recursive: true });
+
+  let aborted = false;
+  res.on("close", () => {
+    aborted = true;
+  });
+
+  const key = deriveKey(masterKey);
+  const responseSize = range.end - range.start + 1;
+  res.status(206);
+  res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${fileSize}`);
+  res.setHeader("Content-Length", responseSize);
+
+  let cursor = 0;
+  try {
+    const webhookCache = new Map<string, string>();
+    for (const { part, plainSize } of partRanges) {
+      if (aborted) break;
+      const partStart = cursor;
+      const partEnd = cursor + plainSize - 1;
+      cursor += plainSize;
+
+      if (partEnd < range.start || partStart > range.end) {
+        continue;
+      }
+
+      const partPath = path.join(workDir, `part_${part.index}`);
+      await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
+      const actualHash = await hashFile(partPath);
+      if (actualHash !== part.hash) {
+        throw new Error(`part_hash_mismatch:${part.index}`);
+      }
+      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      await fs.promises.unlink(partPath).catch(() => undefined);
+
+      const from = Math.max(range.start, partStart) - partStart;
+      const to = Math.min(range.end, partEnd) - partStart + 1;
+      const slice = plain.subarray(from, to);
+      if (!res.write(slice)) {
+        await new Promise<void>((resolve, reject) => {
+          res.once("drain", resolve);
+          res.once("error", reject);
+        });
+      }
+    }
+    if (!aborted) {
+      res.end();
+    }
+  } catch (err) {
+    log("restore", `range stream failed ${archive.id} ${(err as Error).message}`);
+    res.destroy();
+  } finally {
+    await fs.promises.rm(workDir, { recursive: true, force: true });
+    endRestore();
+  }
 }
 
 export async function restoreArchiveToFile(
@@ -579,6 +720,7 @@ export async function streamArchiveToResponse(
 
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", contentDisposition(downloadName));
+    res.setHeader("Accept-Ranges", "bytes");
     if (!archive.isBundle && archive.files?.[0]?.size) {
       res.setHeader("Content-Length", archive.files[0].size);
     }
@@ -642,6 +784,7 @@ export async function streamArchiveToResponse(
 
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", contentDisposition(downloadName));
+  res.setHeader("Accept-Ranges", "bytes");
   if (!archive.isBundle && archive.files?.[0]?.size) {
     res.setHeader("Content-Length", archive.files[0].size);
   }
