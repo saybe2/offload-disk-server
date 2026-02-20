@@ -113,14 +113,31 @@ function resolveSingleFileSize(archive: ArchiveDoc | any) {
   return 0;
 }
 
+function makeRestoreWorkDir(tempBaseDir: string, key: string) {
+  return path.join(
+    tempBaseDir,
+    "restore",
+    `${key}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  );
+}
+
+function buildStableResourceTag(archive: ArchiveDoc | any, size: number) {
+  const hash = crypto.createHash("sha1");
+  hash.update(String(archive.id || archive._id || "archive"));
+  hash.update(`|v=${archiveEncryptionVersion(archive)}|size=${size}|bundle=${archive.isBundle ? 1 : 0}`);
+  for (const part of uniqueParts(archive.parts || [])) {
+    hash.update(`|${part.index}:${part.hash}:${part.plainSize || part.size || 0}`);
+  }
+  return hash.digest("hex");
+}
+
 function setResumeIdentityHeaders(archive: ArchiveDoc | any, res: Response, size: number) {
-  const mtime = archive.updatedAt instanceof Date ? archive.updatedAt : new Date(archive.updatedAt || Date.now());
+  const mtime = archive.createdAt instanceof Date ? archive.createdAt : new Date(archive.createdAt || Date.now());
   if (!Number.isNaN(mtime.getTime())) {
     res.setHeader("Last-Modified", mtime.toUTCString());
   }
   if (size > 0) {
-    const tag = `${archive.id || archive._id}-${mtime.getTime()}-${size}`;
-    res.setHeader("ETag", `"${tag}"`);
+    res.setHeader("ETag", `"${buildStableResourceTag(archive, size)}"`);
   }
 }
 
@@ -222,11 +239,7 @@ export async function streamArchiveRangeToResponse(
   }
 
   startRestore();
-  const workDir = path.join(
-    tempBaseDir,
-    "restore",
-    `${archive.id}_range_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  );
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_range`);
   await fs.promises.mkdir(workDir, { recursive: true });
 
   let aborted = false;
@@ -305,7 +318,7 @@ async function restoreArchiveToFileInternal(
   masterKey: string
 ) {
   if (archiveEncryptionVersion(archive) >= 2) {
-    const workDir = path.join(tempBaseDir, "restore", `${archive.id}_file_v2`);
+    const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_v2`);
     await fs.promises.mkdir(workDir, { recursive: true });
     const output = fs.createWriteStream(outputPath);
     const key = deriveKey(masterKey);
@@ -344,7 +357,7 @@ async function restoreArchiveToFileInternal(
     return;
   }
 
-  const workDir = path.join(tempBaseDir, "restore", `${archive.id}_file`);
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file`);
   await fs.promises.mkdir(workDir, { recursive: true });
 
   const encryptedStream = new PassThrough();
@@ -401,7 +414,7 @@ export async function restoreArchiveFileToFile(
   }
 
   if (archiveEncryptionVersion(archive) >= 2) {
-    const workDirV2 = path.join(tempBaseDir, "restore", `${archive.id}_file_${fileIndex}_v2`);
+    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_${fileIndex}_v2`);
     await fs.promises.mkdir(workDirV2, { recursive: true });
     const key = deriveKey(masterKey);
     const zipStream = new PassThrough();
@@ -468,7 +481,7 @@ export async function restoreArchiveFileToFile(
     return;
   }
 
-  const workDir = path.join(tempBaseDir, "restore", `${archive.id}_file_${fileIndex}`);
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_${fileIndex}`);
   await fs.promises.mkdir(workDir, { recursive: true });
 
   const encryptedStream = new PassThrough();
@@ -557,7 +570,7 @@ export async function streamArchiveFileToResponse(
   }
 
   if (archiveEncryptionVersion(archive) >= 2) {
-    const workDirV2 = path.join(tempBaseDir, "restore", `${archive.id}_bundle_${fileIndex}_v2`);
+    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_bundle_${fileIndex}_v2`);
     await fs.promises.mkdir(workDirV2, { recursive: true });
     const key = deriveKey(masterKey);
     const zipStream = new PassThrough();
@@ -641,7 +654,7 @@ export async function streamArchiveFileToResponse(
     return;
   }
 
-  const workDir = path.join(tempBaseDir, "restore", `${archive.id}_bundle_${fileIndex}`);
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_bundle_${fileIndex}`);
   await fs.promises.mkdir(workDir, { recursive: true });
 
   const encryptedStream = new PassThrough();
@@ -740,7 +753,7 @@ export async function streamArchiveToResponse(
 ) {
   if (archiveEncryptionVersion(archive) >= 2) {
     startRestore();
-    const workDirV2 = path.join(tempBaseDir, "restore", `${archive.id}_v2`);
+    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_v2`);
     await fs.promises.mkdir(workDirV2, { recursive: true });
     const key = deriveKey(masterKey);
     const downloadName = archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
@@ -798,7 +811,7 @@ export async function streamArchiveToResponse(
   }
 
   startRestore();
-  const workDir = path.join(tempBaseDir, "restore", archive.id);
+  const workDir = makeRestoreWorkDir(tempBaseDir, archive.id);
   await fs.promises.mkdir(workDir, { recursive: true });
 
   const encryptedStream = new PassThrough();
