@@ -95,6 +95,35 @@ function archiveEncryptionVersion(archive: ArchiveDoc | any) {
   return archive.encryptionVersion || 1;
 }
 
+function resolveSingleFileSize(archive: ArchiveDoc | any) {
+  if (archive.isBundle) {
+    return 0;
+  }
+  const fileSize = archive.files?.[0]?.size || 0;
+  if (fileSize > 0) {
+    return fileSize;
+  }
+  if ((archive.originalSize || 0) > 0) {
+    return archive.originalSize;
+  }
+  if (archiveEncryptionVersion(archive) >= 2) {
+    const parts = uniqueParts(archive.parts || []);
+    return parts.reduce((sum, part) => sum + (part.plainSize || part.size || 0), 0);
+  }
+  return 0;
+}
+
+function setResumeIdentityHeaders(archive: ArchiveDoc | any, res: Response, size: number) {
+  const mtime = archive.updatedAt instanceof Date ? archive.updatedAt : new Date(archive.updatedAt || Date.now());
+  if (!Number.isNaN(mtime.getTime())) {
+    res.setHeader("Last-Modified", mtime.toUTCString());
+  }
+  if (size > 0) {
+    const tag = `${archive.id || archive._id}-${mtime.getTime()}-${size}`;
+    res.setHeader("ETag", `"${tag}"`);
+  }
+}
+
 function parseByteRange(rangeHeader: string, size: number) {
   const match = rangeHeader.trim().match(/^bytes=(\d*)-(\d*)$/);
   if (!match) {
@@ -177,7 +206,7 @@ export async function streamArchiveRangeToResponse(
     plainSize: part.plainSize || part.size
   }));
   const inferredTotalSize = partRanges.reduce((sum, item) => sum + item.plainSize, 0);
-  const fileSize = archive.files?.[0]?.size || inferredTotalSize;
+  const fileSize = resolveSingleFileSize(archive) || inferredTotalSize;
   const range = parseByteRange(rangeHeader, fileSize);
   const downloadName = archive.downloadName || archive.name;
   const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
@@ -185,6 +214,7 @@ export async function streamArchiveRangeToResponse(
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", contentDisposition(downloadName));
   res.setHeader("Accept-Ranges", "bytes");
+  setResumeIdentityHeaders(archive, res, fileSize);
 
   if (!range) {
     res.status(416).setHeader("Content-Range", `bytes */${fileSize}`).end();
@@ -721,8 +751,12 @@ export async function streamArchiveToResponse(
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", contentDisposition(downloadName));
     res.setHeader("Accept-Ranges", "bytes");
-    if (!archive.isBundle && archive.files?.[0]?.size) {
-      res.setHeader("Content-Length", archive.files[0].size);
+    if (!archive.isBundle) {
+      const size = resolveSingleFileSize(archive);
+      if (size > 0) {
+        res.setHeader("Content-Length", size);
+        setResumeIdentityHeaders(archive, res, size);
+      }
     }
 
     let aborted = false;
@@ -785,8 +819,12 @@ export async function streamArchiveToResponse(
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", contentDisposition(downloadName));
   res.setHeader("Accept-Ranges", "bytes");
-  if (!archive.isBundle && archive.files?.[0]?.size) {
-    res.setHeader("Content-Length", archive.files[0].size);
+  if (!archive.isBundle) {
+    const size = resolveSingleFileSize(archive);
+    if (size > 0) {
+      res.setHeader("Content-Length", size);
+      setResumeIdentityHeaders(archive, res, size);
+    }
   }
 
   encryptedStream.pipe(decipher).pipe(res);

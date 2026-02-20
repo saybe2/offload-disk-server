@@ -961,7 +961,8 @@ async function openFolderContextMenu(folder, x, y) {
       showInfoModal(`Folder: ${folder.name}`, [
         { label: 'Total size', value: formatSize(info.totalSize) },
         { label: 'Archives', value: String(info.totalArchives) },
-        { label: 'Files', value: String(info.totalFiles) }
+        { label: 'Files', value: String(info.totalFiles) },
+        { label: 'Parts', value: String(info.totalParts || 0) }
       ]);
     } },
     { label: 'Delete folder', onClick: async () => {
@@ -1043,10 +1044,14 @@ async function openFileContextMenu(item, x, y) {
   });
 
   items.push({ label: 'Info', onClick: async () => {
+    const partsCount = (typeof a.totalParts === 'number' && a.totalParts > 0)
+      ? a.totalParts
+      : (Array.isArray(a.parts) ? a.parts.length : 0);
     showInfoModal(`File: ${fileName}`, [
       { label: 'Status', value: a.status },
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
       { label: 'Downloads', value: String((item.file && typeof item.file.downloadCount === 'number') ? item.file.downloadCount : 0) },
+      { label: 'Parts', value: String(partsCount) },
       { label: 'Size', value: formatSize(item.file?.size ?? a.originalSize) },
       { label: 'Created', value: formatDate(a.createdAt) },
       { label: 'Priority', value: priorityLabel(a.priority ?? 2) },
