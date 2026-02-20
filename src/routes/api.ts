@@ -16,7 +16,13 @@ import { Folder } from "../models/Folder.js";
 import { Share } from "../models/Share.js";
 import { User } from "../models/User.js";
 import { config, computed } from "../config.js";
-import { restoreArchiveFileToFile, restoreArchiveToFile, streamArchiveFileToResponse, streamArchiveToResponse } from "../services/restore.js";
+import {
+  restoreArchiveFileToFile,
+  restoreArchiveToFile,
+  streamArchiveFileToResponse,
+  streamArchiveRangeToResponse,
+  streamArchiveToResponse
+} from "../services/restore.js";
 import { uniqueParts } from "../services/parts.js";
 import { log } from "../logger.js";
 import { getDescendantFolderIds } from "../services/folders.js";
@@ -856,7 +862,13 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
   }
 
   try {
-    log("download", `start ${archive.id}`);
+    const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+    const canUseRange = !!rangeHeader && !archive.isBundle && (archive.encryptionVersion || 1) >= 2;
+    log("download", canUseRange ? `start ${archive.id} range=${rangeHeader}` : `start ${archive.id}`);
+    if (canUseRange) {
+      await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+      return;
+    }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
     const countTargets = [] as { archiveId: string; fileIndex: number }[];
     if (archive.isBundle && archive.files && archive.files.length > 1) {
@@ -869,6 +881,10 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
     await bumpDownloadCounts(countTargets);
   } catch (err) {
     log("download", `error ${archive.id} ${(err as Error).message}`);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     return res.status(500).json({ error: "restore_failed" });
   }
 });
@@ -981,8 +997,17 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
   }
 
   try {
-    log("download", `start ${archive.id} file=${index}`);
+    const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+    const canUseRange = !!rangeHeader && !archive.isBundle && (archive.encryptionVersion || 1) >= 2;
+    log(
+      "download",
+      canUseRange ? `start ${archive.id} file=${index} range=${rangeHeader}` : `start ${archive.id} file=${index}`
+    );
     if (!archive.isBundle) {
+      if (canUseRange) {
+        await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+        return;
+      }
       await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
       return;
@@ -991,6 +1016,10 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
     await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: index }]);
   } catch (err) {
     log("download", `error ${archive.id} file=${index} ${(err as Error).message}`);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
     return res.status(500).json({ error: "restore_failed" });
   }
 });
