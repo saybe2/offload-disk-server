@@ -50,6 +50,7 @@ git pull && docker build -t offload-smb . && docker restart offload && docker lo
 - HTTP resume (Range) is implemented for `v2` non-bundle files.
 - For bundle extraction routes, byte-range resume is not guaranteed.
 - FDM should use direct file links from the web UI.
+- Legacy `v1` archives are migrated to `v2` in background (careful, best-effort, one-by-one).
 
 ## Recommended FDM settings
 - Connections per download: `4-8`
@@ -101,6 +102,9 @@ Cache/disk:
 - `STREAM_USE_DISK`
 - `DISK_SOFT_LIMIT_GB`
 - `DISK_HARD_LIMIT_GB`
+- `MIGRATE_V1_ENABLED`
+- `MIGRATE_V1_BACKOFF_MIN`
+- `MIGRATE_V1_DELETE_OLD_PARTS`
 
 Worker:
 - `WORKER_CONCURRENCY`
