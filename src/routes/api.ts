@@ -1345,7 +1345,13 @@ apiRouter.get("/folders/:id/info", requireAuth, async (req, res) => {
   const totalSize = archives.reduce((sum, a) => sum + (a.originalSize || 0), 0);
   const totalArchives = archives.length;
   const totalFiles = archives.reduce((sum, a) => sum + (a.files?.length || 0), 0);
-  res.json({ totalSize, totalArchives, totalFiles });
+  const totalParts = archives.reduce((sum, a) => {
+    if ((a.totalParts || 0) > 0) {
+      return sum + (a.totalParts || 0);
+    }
+    return sum + uniqueParts(a.parts || []).length;
+  }, 0);
+  res.json({ totalSize, totalArchives, totalFiles, totalParts });
 });
 
 apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
