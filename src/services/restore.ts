@@ -142,11 +142,10 @@ function makeRestoreWorkDir(tempBaseDir: string, key: string) {
 
 function buildStableResourceTag(archive: ArchiveDoc | any, size: number) {
   const hash = crypto.createHash("sha1");
+  // Keep validator stable across internal re-encryption (v1 -> v2) for the same logical file.
   hash.update(String(archive.id || archive._id || "archive"));
-  hash.update(`|v=${archiveEncryptionVersion(archive)}|size=${size}|bundle=${archive.isBundle ? 1 : 0}`);
-  for (const part of uniqueParts(archive.parts || [])) {
-    hash.update(`|${part.index}:${part.hash}:${part.plainSize || part.size || 0}`);
-  }
+  hash.update(`|size=${size}|bundle=${archive.isBundle ? 1 : 0}`);
+  hash.update(`|created=${archive.createdAt ? new Date(archive.createdAt).getTime() : 0}`);
   return hash.digest("hex");
 }
 
