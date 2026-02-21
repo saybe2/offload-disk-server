@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { PassThrough } from "stream";
+import { PassThrough, Writable } from "stream";
 import type { Response } from "express";
 import mime from "mime-types";
 import unzipper from "unzipper";
@@ -51,6 +51,25 @@ async function pipeFileToWritable(filePath: string, target: fs.WriteStream) {
     target.on("error", reject);
     target.on("finish", () => resolve());
     rs.pipe(target);
+  });
+}
+
+async function waitDrainOrError(target: Writable) {
+  await new Promise<void>((resolve, reject) => {
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      target.off("drain", onDrain);
+      target.off("error", onError);
+    };
+    target.once("drain", onDrain);
+    target.once("error", onError);
   });
 }
 
@@ -279,10 +298,7 @@ export async function streamArchiveRangeToResponse(
       const to = Math.min(range.end, partEnd) - partStart + 1;
       const slice = plain.subarray(from, to);
       if (!res.write(slice)) {
-        await new Promise<void>((resolve, reject) => {
-          res.once("drain", resolve);
-          res.once("error", reject);
-        });
+        await waitDrainOrError(res as unknown as Writable);
       }
     }
     if (!aborted) {
@@ -337,10 +353,7 @@ async function restoreArchiveToFileInternal(
         const plain = await decryptPartToBuffer(partPath, part as any, key);
         await fs.promises.unlink(partPath).catch(() => undefined);
         if (!output.write(plain)) {
-          await new Promise<void>((resolve, reject) => {
-            output.once("drain", resolve);
-            output.once("error", reject);
-          });
+          await waitDrainOrError(output);
         }
       }
       await new Promise<void>((resolve, reject) => {
@@ -459,10 +472,7 @@ export async function restoreArchiveFileToFile(
         const plain = await decryptPartToBuffer(partPath, part as any, key);
         await fs.promises.unlink(partPath).catch(() => undefined);
         if (!zipStream.write(plain)) {
-          await new Promise<void>((resolve, reject) => {
-            zipStream.once("drain", resolve);
-            zipStream.once("error", reject);
-          });
+          await waitDrainOrError(zipStream);
         }
       }
 
@@ -635,10 +645,7 @@ export async function streamArchiveFileToResponse(
         const plain = await decryptPartToBuffer(partPath, part as any, key);
         await fs.promises.unlink(partPath).catch(() => undefined);
         if (!zipStream.write(plain)) {
-          await new Promise<void>((resolve, reject) => {
-            zipStream.once("drain", resolve);
-            zipStream.once("error", reject);
-          });
+          await waitDrainOrError(zipStream);
         }
       }
       if (!aborted) {
@@ -791,10 +798,7 @@ export async function streamArchiveToResponse(
         const plain = await decryptPartToBuffer(partPath, part as any, key);
         await fs.promises.unlink(partPath).catch(() => undefined);
         if (!res.write(plain)) {
-          await new Promise<void>((resolve, reject) => {
-            res.once("drain", resolve);
-            res.once("error", reject);
-          });
+          await waitDrainOrError(res as unknown as Writable);
         }
       }
       if (!aborted) {
