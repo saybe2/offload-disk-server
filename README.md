@@ -132,6 +132,21 @@ SMB:
 - `npm run build` - TypeScript build
 - `npm run start` - run built server
 
+## Standalone migration monitor (single file)
+Use this independent script to track `v1 -> v2` migration progress from MongoDB:
+
+```bash
+node tools/v1_v2_migration_monitor.js
+```
+
+Options:
+- one-shot output: `node tools/v1_v2_migration_monitor.js --once`
+- custom refresh: `node tools/v1_v2_migration_monitor.js --interval=5`
+
+Reads:
+- `MONGODB_URI`
+- `MONGODB_DB` (default `cloud_storage`)
+
 ## Security notes
 - Never commit `.env`.
 - `MASTER_KEY` is mandatory to decrypt data; losing it means data loss.
