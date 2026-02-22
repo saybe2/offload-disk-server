@@ -33,7 +33,7 @@ import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../
 import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
-import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
+import { ensureArchiveThumbnail, ensureArchiveThumbnailFromSource, supportsThumbnail } from "../services/thumbnails.js";
 import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
 import {
   isPreviewAllowedForFile,
@@ -788,6 +788,18 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: failed?.message || "upload_failed" } });
           log("stream", `upload failed archive=${archive.id} err=${failed?.message || "upload_failed"}`);
           return;
+        }
+        if (useDisk) {
+          const sourceName = archive.files?.[0]?.originalName || archive.files?.[0]?.name || archive.displayName || archive.name;
+          if (supportsThumbnail(sourceName)) {
+            try {
+              await ensureArchiveThumbnailFromSource(archive, 0);
+              log("stream", `thumbnail ready archive=${archive.id}`);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              log("stream", `thumbnail skip archive=${archive.id} err=${message}`);
+            }
+          }
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);

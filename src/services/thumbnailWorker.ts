@@ -96,6 +96,19 @@ async function processArchive(archiveId: string) {
       generated += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (message === "source_missing" && archive.status === "ready") {
+        try {
+          await ensureArchiveThumbnail(archive, fileIndex);
+          generated += 1;
+          continue;
+        } catch (fallbackErr) {
+          const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          log(`error ${archiveId} file=${fileIndex} ${fallbackMessage}`);
+          retryAt.set(archiveId, Date.now() + config.thumbRetryMs);
+          queued.add(archiveId);
+          return;
+        }
+      }
       if (message === "source_missing" && archive.status !== "ready") {
         waitingForReady = true;
         continue;

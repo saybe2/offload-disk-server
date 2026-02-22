@@ -10,6 +10,7 @@ import { createZip, splitFileIntoParts } from "./archive.js";
 import { deriveKey, encryptFile } from "./crypto.js";
 import { deleteWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "./discord.js";
 import { uniqueParts } from "./parts.js";
+import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
 
 let running = 0;
 let deleting = false;
@@ -126,6 +127,26 @@ async function hasDiskSpace() {
     return { ok: true, mode: "soft" as const, freeGb };
   }
   return { ok: true, mode: "normal" as const, freeGb };
+}
+
+async function generateLocalThumbnails(archive: any) {
+  if (!archive?.files?.length) return;
+  let generated = 0;
+  for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
+    const file = archive.files[fileIndex];
+    const fileName = file?.originalName || file?.name || "";
+    if (!supportsThumbnail(fileName)) continue;
+    try {
+      await ensureArchiveThumbnailFromSource(archive, fileIndex);
+      generated += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`thumb skip ${archive.id} file=${fileIndex} ${message}`);
+    }
+  }
+  if (generated > 0) {
+    log(`thumb ready ${archive.id} generated=${generated}`);
+  }
 }
 
 async function processNextArchive() {
@@ -246,6 +267,7 @@ async function processNextArchive() {
       archive.encryptionVersion = 2;
       await archive.save();
 
+      await generateLocalThumbnails(archive);
       await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
       log(`ready ${archive.id}`);
 
@@ -340,6 +362,7 @@ async function processNextArchive() {
 
     await Promise.all(workers);
 
+    await generateLocalThumbnails(archive);
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     log(`ready ${archive.id}`);
 
