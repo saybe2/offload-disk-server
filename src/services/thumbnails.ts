@@ -10,7 +10,7 @@ import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./di
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
-const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".ts", ".m2ts", ".3gp", ".ogv", ".vob"]);
+const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob"]);
 const inFlight = new Map<string, Promise<ThumbnailResult>>();
 const require = createRequire(import.meta.url);
 const ffmpegPath: string | null = require("ffmpeg-static");
