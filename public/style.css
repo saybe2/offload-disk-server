@@ -69,6 +69,7 @@ tr.row-selected:hover { background: #22314a; }
 .modal-body { display: flex; flex-direction: column; gap: 8px; }
 .preview-body { min-height: 180px; }
 .preview-text { margin: 0; max-height: 70vh; overflow: auto; white-space: pre-wrap; background: #0f1115; border: 1px solid #2b3240; border-radius: 6px; padding: 12px; }
+.preview-text code { display: block; white-space: pre; font-family: "JetBrains Mono", "Consolas", monospace; font-size: 13px; line-height: 1.4; }
 .preview-image { max-width: 100%; max-height: 70vh; object-fit: contain; border: 1px solid #2b3240; border-radius: 6px; background: #0f1115; }
 .preview-video { width: 100%; max-height: 70vh; border: 1px solid #2b3240; border-radius: 6px; background: #0f1115; }
 .preview-audio { width: 100%; border: 1px solid #2b3240; border-radius: 6px; background: #0f1115; padding: 8px; box-sizing: border-box; }

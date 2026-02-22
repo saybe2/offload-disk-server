@@ -8,6 +8,7 @@ const sharePreviewModal = document.getElementById('sharePreviewModal');
 const sharePreviewTitle = document.getElementById('sharePreviewTitle');
 const sharePreviewState = document.getElementById('sharePreviewState');
 const sharePreviewText = document.getElementById('sharePreviewText');
+const sharePreviewCode = document.getElementById('sharePreviewCode');
 const sharePreviewImage = document.getElementById('sharePreviewImage');
 const sharePreviewVideo = document.getElementById('sharePreviewVideo');
 const sharePreviewAudio = document.getElementById('sharePreviewAudio');
@@ -118,13 +119,87 @@ function resetPreviewContent(message) {
   sharePreviewVideo.classList.add('hidden');
   sharePreviewAudio.classList.add('hidden');
   sharePreviewFrame.classList.add('hidden');
-  sharePreviewText.textContent = '';
+  sharePreviewCode.textContent = '';
+  sharePreviewCode.className = '';
   sharePreviewImage.removeAttribute('src');
   sharePreviewVideo.pause();
   sharePreviewVideo.removeAttribute('src');
   sharePreviewAudio.pause();
   sharePreviewAudio.removeAttribute('src');
   sharePreviewFrame.removeAttribute('src');
+}
+
+function codeLanguageFromFileName(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  if (lower === 'dockerfile') return 'dockerfile';
+  if (lower === 'makefile') return 'makefile';
+  if (lower === '.gitignore') return 'git';
+  const dot = lower.lastIndexOf('.');
+  const ext = dot >= 0 ? lower.slice(dot) : '';
+  const map = {
+    '.py': 'python',
+    '.js': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
+    '.jsx': 'javascript',
+    '.ts': 'typescript',
+    '.tsx': 'typescript',
+    '.java': 'java',
+    '.c': 'c',
+    '.cc': 'cpp',
+    '.cpp': 'cpp',
+    '.cxx': 'cpp',
+    '.h': 'cpp',
+    '.hpp': 'cpp',
+    '.cs': 'csharp',
+    '.go': 'go',
+    '.rs': 'rust',
+    '.php': 'php',
+    '.rb': 'ruby',
+    '.sh': 'bash',
+    '.bash': 'bash',
+    '.zsh': 'bash',
+    '.ps1': 'powershell',
+    '.bat': 'dos',
+    '.cmd': 'dos',
+    '.sql': 'sql',
+    '.html': 'xml',
+    '.htm': 'xml',
+    '.xml': 'xml',
+    '.css': 'css',
+    '.scss': 'scss',
+    '.sass': 'scss',
+    '.less': 'less',
+    '.json': 'json',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.md': 'markdown',
+    '.toml': 'ini',
+    '.ini': 'ini',
+    '.conf': 'ini',
+    '.cfg': 'ini',
+    '.env': 'bash',
+    '.txt': 'plaintext',
+    '.log': 'plaintext'
+  };
+  return map[ext] || '';
+}
+
+function renderTextPreview(text, fileName) {
+  const lang = codeLanguageFromFileName(fileName);
+  sharePreviewCode.textContent = text;
+  sharePreviewCode.className = lang ? `language-${lang}` : '';
+  if (window.hljs && typeof window.hljs.highlightElement === 'function') {
+    try {
+      if (lang) {
+        window.hljs.highlightElement(sharePreviewCode);
+      } else {
+        const out = window.hljs.highlightAuto(text);
+        sharePreviewCode.innerHTML = out.value;
+        sharePreviewCode.className = `hljs ${out.language ? `language-${out.language}` : ''}`.trim();
+      }
+    } catch {}
+  }
 }
 
 function closePreviewModal() {
@@ -156,7 +231,7 @@ async function openPreviewModal(item) {
     const blob = await res.blob();
 
     if (isTextLikeContentType(contentType)) {
-      sharePreviewText.textContent = await blob.text();
+      renderTextPreview(await blob.text(), item.name);
       sharePreviewState.classList.add('hidden');
       sharePreviewText.classList.remove('hidden');
       return;

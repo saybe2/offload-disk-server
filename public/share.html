@@ -5,6 +5,7 @@
   <title>Shared</title>
   <link rel="icon" href="/favicon.ico" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/vendor/highlight-theme.min.css" />
 </head>
 <body>
   <header>
@@ -35,7 +36,7 @@
       </div>
       <div class="modal-body preview-body">
         <div id="sharePreviewState" class="status">Loading preview...</div>
-        <pre id="sharePreviewText" class="preview-text hidden"></pre>
+        <pre id="sharePreviewText" class="preview-text hidden"><code id="sharePreviewCode"></code></pre>
         <img id="sharePreviewImage" class="preview-image hidden" alt="Preview" />
         <video id="sharePreviewVideo" class="preview-video hidden" controls></video>
         <audio id="sharePreviewAudio" class="preview-audio hidden" controls></audio>
@@ -44,6 +45,7 @@
     </div>
   </div>
 
+  <script src="/vendor/highlight.min.js"></script>
   <script src="/share.js"></script>
 </body>
 </html>
