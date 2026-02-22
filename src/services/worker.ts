@@ -163,6 +163,7 @@ async function processNextArchive() {
       let partIndex = 0;
       let totalEncryptedSize = 0;
       let uploadedNow = archive.uploadedParts || 0;
+      let uploadedBytesNow = archive.uploadedBytes || 0;
 
       for await (const chunk of rs) {
         const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -198,8 +199,11 @@ async function processNextArchive() {
           { $push: { parts: partDoc }, $inc: { uploadedBytes: encrypted.length, uploadedParts: 1 } }
         );
         uploadedNow += 1;
+        uploadedBytesNow += encrypted.length;
         if (uploadedNow % 10 === 0) {
-          log(`progress ${archive.id} ${uploadedNow}/${partIndex + 1}`);
+          const totalHint = archive.originalSize || totalEncryptedSize || 0;
+          const pct = totalHint > 0 ? Math.min(99, Math.floor((uploadedBytesNow / totalHint) * 100)) : 0;
+          log(`progress ${archive.id} uploadedParts=${uploadedNow} uploadedBytes=${uploadedBytesNow} pct~=${pct}%`);
         }
         partIndex += 1;
       }
