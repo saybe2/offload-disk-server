@@ -398,6 +398,7 @@ function resetPreviewContent(message) {
   previewFrame.classList.add('hidden');
   previewCode.textContent = '';
   previewCode.className = '';
+  previewCode.removeAttribute('data-highlighted');
   previewImage.removeAttribute('src');
   previewVideo.pause();
   previewVideo.removeAttribute('src');
@@ -494,6 +495,7 @@ function renderTextPreview(text, fileName) {
   const lang = codeLanguageFromFileName(fileName);
   previewCode.textContent = text;
   previewCode.className = lang ? `language-${lang}` : '';
+  previewCode.removeAttribute('data-highlighted');
   if (window.hljs && typeof window.hljs.highlightElement === 'function') {
     try {
       const hasLang = lang && typeof window.hljs.getLanguage === 'function' && window.hljs.getLanguage(lang);
