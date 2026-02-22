@@ -13,11 +13,3 @@ export async function encryptFile(inputPath: string, outputPath: string, key: Bu
   const authTag = cipher.getAuthTag();
   return { iv: iv.toString("base64"), authTag: authTag.toString("base64") };
 }
-
-export async function decryptFile(inputPath: string, outputPath: string, key: Buffer, ivB64: string, authTagB64: string) {
-  const iv = Buffer.from(ivB64, "base64");
-  const authTag = Buffer.from(authTagB64, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-  await pipeline(fs.createReadStream(inputPath), decipher, fs.createWriteStream(outputPath));
-}

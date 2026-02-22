@@ -16,7 +16,6 @@ export const config = {
   adminUsername: process.env.ADMIN_USERNAME || "admin",
   adminPassword: process.env.ADMIN_PASSWORD || "admin",
   masterKey: process.env.MASTER_KEY || "CHANGE_ME",
-  masterKeyExport: (process.env.MASTER_KEY_EXPORT || "false") === "true",
   cacheDir: path.resolve(process.env.CACHE_DIR || "./data/cache"),
   cacheDeleteAfterUpload: (process.env.CACHE_DELETE_AFTER_UPLOAD || "true") === "true",
   chunkSizeMiB: toNumber(process.env.CHUNK_SIZE_MIB, 9.8),
