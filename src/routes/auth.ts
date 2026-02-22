@@ -1,7 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
-import { config } from "../config.js";
 
 export const authRouter = Router();
 
@@ -38,14 +37,4 @@ authRouter.get("/me", async (req, res) => {
     return res.status(401).json({ error: "auth_required" });
   }
   return res.json({ id: user.id, username: user.username, role: user.role, quotaBytes: user.quotaBytes, usedBytes: user.usedBytes });
-});
-
-authRouter.get("/master-key", async (req, res) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: "auth_required" });
-  }
-  if (!config.masterKeyExport) {
-    return res.status(403).json({ error: "disabled" });
-  }
-  return res.json({ masterKey: config.masterKey });
 });

@@ -92,7 +92,7 @@ async function cleanupWorkDir(cutoffMs: number, keepWork: Set<string>) {
   }
 }
 
-export async function cleanupCacheOnce() {
+async function cleanupCacheOnce() {
   const ttlMs = config.uploadTmpTtlHours * HOUR_MS;
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
   const cutoffMs = Date.now() - ttlMs;

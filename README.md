@@ -82,7 +82,6 @@ Core:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `MASTER_KEY`
-- `MASTER_KEY_EXPORT` (legacy desktop client flow; keep `false` if not needed)
 
 Discord/chunking:
 - `DISCORD_WEBHOOK_URL` (optional seed webhook, first run only)

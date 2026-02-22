@@ -54,7 +54,3 @@ export async function serveFileWithRange(
   res.setHeader("Content-Length", size);
   fs.createReadStream(filePath).pipe(res);
 }
-
-export async function ensureDir(dirPath: string) {
-  await fs.promises.mkdir(dirPath, { recursive: true });
-}

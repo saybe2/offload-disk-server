@@ -3,7 +3,6 @@ import path from "path";
 import { spawn } from "child_process";
 import { createRequire } from "module";
 import sharp from "sharp";
-import mime from "mime-types";
 import { Archive, type ArchiveDoc } from "../models/Archive.js";
 import { Webhook } from "../models/Webhook.js";
 import { config } from "../config.js";
@@ -279,8 +278,4 @@ export async function ensureArchiveThumbnail(archive: ArchiveDoc, fileIndex: num
   });
   inFlight.set(key, promise);
   return promise;
-}
-
-export function thumbnailContentType(fileName: string) {
-  return (mime.lookup(fileName) as string) || "application/octet-stream";
 }
