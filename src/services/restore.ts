@@ -24,6 +24,14 @@ function contentDisposition(filename: string) {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
+function createZipParser() {
+  const parser = unzipper.Parse();
+  parser.on("error", () => {
+    // Guard listener to avoid unhandled parser errors if a caller exits early.
+  });
+  return parser;
+}
+
 async function hashFile(filePath: string) {
   const hash = crypto.createHash("sha256");
   await new Promise<void>((resolve, reject) => {
@@ -70,7 +78,7 @@ async function extractZipEntryToFile(
 ) {
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
   const output = fs.createWriteStream(outputPath);
-  const parser = unzipper.Parse();
+  const parser = createZipParser();
   let entryFound = false;
 
   const done = new Promise<void>((resolve, reject) => {
@@ -102,6 +110,7 @@ async function extractZipEntryToFile(
     });
 
     parser.on("error", (err: Error) => finish(err));
+    zipInput.on("error", (err: Error) => finish(err));
     parser.on("close", () => {
       if (!entryFound) {
         finish(new Error("file_not_found"));
@@ -572,7 +581,7 @@ export async function streamArchiveFileToResponse(
     }
 
     let entryFound = false;
-    const parser = unzipper.Parse();
+    const parser = createZipParser();
     parser.on("entry", (entry: any) => {
       if (entryFound) {
         entry.autodrain();
@@ -663,7 +672,7 @@ export async function streamArchiveFileToResponse(
 
   let entryFound = false;
 
-  const parser = unzipper.Parse();
+  const parser = createZipParser();
   parser.on("entry", (entry: any) => {
     if (entryFound) {
       entry.autodrain();
