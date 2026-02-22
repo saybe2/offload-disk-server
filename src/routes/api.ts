@@ -446,6 +446,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       files: archiveFiles,
       parts: []
     });
+    queueArchiveThumbnails(archive.id);
     archiveIds.push(archive.id);
     stagingDir = null;
   }
@@ -776,6 +777,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           }
         }
       );
+      if (useDisk) {
+        queueArchiveThumbnails(archive.id);
+      }
 
       await User.updateOne({ _id: user.id }, { $inc: { usedBytes: originalSize } });
 
@@ -787,7 +791,6 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
-        queueArchiveThumbnails(archive.id);
         if (config.cacheDeleteAfterUpload) {
           await fs.promises.rm(stagingDir, { recursive: true, force: true });
           if (useDisk) {

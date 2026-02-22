@@ -164,6 +164,64 @@ async function uploadThumbBackup(archiveId: string, fileIndex: number, localPath
   return { url: result.url, messageId: result.messageId, webhookId: pick._id.toString() };
 }
 
+async function persistThumbMeta(archiveId: string, fileIndex: number, localPath: string): Promise<ThumbnailResult> {
+  const stat = await fs.promises.stat(localPath);
+  const backup = await uploadThumbBackup(archiveId, fileIndex, localPath);
+  await Archive.updateOne(
+    { _id: archiveId },
+    {
+      $set: {
+        [`files.${fileIndex}.thumbnail.contentType`]: "image/webp",
+        [`files.${fileIndex}.thumbnail.size`]: stat.size,
+        [`files.${fileIndex}.thumbnail.localPath`]: localPath,
+        [`files.${fileIndex}.thumbnail.url`]: backup?.url || "",
+        [`files.${fileIndex}.thumbnail.messageId`]: backup?.messageId || "",
+        [`files.${fileIndex}.thumbnail.webhookId`]: backup?.webhookId || "",
+        [`files.${fileIndex}.thumbnail.updatedAt`]: new Date()
+      }
+    }
+  );
+  return { filePath: localPath, contentType: "image/webp", size: stat.size };
+}
+
+async function generateThumbUsingSource(
+  archive: ArchiveDoc,
+  fileIndex: number,
+  fileName: string,
+  sourcePath: string,
+  localPath: string
+) {
+  await generateThumbFromFile(sourcePath, fileName, localPath);
+  return persistThumbMeta(archive.id, fileIndex, localPath);
+}
+
+export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, fileIndex: number) {
+  const file = archive.files?.[fileIndex];
+  if (!file) {
+    throw new Error("file_not_found");
+  }
+  const fileName = (file.originalName || file.name || "").trim();
+  if (!supportsThumbnail(fileName)) {
+    throw new Error("thumbnail_unsupported");
+  }
+  if (!file.path) {
+    throw new Error("source_missing");
+  }
+
+  const localPath = thumbTargetPath(archive.id, fileIndex);
+  await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+
+  if (fs.existsSync(localPath)) {
+    const stat = await fs.promises.stat(localPath);
+    return { filePath: localPath, contentType: "image/webp", size: stat.size };
+  }
+  if (!fs.existsSync(file.path)) {
+    throw new Error("source_missing");
+  }
+
+  return generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath);
+}
+
 async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): Promise<ThumbnailResult> {
   const file = archive.files?.[fileIndex];
   if (!file) {
@@ -182,6 +240,14 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
     return { filePath: localPath, contentType: "image/webp", size: stat.size };
   }
 
+  if (file.path && fs.existsSync(file.path)) {
+    try {
+      return await generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath);
+    } catch {
+      // Fallback to Discord restore path if direct source-based generation failed.
+    }
+  }
+
   if (await tryRestoreThumbFromDiscord(archive, fileIndex, localPath)) {
     const stat = await fs.promises.stat(localPath);
     return { filePath: localPath, contentType: "image/webp", size: stat.size };
@@ -196,24 +262,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
     } else {
       await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
     }
-    await generateThumbFromFile(sourcePath, fileName, localPath);
-    const stat = await fs.promises.stat(localPath);
-    const backup = await uploadThumbBackup(archive.id, fileIndex, localPath);
-    await Archive.updateOne(
-      { _id: archive.id },
-      {
-        $set: {
-          [`files.${fileIndex}.thumbnail.contentType`]: "image/webp",
-          [`files.${fileIndex}.thumbnail.size`]: stat.size,
-          [`files.${fileIndex}.thumbnail.localPath`]: localPath,
-          [`files.${fileIndex}.thumbnail.url`]: backup?.url || "",
-          [`files.${fileIndex}.thumbnail.messageId`]: backup?.messageId || "",
-          [`files.${fileIndex}.thumbnail.webhookId`]: backup?.webhookId || "",
-          [`files.${fileIndex}.thumbnail.updatedAt`]: new Date()
-        }
-      }
-    );
-    return { filePath: localPath, contentType: "image/webp", size: stat.size };
+    return await generateThumbUsingSource(archive, fileIndex, fileName, sourcePath, localPath);
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }

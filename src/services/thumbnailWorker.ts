@@ -1,6 +1,10 @@
 import { Archive } from "../models/Archive.js";
 import { config } from "../config.js";
-import { ensureArchiveThumbnail, supportsThumbnail } from "./thumbnails.js";
+import {
+  ensureArchiveThumbnail,
+  ensureArchiveThumbnailFromSource,
+  supportsThumbnail
+} from "./thumbnails.js";
 
 const queued = new Set<string>();
 const active = new Set<string>();
@@ -41,7 +45,7 @@ async function refillQueue() {
     return;
   }
   const candidates = await Archive.find({
-    status: "ready",
+    status: { $in: ["queued", "processing", "ready"] },
     deletedAt: null,
     trashedAt: null,
     "files.0": { $exists: true },
@@ -72,24 +76,44 @@ async function refillQueue() {
 async function processArchive(archiveId: string) {
   const archive = await Archive.findById(archiveId);
   if (!archive) return;
-  if (archive.status !== "ready" || archive.deletedAt || archive.trashedAt) return;
+  if (archive.deletedAt || archive.trashedAt) return;
 
   let generated = 0;
+  let waitingForReady = false;
   for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
     const file = archive.files[fileIndex];
     if (!fileNeedsThumbnail(file)) continue;
+
     try {
-      await ensureArchiveThumbnail(archive, fileIndex);
+      if (file.path) {
+        await ensureArchiveThumbnailFromSource(archive, fileIndex);
+      } else if (archive.status === "ready") {
+        await ensureArchiveThumbnail(archive, fileIndex);
+      } else {
+        waitingForReady = true;
+        continue;
+      }
       generated += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (message === "source_missing" && archive.status !== "ready") {
+        waitingForReady = true;
+        continue;
+      }
       log(`error ${archiveId} file=${fileIndex} ${message}`);
       retryAt.set(archiveId, Date.now() + config.thumbRetryMs);
       queued.add(archiveId);
       return;
     }
   }
-  retryAt.delete(archiveId);
+
+  if (waitingForReady) {
+    retryAt.set(archiveId, Date.now() + config.thumbRetryMs);
+    queued.add(archiveId);
+  } else {
+    retryAt.delete(archiveId);
+  }
+
   if (generated > 0) {
     log(`ready ${archiveId} generated=${generated}`);
   }
@@ -134,4 +158,3 @@ export function startThumbnailWorker() {
   void tick();
   log(`started concurrency=${config.thumbWorkerConcurrency} poll=${config.thumbWorkerPollMs}ms`);
 }
-

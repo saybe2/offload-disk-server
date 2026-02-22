@@ -4,6 +4,7 @@ import { Archive } from "../models/Archive.js";
 import { User } from "../models/User.js";
 import { Folder } from "../models/Folder.js";
 import { config, computed } from "../config.js";
+import { queueArchiveThumbnails } from "./thumbnailWorker.js";
 
 function sanitizeName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -65,6 +66,7 @@ export async function createArchiveFromLocalFile(params: {
   });
 
   await User.updateOne({ _id: userId }, { $inc: { usedBytes: stat.size } });
+  queueArchiveThumbnails(archive.id);
 
   return archive;
 }
