@@ -21,6 +21,7 @@ const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
 const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
 const navTrash = document.getElementById('navTrash');
+const sidebar = document.querySelector('.sidebar');
 
 const contextMenu = document.getElementById('contextMenu');
 const infoModal = document.getElementById('infoModal');
@@ -243,6 +244,19 @@ function priorityLabel(value) {
 
 function hideContextMenu() {
   contextMenu.classList.add('hidden');
+}
+
+function syncSidebarHeight() {
+  if (!sidebar) return;
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    sidebar.style.height = 'auto';
+    return;
+  }
+  const top = sidebar.getBoundingClientRect().top;
+  const minTop = 20;
+  const bottomPad = 20;
+  const available = Math.floor(window.innerHeight - Math.max(top, minTop) - bottomPad);
+  sidebar.style.height = `${Math.max(220, available)}px`;
 }
 
 function showContextMenu(x, y, items) {
@@ -1441,7 +1455,11 @@ priorityModal.addEventListener('click', (e) => {
 
 document.addEventListener('click', () => hideContextMenu());
 document.addEventListener('scroll', () => hideContextMenu());
-window.addEventListener('resize', () => hideContextMenu());
+window.addEventListener('resize', () => {
+  hideContextMenu();
+  syncSidebarHeight();
+});
+window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
 
 (async () => {
   try {
@@ -1484,5 +1502,6 @@ window.addEventListener('resize', () => hideContextMenu());
   await loadMe();
   await loadFolders();
   await loadArchives();
+  syncSidebarHeight();
   setInterval(loadArchives, UI_REFRESH_MS);
 })();
