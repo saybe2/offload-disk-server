@@ -81,6 +81,8 @@ const archiveProgress = new Map();
 let previewObjectUrl = null;
 const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.avif', '.heic', '.heif']);
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
+const thumbFailureUntil = new Map();
+const THUMB_RETRY_MS = 2 * 60 * 1000;
 
 const priorities = [
   { value: 0, label: 'lowest' },
@@ -262,6 +264,22 @@ function fileExtension(name) {
 function supportsThumb(name) {
   const ext = fileExtension(name);
   return thumbImageExt.has(ext) || thumbVideoExt.has(ext);
+}
+
+function createFileIconElement() {
+  const fileIcon = document.createElement('span');
+  fileIcon.className = 'file-icon';
+  return fileIcon;
+}
+
+function shouldLoadThumb(archiveId, fileIndex) {
+  const key = `${archiveId}:${fileIndex}`;
+  const retryAt = Number(thumbFailureUntil.get(key) || 0);
+  if (retryAt > Date.now()) {
+    return false;
+  }
+  thumbFailureUntil.delete(key);
+  return true;
 }
 
 function hideContextMenu() {
@@ -750,20 +768,24 @@ function renderArchives() {
     nameWrap.className = 'name-cell';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
     let iconEl;
-    if (supportsThumb(fileName)) {
+    if (supportsThumb(fileName) && shouldLoadThumb(a._id, item.fileIndex)) {
       const thumb = document.createElement('img');
       thumb.className = 'thumb-icon';
       thumb.alt = '';
       thumb.loading = 'lazy';
       thumb.src = `/api/archives/${a._id}/files/${item.fileIndex}/thumbnail`;
       thumb.onerror = () => {
-        thumb.classList.add('hidden');
+        thumbFailureUntil.set(`${a._id}:${item.fileIndex}`, Date.now() + THUMB_RETRY_MS);
+        if (thumb.parentElement) {
+          thumb.replaceWith(createFileIconElement());
+        }
+      };
+      thumb.onload = () => {
+        thumbFailureUntil.delete(`${a._id}:${item.fileIndex}`);
       };
       iconEl = thumb;
     } else {
-      const fileIcon = document.createElement('span');
-      fileIcon.className = 'file-icon';
-      iconEl = fileIcon;
+      iconEl = createFileIconElement();
     }
     const nameText = document.createElement('span');
     nameText.textContent = fileName;

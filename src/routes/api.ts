@@ -1070,7 +1070,11 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
     res.setHeader("Cache-Control", "private, max-age=3600");
     return fs.createReadStream(thumb.filePath).pipe(res);
   } catch (err) {
-    log("thumb", `error ${archive.id} file=${index} ${(err as Error).message}`);
+    const message = (err as Error).message || "thumbnail_failed";
+    log("thumb", `error ${archive.id} file=${index} ${message}`);
+    if (message === "file_not_found") {
+      return res.status(404).json({ error: "file_not_found" });
+    }
     return res.status(500).json({ error: "thumbnail_failed" });
   }
 });
