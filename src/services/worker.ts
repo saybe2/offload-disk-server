@@ -10,6 +10,7 @@ import { createZip, splitFileIntoParts } from "./archive.js";
 import { deriveKey, encryptFile } from "./crypto.js";
 import { deleteWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "./discord.js";
 import { uniqueParts } from "./parts.js";
+import { queueArchiveThumbnails } from "./thumbnailWorker.js";
 
 let running = 0;
 let deleting = false;
@@ -248,6 +249,7 @@ async function processNextArchive() {
 
       await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
       log(`ready ${archive.id}`);
+      queueArchiveThumbnails(archive.id);
 
       if (config.cacheDeleteAfterUpload) {
         await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
@@ -342,6 +344,7 @@ async function processNextArchive() {
 
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     log(`ready ${archive.id}`);
+    queueArchiveThumbnails(archive.id);
 
     if (config.cacheDeleteAfterUpload) {
       await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
