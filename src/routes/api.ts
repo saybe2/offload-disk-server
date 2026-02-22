@@ -1622,7 +1622,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
   const archiveIds = shares.filter((s) => s.archiveId).map((s) => s.archiveId);
   const folderIds = shares.filter((s) => s.folderId).map((s) => s.folderId);
   const archives = await Archive.find({ _id: { $in: archiveIds } })
-    .select("displayName name")
+    .select("displayName name status isBundle files.originalName files.name")
     .lean();
   const folders = await Folder.find({ _id: { $in: folderIds } })
     .select("name")
@@ -1633,9 +1633,22 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
 
   const payload = shares.map((s) => {
     let name = "Shared item";
+    let archiveId: string | null = null;
+    let archiveStatus: string | null = null;
+    let archiveIsBundle = false;
+    let archiveFirstFileName = "";
+    let previewSupported = false;
     if (s.archiveId) {
-      const a = archiveMap.get(s.archiveId.toString());
+      archiveId = s.archiveId.toString();
+      const a = archiveMap.get(archiveId) as any;
       name = a?.displayName || a?.name || name;
+      archiveStatus = a?.status || null;
+      archiveIsBundle = !!a?.isBundle;
+      const firstFile = a?.files?.[0];
+      archiveFirstFileName = firstFile?.originalName || firstFile?.name || "";
+      const previewName = archiveFirstFileName || a?.displayName || a?.name || "";
+      const contentType = (mime.lookup(previewName) as string) || "";
+      previewSupported = isPreviewContentTypeAllowed(contentType);
     } else if (s.folderId) {
       const f = folderMap.get(s.folderId.toString());
       name = f?.name || name;
@@ -1646,7 +1659,12 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       type: s.type,
       expiresAt: s.expiresAt,
       createdAt: s.createdAt,
-      name
+      name,
+      archiveId,
+      archiveStatus,
+      archiveIsBundle,
+      archiveFirstFileName,
+      previewSupported
     };
   });
 
