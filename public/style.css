@@ -3,7 +3,7 @@ header { display: flex; align-items: center; justify-content: space-between; mar
 header h1 { margin: 0; }
 .header-actions { display: flex; gap: 10px; align-items: center; }
 .layout { display: flex; gap: 16px; align-items: flex-start; }
-.sidebar { width: 220px; display: flex; flex-direction: column; gap: 12px; position: sticky; top: 20px; align-self: flex-start; height: calc(100vh - 40px); overflow: auto; }
+.sidebar { width: 220px; display: flex; flex-direction: column; gap: 12px; position: sticky; top: 20px; align-self: flex-start; height: calc(100vh - 120px); overflow: auto; }
 .sidebar-section { background: #171a21; padding: 12px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 .sidebar-footer { margin-top: auto; padding: 8px 4px; color: #9aa4b2; font-size: 12px; }
 .quota { line-height: 1.4; }
