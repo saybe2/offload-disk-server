@@ -42,6 +42,7 @@ import {
   isPreviewContentTypeAllowed,
   resolvePreviewContentType
 } from "../services/preview.js";
+import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { fetch } from "undici";
 
 const upload = multer({
@@ -1176,7 +1177,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   if (!isPreviewAllowedForFile(fileName, detectedType)) {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
-  const contentType = resolvePreviewContentType(fileName, detectedType);
+  let contentType = resolvePreviewContentType(fileName, detectedType);
 
   const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}`);
@@ -1188,7 +1189,16 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     } else {
       await restoreArchiveToFile(archive, outputPath, config.cacheDir, config.masterKey);
     }
-    const body = await fs.promises.readFile(outputPath);
+    let servePath = outputPath;
+    if (detectedKind === "video" && ext === ".ts") {
+      const mp4Path = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}.mp4`);
+      const remuxed = await remuxTsToMp4(outputPath, mp4Path);
+      if (remuxed) {
+        servePath = mp4Path;
+        contentType = "video/mp4";
+      }
+    }
+    const body = await fs.promises.readFile(servePath);
     const encodedName = encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, "%2A");
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", body.length);

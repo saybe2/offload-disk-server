@@ -16,6 +16,7 @@ import {
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
+import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { log } from "../logger.js";
@@ -271,7 +272,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
   if (!isPreviewAllowedForFile(fileName, detectedType)) {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
-  const contentType = resolvePreviewContentType(fileName, detectedType);
+  let contentType = resolvePreviewContentType(fileName, detectedType);
 
   const tempDir = path.join(
     config.cacheDir,
@@ -287,7 +288,16 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     } else {
       await restoreArchiveToFile(archive, outputPath, config.cacheDir, config.masterKey);
     }
-    const body = await fs.promises.readFile(outputPath);
+    let servePath = outputPath;
+    if (detectedKind === "video" && ext === ".ts") {
+      const mp4Path = path.join(tempDir, `${fileIndex}_${sanitizeFilename(fileName)}.mp4`);
+      const remuxed = await remuxTsToMp4(outputPath, mp4Path);
+      if (remuxed) {
+        servePath = mp4Path;
+        contentType = "video/mp4";
+      }
+    }
+    const body = await fs.promises.readFile(servePath);
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", body.length);
     res.setHeader("Content-Disposition", inlineContentDisposition(fileName));
