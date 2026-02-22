@@ -50,7 +50,6 @@ git pull && docker build -t offload-smb . && docker restart offload && docker lo
 - HTTP resume (Range) is implemented for `v2` non-bundle files.
 - For bundle extraction routes, byte-range resume is not guaranteed.
 - FDM should use direct file links from the web UI.
-- Legacy `v1` archives are migrated to `v2` in background (careful, best-effort, one-by-one).
 
 ## Recommended FDM settings
 - Connections per download: `4-8`
@@ -102,9 +101,6 @@ Cache/disk:
 - `STREAM_USE_DISK`
 - `DISK_SOFT_LIMIT_GB`
 - `DISK_HARD_LIMIT_GB`
-- `MIGRATE_V1_ENABLED`
-- `MIGRATE_V1_BACKOFF_MIN`
-- `MIGRATE_V1_DELETE_OLD_PARTS`
 
 Worker:
 - `WORKER_CONCURRENCY`
@@ -131,21 +127,6 @@ SMB:
 - `npm run dev` - dev server
 - `npm run build` - TypeScript build
 - `npm run start` - run built server
-
-## Standalone migration monitor (single file)
-Use this independent script to track `v1 -> v2` migration progress from MongoDB:
-
-```bash
-node tools/v1_v2_migration_monitor.js
-```
-
-Options:
-- one-shot output: `node tools/v1_v2_migration_monitor.js --once`
-- custom refresh: `node tools/v1_v2_migration_monitor.js --interval=5`
-
-Reads:
-- `MONGODB_URI`
-- `MONGODB_DB` (default `cloud_storage`)
 
 ## Security notes
 - Never commit `.env`.

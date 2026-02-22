@@ -9,13 +9,10 @@ import { config, computed } from "../config.js";
 import { createZip, splitFileIntoParts } from "./archive.js";
 import { deriveKey, encryptFile } from "./crypto.js";
 import { deleteWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "./discord.js";
-import { restoreArchiveToFile } from "./restore.js";
 import { uniqueParts } from "./parts.js";
 
 let running = 0;
 let deleting = false;
-let migrating = false;
-const migrateBackoffUntil = new Map<string, number>();
 
 function log(message: string) {
   console.log(`[worker] ${new Date().toISOString()} ${message}`);
@@ -32,29 +29,6 @@ function startStage(archiveId: string, name: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function cleanupMigrateBackoff(now = Date.now()) {
-  for (const [id, until] of migrateBackoffUntil.entries()) {
-    if (until <= now) {
-      migrateBackoffUntil.delete(id);
-    }
-  }
-}
-
-function isMigrationBackoff(id: string, now = Date.now()) {
-  const until = migrateBackoffUntil.get(id);
-  if (!until) return false;
-  if (until <= now) {
-    migrateBackoffUntil.delete(id);
-    return false;
-  }
-  return true;
-}
-
-function setMigrationBackoff(id: string) {
-  const ms = Math.max(1, config.migrateV1BackoffMinutes) * 60 * 1000;
-  migrateBackoffUntil.set(id, Date.now() + ms);
 }
 
 function isTransientError(err: unknown) {
@@ -360,166 +334,6 @@ async function processNextArchive() {
   }
 }
 
-async function deletePartsFromDiscord(parts: Array<{ messageId: string; webhookId: string }>) {
-  if (!parts.length) return;
-  const hooks = await Webhook.find().lean();
-  const hookById = new Map(hooks.map((h) => [h._id.toString(), h.url]));
-  for (const part of parts) {
-    const hookUrl = hookById.get(String(part.webhookId));
-    if (!hookUrl) continue;
-    try {
-      await deleteWebhookMessage(hookUrl, part.messageId);
-    } catch {
-      // best-effort cleanup
-    }
-  }
-}
-
-async function findV1MigrationCandidate() {
-  cleanupMigrateBackoff();
-  const candidates = await Archive.find({
-    status: "ready",
-    deletedAt: null,
-    trashedAt: null,
-    encryptionVersion: { $lt: 2 }
-  })
-    .sort({ updatedAt: 1 })
-    .limit(20);
-
-  for (const archive of candidates) {
-    if (!isMigrationBackoff(archive.id)) {
-      return archive;
-    }
-  }
-  return null;
-}
-
-async function processV1Migration() {
-  if (!config.migrateV1Enabled || migrating) {
-    return false;
-  }
-
-  const archive = await findV1MigrationCandidate();
-  if (!archive) {
-    return false;
-  }
-
-  migrating = true;
-  const oldParts = uniqueParts(archive.parts || []);
-  const workDir = path.join(
-    config.cacheDir,
-    "migrate",
-    `${archive.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-  );
-  const plainPath = path.join(workDir, archive.isBundle ? "archive.zip" : "archive.bin");
-  const uploadedNewParts: Array<{ messageId: string; webhookId: string }> = [];
-
-  try {
-    const disk = await hasDiskSpace();
-    if (!disk.ok) {
-      setMigrationBackoff(archive.id);
-      return false;
-    }
-
-    const webhooks = await Webhook.find({ enabled: true });
-    if (webhooks.length === 0) {
-      setMigrationBackoff(archive.id);
-      return false;
-    }
-
-    await fs.promises.mkdir(workDir, { recursive: true });
-    log(`migrate start ${archive.id} v1->v2`);
-
-    const restoreDone = startStage(archive.id, "migrate_restore_v1");
-    await restoreArchiveToFile(archive, plainPath, config.cacheDir, config.masterKey);
-    restoreDone();
-
-    const uploadDone = startStage(archive.id, "migrate_upload_v2");
-    const key = deriveKey(config.masterKey);
-    const rs = fs.createReadStream(plainPath, { highWaterMark: computed.chunkSizeBytes });
-    const newParts: any[] = [];
-    let partIndex = 0;
-    let uploadedBytes = 0;
-    let encryptedSize = 0;
-
-    for await (const chunk of rs) {
-      const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      encryptedSize += plainChunk.length;
-
-      const iv = crypto.randomBytes(12);
-      const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-      const encrypted = Buffer.concat([cipher.update(plainChunk), cipher.final()]);
-      const authTag = cipher.getAuthTag();
-      const hash = crypto.createHash("sha256").update(encrypted).digest("hex");
-      const webhook = webhooks[partIndex % webhooks.length];
-      const content = `archive:${archive.id} migrate_v2 part:${partIndex}`;
-      const result = await uploadBufferWithRetry(encrypted, `part_${partIndex}`, webhook.url, content);
-
-      uploadedNewParts.push({ messageId: result.messageId, webhookId: webhook.id });
-      newParts.push({
-        index: partIndex,
-        size: encrypted.length,
-        plainSize: plainChunk.length,
-        hash,
-        url: result.url,
-        messageId: result.messageId,
-        webhookId: webhook.id,
-        iv: iv.toString("base64"),
-        authTag: authTag.toString("base64")
-      });
-      uploadedBytes += encrypted.length;
-      partIndex += 1;
-      if (partIndex % 10 === 0) {
-        log(`migrate progress ${archive.id} ${partIndex}`);
-      }
-    }
-    uploadDone();
-
-    const swap = await Archive.updateOne(
-      { _id: archive.id, status: "ready", deletedAt: null, trashedAt: null, encryptionVersion: { $lt: 2 } },
-      {
-        $set: {
-          parts: newParts,
-          encryptionVersion: 2,
-          iv: "",
-          authTag: "",
-          uploadedParts: partIndex,
-          totalParts: partIndex,
-          uploadedBytes,
-          encryptedSize,
-          error: "",
-          chunkSizeBytes: computed.chunkSizeBytes,
-          retryCount: 0
-        }
-      }
-    );
-
-    if (swap.modifiedCount === 0) {
-      log(`migrate skip ${archive.id} changed before swap`);
-      await deletePartsFromDiscord(uploadedNewParts);
-      setMigrationBackoff(archive.id);
-      return true;
-    }
-
-    if (config.migrateV1DeleteOldParts) {
-      await deletePartsFromDiscord(oldParts);
-    }
-
-    migrateBackoffUntil.delete(archive.id);
-    log(`migrate ready ${archive.id} parts=${partIndex}`);
-    return true;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log(`migrate error ${archive.id} ${message}`);
-    await deletePartsFromDiscord(uploadedNewParts);
-    setMigrationBackoff(archive.id);
-    return true;
-  } finally {
-    migrating = false;
-    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
 async function processDelete() {
   const threshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const candidate = await Archive.findOneAndUpdate(
@@ -590,10 +404,7 @@ export function startWorker() {
           } else if (!deleting) {
             deleting = true;
             try {
-              const didDelete = await processDelete();
-              if (!didDelete) {
-                await processV1Migration();
-              }
+              await processDelete();
             } finally {
               deleting = false;
             }
