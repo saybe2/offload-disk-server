@@ -110,9 +110,25 @@ async function loadMe() {
 }
 
 function discordProgress(archive) {
-  if (!archive.encryptedSize) return '0%';
-  const pct = Math.min(100, Math.floor((archive.uploadedBytes / archive.encryptedSize) * 100));
+  const pct = processedPercent(archive);
   return `${pct}%`;
+}
+
+function processedTotalBytes(archive) {
+  const encrypted = Number(archive.encryptedSize || 0);
+  if (encrypted > 0) return encrypted;
+  const original = Number(archive.originalSize || 0);
+  if (original > 0) return original;
+  const uploaded = Number(archive.uploadedBytes || 0);
+  return uploaded > 0 ? uploaded : 0;
+}
+
+function processedPercent(archive) {
+  if (archive.status === 'ready') return 100;
+  const total = processedTotalBytes(archive);
+  if (total <= 0) return 0;
+  const uploaded = Number(archive.uploadedBytes || 0);
+  return Math.max(0, Math.min(99, Math.floor((uploaded / total) * 100)));
 }
 
 function deleteProgress(archive) {
@@ -650,10 +666,10 @@ function renderArchives() {
     progressBar.className = 'mini-bar';
     const progressFill = document.createElement('div');
     progressFill.className = 'mini-bar-fill';
-    const totalBytes = a.encryptedSize || 0;
-    const uploadedBytes = a.uploadedBytes || 0;
-    const pct = totalBytes > 0 ? Math.min(100, Math.floor((uploadedBytes / totalBytes) * 100)) : 0;
-    progressFill.style.width = `${a.status === 'ready' ? 100 : pct}%`;
+    const totalBytes = processedTotalBytes(a);
+    const uploadedBytes = Number(a.uploadedBytes || 0);
+    const pct = processedPercent(a);
+    progressFill.style.width = `${pct}%`;
     progressBar.appendChild(progressFill);
     const progressMeta = document.createElement('div');
     progressMeta.className = 'mini-meta';
@@ -666,7 +682,7 @@ function renderArchives() {
     }
     progressMeta.textContent = a.status === 'ready'
       ? '100%'
-      : `${pct}%${etaText ? ` · ${etaText}` : ''}`;
+      : `${pct}%${etaText ? ` | ${etaText}` : ''}`;
     progressWrap.appendChild(progressBar);
     progressWrap.appendChild(progressMeta);
     discordTd.appendChild(progressWrap);
