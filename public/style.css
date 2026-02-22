@@ -57,6 +57,8 @@ tr.row-selected:hover { background: #22314a; }
 .counter-cell { display: inline-flex; align-items: center; gap: 6px; color: #9aa4b2; }
 .counter-icon { width: 16px; height: 16px; display: inline-block; }
 .counter-text { color: #e6e6e6; font-variant-numeric: tabular-nums; }
+th.counter-head { text-align: center; width: 56px; }
+th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 
 .context-menu { position: fixed; background: #171a21; border: 1px solid #2b3240; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 6px; display: flex; flex-direction: column; min-width: 180px; z-index: 9999; }
 .context-menu.hidden { display: none; }
