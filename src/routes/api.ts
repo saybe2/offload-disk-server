@@ -34,6 +34,7 @@ import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
+import { isPreviewContentTypeAllowed } from "../services/preview.js";
 import { fetch } from "undici";
 
 const upload = multer({
@@ -45,16 +46,6 @@ export const apiRouter = Router();
 
 function sanitizeName(name: string) {
   return sanitizeFilename(name);
-}
-
-function isPreviewContentTypeAllowed(contentType: string) {
-  if (contentType.startsWith("image/")) return true;
-  if (contentType.startsWith("text/")) return true;
-  if (contentType === "application/pdf") return true;
-  if (contentType === "application/json") return true;
-  if (contentType === "application/xml") return true;
-  if (contentType === "text/xml") return true;
-  return false;
 }
 
 const CP1252_MAP: Record<number, number> = {

@@ -27,6 +27,23 @@
     </section>
   </main>
 
+  <div id="sharePreviewModal" class="modal hidden">
+    <div class="modal-card preview-card">
+      <div class="modal-header">
+        <h3 id="sharePreviewTitle">Preview</h3>
+        <button id="sharePreviewClose">Close</button>
+      </div>
+      <div class="modal-body preview-body">
+        <div id="sharePreviewState" class="status">Loading preview...</div>
+        <pre id="sharePreviewText" class="preview-text hidden"></pre>
+        <img id="sharePreviewImage" class="preview-image hidden" alt="Preview" />
+        <video id="sharePreviewVideo" class="preview-video hidden" controls></video>
+        <audio id="sharePreviewAudio" class="preview-audio hidden" controls></audio>
+        <iframe id="sharePreviewFrame" class="preview-frame hidden" title="Preview"></iframe>
+      </div>
+    </div>
+  </div>
+
   <script src="/share.js"></script>
 </body>
 </html>

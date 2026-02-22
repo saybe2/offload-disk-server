@@ -33,6 +33,8 @@ const previewTitle = document.getElementById('previewTitle');
 const previewState = document.getElementById('previewState');
 const previewText = document.getElementById('previewText');
 const previewImage = document.getElementById('previewImage');
+const previewVideo = document.getElementById('previewVideo');
+const previewAudio = document.getElementById('previewAudio');
 const previewFrame = document.getElementById('previewFrame');
 const previewClose = document.getElementById('previewClose');
 
@@ -356,10 +358,33 @@ function resetPreviewContent(message) {
   previewState.classList.remove('hidden');
   previewText.classList.add('hidden');
   previewImage.classList.add('hidden');
+  previewVideo.classList.add('hidden');
+  previewAudio.classList.add('hidden');
   previewFrame.classList.add('hidden');
   previewText.textContent = '';
   previewImage.removeAttribute('src');
+  previewVideo.pause();
+  previewVideo.removeAttribute('src');
+  previewAudio.pause();
+  previewAudio.removeAttribute('src');
   previewFrame.removeAttribute('src');
+}
+
+function isTextLikeContentType(contentType) {
+  if (!contentType) return false;
+  if (contentType.startsWith('text/')) return true;
+  const base = contentType.split(';')[0].trim();
+  return [
+    'application/json',
+    'application/xml',
+    'text/xml',
+    'application/javascript',
+    'application/x-javascript',
+    'application/yaml',
+    'text/yaml',
+    'text/x-yaml',
+    'application/x-sh'
+  ].includes(base);
 }
 
 function closePreviewModal() {
@@ -397,7 +422,7 @@ async function openPreviewModal(item) {
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const blob = await res.blob();
 
-    if (contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml')) {
+    if (isTextLikeContentType(contentType)) {
       previewText.textContent = await blob.text();
       previewState.classList.add('hidden');
       previewText.classList.remove('hidden');
@@ -410,6 +435,18 @@ async function openPreviewModal(item) {
     if (contentType.startsWith('image/')) {
       previewImage.src = previewObjectUrl;
       previewImage.classList.remove('hidden');
+      return;
+    }
+
+    if (contentType.startsWith('video/')) {
+      previewVideo.src = previewObjectUrl;
+      previewVideo.classList.remove('hidden');
+      return;
+    }
+
+    if (contentType.startsWith('audio/')) {
+      previewAudio.src = previewObjectUrl;
+      previewAudio.classList.remove('hidden');
       return;
     }
 
