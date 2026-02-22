@@ -653,6 +653,10 @@ function sortFileItems(items) {
     let result = 0;
     if (sortField === 'size') {
       result = compareNumber(left.file?.size ?? left.archive.originalSize, right.file?.size ?? right.archive.originalSize);
+    } else if (sortField === 'views') {
+      result = compareNumber(left.file?.previewCount ?? 0, right.file?.previewCount ?? 0);
+    } else if (sortField === 'downloads') {
+      result = compareNumber(left.file?.downloadCount ?? 0, right.file?.downloadCount ?? 0);
     } else if (sortField === 'type') {
       result = compareText(fileTypeByName(leftName), fileTypeByName(rightName));
     } else if (sortField === 'date') {
@@ -674,7 +678,7 @@ function sortShares(shares) {
   const factor = getSortFactor();
   list.sort((a, b) => {
     let result = 0;
-    if (sortField === 'size') {
+    if (sortField === 'size' || sortField === 'views' || sortField === 'downloads') {
       result = 0;
     } else if (sortField === 'type') {
       result = compareText(a.type, b.type);
@@ -1984,7 +1988,14 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
     searchTerm = search;
     searchInput.value = search;
   }
-  if (sort === 'name' || sort === 'size' || sort === 'type' || sort === 'date') {
+  if (
+    sort === 'name' ||
+    sort === 'size' ||
+    sort === 'type' ||
+    sort === 'date' ||
+    sort === 'views' ||
+    sort === 'downloads'
+  ) {
     sortField = sort;
   }
   if (dir === 'asc' || dir === 'desc') {
