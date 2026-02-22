@@ -79,6 +79,8 @@ const ROOT_DROP = '__root__';
 let dropUploadFolderId = null;
 const archiveProgress = new Map();
 let previewObjectUrl = null;
+const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.avif', '.heic', '.heif']);
+const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
 
 const priorities = [
   { value: 0, label: 'lowest' },
@@ -248,6 +250,18 @@ function updateTitle() {
 function priorityLabel(value) {
   const item = priorities.find((p) => p.value === value);
   return item ? item.label : 'normal';
+}
+
+function fileExtension(name) {
+  if (!name) return '';
+  const lower = String(name).toLowerCase();
+  const dot = lower.lastIndexOf('.');
+  return dot >= 0 ? lower.slice(dot) : '';
+}
+
+function supportsThumb(name) {
+  const ext = fileExtension(name);
+  return thumbImageExt.has(ext) || thumbVideoExt.has(ext);
 }
 
 function hideContextMenu() {
@@ -734,12 +748,26 @@ function renderArchives() {
     const nameTd = document.createElement('td');
     const nameWrap = document.createElement('div');
     nameWrap.className = 'name-cell';
-    const fileIcon = document.createElement('span');
-    fileIcon.className = 'file-icon';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+    let iconEl;
+    if (supportsThumb(fileName)) {
+      const thumb = document.createElement('img');
+      thumb.className = 'thumb-icon';
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.src = `/api/archives/${a._id}/files/${item.fileIndex}/thumbnail`;
+      thumb.onerror = () => {
+        thumb.classList.add('hidden');
+      };
+      iconEl = thumb;
+    } else {
+      const fileIcon = document.createElement('span');
+      fileIcon.className = 'file-icon';
+      iconEl = fileIcon;
+    }
     const nameText = document.createElement('span');
     nameText.textContent = fileName;
-    nameWrap.appendChild(fileIcon);
+    nameWrap.appendChild(iconEl);
     nameWrap.appendChild(nameText);
     if (item.isBundle) {
       const pill = document.createElement('span');

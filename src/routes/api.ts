@@ -33,6 +33,7 @@ import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../
 import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
+import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
 import { fetch } from "undici";
 
 const upload = multer({
@@ -1032,6 +1033,45 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
       return;
     }
     return res.status(500).json({ error: "restore_failed" });
+  }
+});
+
+apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) {
+    return res.status(404).json({ error: "not_found" });
+  }
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+  let index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  if (!archive.isBundle) {
+    index = 0;
+  }
+  const file = archive.files?.[index];
+  if (!file) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = file.originalName || file.name || archive.displayName || archive.name;
+  if (!supportsThumbnail(fileName)) {
+    return res.status(415).json({ error: "unsupported_thumbnail_type" });
+  }
+
+  try {
+    const thumb = await ensureArchiveThumbnail(archive, index);
+    res.setHeader("Content-Type", thumb.contentType);
+    res.setHeader("Content-Length", thumb.size);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    return fs.createReadStream(thumb.filePath).pipe(res);
+  } catch (err) {
+    log("thumb", `error ${archive.id} file=${index} ${(err as Error).message}`);
+    return res.status(500).json({ error: "thumbnail_failed" });
   }
 });
 

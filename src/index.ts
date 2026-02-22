@@ -198,6 +198,8 @@ async function ensureCacheDirs() {
     path.join(config.cacheDir, "downloads"),
     path.join(config.cacheDir, "folder_dl"),
     path.join(config.cacheDir, "selection"),
+    path.join(config.cacheDir, "thumbs"),
+    path.join(config.cacheDir, "thumb_work"),
     path.join(config.cacheDir, "smb_read"),
     path.join(config.cacheDir, "smb_write")
   ];
