@@ -33,6 +33,7 @@ const infoClose = document.getElementById('infoClose');
 const previewModal = document.getElementById('previewModal');
 const previewTitle = document.getElementById('previewTitle');
 const previewState = document.getElementById('previewState');
+const previewMarkdown = document.getElementById('previewMarkdown');
 const previewText = document.getElementById('previewText');
 const previewCode = document.getElementById('previewCode');
 const previewImage = document.getElementById('previewImage');
@@ -274,9 +275,24 @@ function fileExtension(name) {
   return dot >= 0 ? lower.slice(dot) : '';
 }
 
-function supportsThumb(name) {
+function supportsThumb(name, detectedKind) {
+  if (detectedKind === 'image' || detectedKind === 'video') return true;
+  if (detectedKind && detectedKind !== 'image' && detectedKind !== 'video') return false;
   const ext = fileExtension(name);
   return thumbImageExt.has(ext) || thumbVideoExt.has(ext);
+}
+
+function getDetectedTypeLabel(file, fileName) {
+  if (file?.detectedTypeLabel) return file.detectedTypeLabel;
+  const ext = fileExtension(fileName);
+  if (file?.detectedKind === 'video') return ext === '.ts' ? 'MPEG-TS video' : 'Video';
+  if (file?.detectedKind === 'image') return 'Image';
+  if (file?.detectedKind === 'audio') return 'Audio';
+  if (file?.detectedKind === 'archive') return 'Archive';
+  if (file?.detectedKind === 'document') return 'Document';
+  if (file?.detectedKind === 'code') return ext === '.ts' ? 'TypeScript' : 'Code';
+  if (ext === '.md') return 'Markdown';
+  return ext ? ext.slice(1).toUpperCase() : 'File';
 }
 
 function createFileIconElement() {
@@ -391,6 +407,8 @@ function resetPreviewContent(message) {
   }
   previewState.textContent = message || '';
   previewState.classList.remove('hidden');
+  previewMarkdown.classList.add('hidden');
+  previewMarkdown.innerHTML = '';
   previewText.classList.add('hidden');
   previewImage.classList.add('hidden');
   previewVideo.classList.add('hidden');
@@ -405,6 +423,115 @@ function resetPreviewContent(message) {
   previewAudio.pause();
   previewAudio.removeAttribute('src');
   previewFrame.removeAttribute('src');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderMarkdownInline(value) {
+  let text = escapeHtml(value);
+  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, href) => {
+    const safeHref = String(href || '').trim();
+    if (!/^https?:\/\//i.test(safeHref) && !/^mailto:/i.test(safeHref)) {
+      return label;
+    }
+    return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+  return text;
+}
+
+function renderMarkdownPreview(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const chunks = [];
+  let inCode = false;
+  let codeLang = '';
+  let codeLines = [];
+  let inList = false;
+
+  const flushList = () => {
+    if (inList) {
+      chunks.push('</ul>');
+      inList = false;
+    }
+  };
+
+  const flushCode = () => {
+    const body = escapeHtml(codeLines.join('\n'));
+    const langClass = codeLang ? ` class="language-${escapeHtml(codeLang)}"` : '';
+    chunks.push(`<pre><code${langClass}>${body}</code></pre>`);
+    codeLines = [];
+    codeLang = '';
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine ?? '';
+    const fence = line.match(/^```([\w-]+)?\s*$/);
+    if (fence) {
+      if (inCode) {
+        flushCode();
+        inCode = false;
+      } else {
+        flushList();
+        inCode = true;
+        codeLang = (fence[1] || '').toLowerCase();
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      flushList();
+      const level = heading[1].length;
+      chunks.push(`<h${level}>${renderMarkdownInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const listItem = line.match(/^\s*[-*]\s+(.+)$/);
+    if (listItem) {
+      if (!inList) {
+        chunks.push('<ul>');
+        inList = true;
+      }
+      chunks.push(`<li>${renderMarkdownInline(listItem[1])}</li>`);
+      continue;
+    }
+
+    flushList();
+    chunks.push(`<p>${renderMarkdownInline(line)}</p>`);
+  }
+
+  flushList();
+  if (inCode) {
+    flushCode();
+  }
+
+  previewMarkdown.innerHTML = chunks.join('');
+  previewState.classList.add('hidden');
+  previewMarkdown.classList.remove('hidden');
+  if (window.hljs && typeof window.hljs.highlightElement === 'function') {
+    previewMarkdown.querySelectorAll('pre code').forEach((node) => {
+      node.removeAttribute('data-highlighted');
+      window.hljs.highlightElement(node);
+    });
+  }
 }
 
 function isTextLikeContentType(contentType) {
@@ -510,6 +637,11 @@ function renderTextPreview(text, fileName) {
   }
 }
 
+function isMarkdownFileName(fileName) {
+  const lower = String(fileName || '').toLowerCase();
+  return lower.endsWith('.md') || lower.endsWith('.markdown');
+}
+
 function closePreviewModal() {
   previewModal.classList.add('hidden');
   resetPreviewContent('');
@@ -549,7 +681,14 @@ async function openPreviewModal(item) {
     }
 
     if (isTextLikeContentType(contentType)) {
-      renderTextPreview(await blob.text(), fileName);
+      const text = await blob.text();
+      const baseType = contentType.split(';')[0].trim();
+      const markdownLike = isMarkdownFileName(fileName) || baseType === 'text/markdown';
+      if (markdownLike) {
+        renderMarkdownPreview(text);
+        return;
+      }
+      renderTextPreview(text, fileName);
       previewState.classList.add('hidden');
       previewText.classList.remove('hidden');
       return;
@@ -616,7 +755,9 @@ function getSortFactor() {
   return sortDir === 'desc' ? -1 : 1;
 }
 
-function fileTypeByName(name) {
+function fileTypeByName(name, file) {
+  if (file?.detectedTypeLabel) return String(file.detectedTypeLabel).toLowerCase();
+  if (file?.detectedKind) return String(file.detectedKind).toLowerCase();
   const ext = fileExtension(name);
   return ext ? ext.slice(1) : 'file';
 }
@@ -661,7 +802,7 @@ function sortFileItems(items) {
     } else if (sortField === 'downloads') {
       result = compareNumber(left.file?.downloadCount ?? 0, right.file?.downloadCount ?? 0);
     } else if (sortField === 'type') {
-      result = compareText(fileTypeByName(leftName), fileTypeByName(rightName));
+      result = compareText(fileTypeByName(leftName, left.file), fileTypeByName(rightName, right.file));
     } else if (sortField === 'date') {
       result = compareDate(left.archive.updatedAt || left.archive.createdAt, right.archive.updatedAt || right.archive.createdAt);
     } else {
@@ -1026,7 +1167,7 @@ function renderArchives() {
     nameWrap.className = 'name-cell';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
     let iconEl;
-    if (supportsThumb(fileName) && shouldLoadThumb(a._id, item.fileIndex)) {
+    if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
       const thumb = document.createElement('img');
       thumb.className = 'thumb-icon';
       thumb.alt = '';
@@ -1484,6 +1625,7 @@ async function openFileContextMenu(item, x, y) {
       ? a.totalParts
       : (Array.isArray(a.parts) ? a.parts.length : 0);
     showInfoModal(`File: ${fileName}`, [
+      { label: 'Type', value: getDetectedTypeLabel(item.file, fileName) },
       { label: 'Status', value: a.status },
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
       { label: 'Views', value: String((item.file && typeof item.file.previewCount === 'number') ? item.file.previewCount : 0) },
@@ -1640,7 +1782,7 @@ async function loadShared() {
     } else if (
       share.archiveId &&
       share.archiveFirstFileName &&
-      supportsThumb(share.archiveFirstFileName) &&
+      supportsThumb(share.archiveFirstFileName, share.archiveFirstFileKind) &&
       shouldLoadThumb(share.archiveId, 0)
     ) {
       const thumb = document.createElement('img');

@@ -135,7 +135,7 @@ async function generateLocalThumbnails(archive: any) {
   for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
     const file = archive.files[fileIndex];
     const fileName = file?.originalName || file?.name || "";
-    if (!supportsThumbnail(fileName)) continue;
+    if (!supportsThumbnail(fileName, file?.detectedKind)) continue;
     try {
       await ensureArchiveThumbnailFromSource(archive, fileIndex);
       generated += 1;
