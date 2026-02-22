@@ -8,6 +8,15 @@ export interface ArchiveFile {
   originalName: string;
   size: number;
   downloadCount?: number;
+  thumbnail?: {
+    contentType: string;
+    size: number;
+    localPath: string;
+    url?: string;
+    messageId?: string;
+    webhookId?: string;
+    updatedAt?: Date;
+  };
 }
 
 export interface ArchivePart {
@@ -62,7 +71,16 @@ const FileSchema = new Schema<ArchiveFile>(
     name: { type: String, required: true },
     originalName: { type: String, required: true },
     size: { type: Number, required: true },
-    downloadCount: { type: Number, default: 0 }
+    downloadCount: { type: Number, default: 0 },
+    thumbnail: {
+      contentType: { type: String, default: "" },
+      size: { type: Number, default: 0 },
+      localPath: { type: String, default: "" },
+      url: { type: String, default: "" },
+      messageId: { type: String, default: "" },
+      webhookId: { type: String, default: "" },
+      updatedAt: { type: Date, default: null }
+    }
   },
   { _id: false }
 );

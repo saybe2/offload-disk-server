@@ -12,6 +12,7 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 - Chunked upload to Discord webhooks (default chunk limit ~9.8 MiB).
 - MongoDB metadata storage (Discord stores file parts only).
 - Folders, nested folders, trash (30 days), share links, priorities.
+- Small-file preview (image/text/pdf) and image/video thumbnails.
 - Background workers for upload/delete jobs.
 - Optional SMB 2/3 access via FUSE view.
 
@@ -101,6 +102,9 @@ Cache/disk:
 - `STREAM_USE_DISK`
 - `DISK_SOFT_LIMIT_GB`
 - `DISK_HARD_LIMIT_GB`
+- `PREVIEW_MAX_MIB`
+- `THUMBNAIL_SIZE_PX`
+- `THUMBNAIL_QUALITY`
 
 Worker:
 - `WORKER_CONCURRENCY`

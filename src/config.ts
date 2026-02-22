@@ -38,6 +38,8 @@ export const config = {
   streamUseDisk: (process.env.STREAM_USE_DISK || "false") === "true",
   deleteStagingAfterEncrypt: (process.env.DELETE_STAGING_AFTER_ENCRYPT || "true") === "true",
   previewMaxMiB: toNumber(process.env.PREVIEW_MAX_MIB, 5),
+  thumbnailSizePx: toNumber(process.env.THUMBNAIL_SIZE_PX, 320),
+  thumbnailQuality: toNumber(process.env.THUMBNAIL_QUALITY, 76),
   streamUploadsEnabled: (process.env.STREAM_UPLOADS_ENABLED || "false") === "true",
   streamSingleMinMiB: toNumber(process.env.STREAM_SINGLE_MIN_MIB, 8),
   uiRefreshMs: toNumber(process.env.UI_REFRESH_MS, 5000),
