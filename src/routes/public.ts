@@ -46,6 +46,16 @@ function isFileDeleted(file: any) {
   return !!file?.deletedAt;
 }
 
+function isPreviewSupportedForFile(archive: any, file: any) {
+  if (!file || isFileDeleted(file)) return false;
+  const fileSize = Number(file.size || 0);
+  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
+  if (fileSize > previewMaxBytes) return false;
+  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
+  const contentType = (mime.lookup(fileName) as string) || "";
+  return isPreviewAllowedForFile(fileName, contentType);
+}
+
 function activeBundleFileIndices(archive: any) {
   const indices: number[] = [];
   const files = Array.isArray(archive?.files) ? archive.files : [];
@@ -109,7 +119,11 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
         createdAt: archive.createdAt,
         isBundle: archive.isBundle,
         files: (archive.files || [])
-          .map((f: any, idx: number) => ({ ...f, fileIndex: idx }))
+          .map((f: any, idx: number) => ({
+            ...f,
+            fileIndex: idx,
+            previewSupported: isPreviewSupportedForFile(archive, f)
+          }))
           .filter((f: any) => !isFileDeleted(f))
       }
     });
@@ -138,7 +152,11 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
         createdAt: a.createdAt,
         isBundle: a.isBundle,
         files: (a.files || [])
-          .map((f: any, idx: number) => ({ ...f, fileIndex: idx }))
+          .map((f: any, idx: number) => ({
+            ...f,
+            fileIndex: idx,
+            previewSupported: isPreviewSupportedForFile(a, f)
+          }))
           .filter((f: any) => !isFileDeleted(f))
       }))
     });

@@ -48,6 +48,7 @@ app.get("/api/ui-config", (_req, res) => {
   res.json({
     streamUploadsEnabled: config.streamUploadsEnabled,
     streamSingleMinMiB: config.streamSingleMinMiB,
+    previewMaxMiB: config.previewMaxMiB,
     refreshMs: config.uiRefreshMs,
     etaWindowMs: config.uiEtaWindowMs,
     etaMaxSamples: config.uiEtaMaxSamples

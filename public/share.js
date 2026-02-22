@@ -323,11 +323,12 @@ function addRow(item) {
     actionTd.textContent = item.status;
   }
 
-  const previewBtn = document.createElement('button');
-  previewBtn.textContent = 'Preview';
-  previewBtn.disabled = !item.previewUrl;
-  previewBtn.addEventListener('click', async () => openPreviewModal(item));
-  actionTd.appendChild(previewBtn);
+  if (item.previewUrl) {
+    const previewBtn = document.createElement('button');
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', async () => openPreviewModal(item));
+    actionTd.appendChild(previewBtn);
+  }
 
   tr.appendChild(nameTd);
   tr.appendChild(sizeTd);
@@ -363,6 +364,7 @@ async function loadShare() {
       archive.files.forEach((file, index) => {
         const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
         const isReady = archive.status === 'ready';
+        const canPreview = !!file.previewSupported;
         addRow({
           archiveId: String(archive.id),
           fileIndex,
@@ -373,12 +375,13 @@ async function loadShare() {
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
-          previewUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
+          previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
         });
       });
     } else if (archive) {
       const isReady = archive.status === 'ready';
       const file = archive.files?.[0] || {};
+      const canPreview = !!file.previewSupported;
       addRow({
         archiveId: String(archive.id),
         fileIndex: 0,
@@ -389,7 +392,7 @@ async function loadShare() {
         status: archive.status,
         downloadUrl: isReady ? downloadUrl : null,
         thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
-        previewUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
+        previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
         fileName: file.originalName || file.name
       });
     }
@@ -403,6 +406,7 @@ async function loadShare() {
         archive.files.forEach((file, index) => {
           const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
           const isReady = archive.status === 'ready';
+          const canPreview = !!file.previewSupported;
           addRow({
             archiveId: String(archive.id),
             fileIndex,
@@ -417,13 +421,15 @@ async function loadShare() {
             thumbUrl: isReady
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
               : null,
-            previewUrl: isReady
+            previewUrl: (isReady && canPreview)
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
               : null
           });
         });
       } else {
         const isReady = archive.status === 'ready';
+        const file = archive.files?.[0] || {};
+        const canPreview = !!file.previewSupported;
         addRow({
           archiveId: String(archive.id),
           fileIndex: 0,
@@ -434,7 +440,7 @@ async function loadShare() {
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
-          previewUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
+          previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
         });
       }
     }
