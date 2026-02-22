@@ -238,6 +238,26 @@ function splitUploads<T extends { size: number }>(files: T[]) {
   return groups;
 }
 
+function isFileDeleted(file: any) {
+  return !!file?.deletedAt;
+}
+
+function activeBundleFileIndices(archive: any) {
+  const indices: number[] = [];
+  const files = Array.isArray(archive?.files) ? archive.files : [];
+  for (let i = 0; i < files.length; i += 1) {
+    if (!isFileDeleted(files[i])) {
+      indices.push(i);
+    }
+  }
+  return indices;
+}
+
+function hasActiveFiles(archive: any) {
+  if (!Array.isArray(archive?.files) || archive.files.length === 0) return false;
+  return archive.files.some((file: any) => !isFileDeleted(file));
+}
+
 apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
   let aborted = false;
   let stagingDir: string | null = null;
@@ -929,20 +949,79 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
     const canUseRange = !!rangeHeader && !archive.isBundle && (archive.encryptionVersion || 1) >= 2;
     log("download", canUseRange ? `start ${archive.id} range=${rangeHeader}` : `start ${archive.id}`);
+    if (archive.isBundle) {
+      const activeIndices = activeBundleFileIndices(archive);
+      if (activeIndices.length === 0) {
+        return res.status(404).json({ error: "no_active_files" });
+      }
+
+      const hasDeleted = activeIndices.length !== (archive.files?.length || 0);
+      if (!hasDeleted) {
+        await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+        const countTargets = activeIndices.map((fileIndex) => ({ archiveId: archive.id, fileIndex }));
+        await bumpDownloadCounts(countTargets);
+        return;
+      }
+
+      const downloadId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const tempDir = path.join(config.cacheDir, "selection", `bundle_${downloadId}`);
+      await fs.promises.mkdir(tempDir, { recursive: true });
+      res.setHeader("Content-Type", "application/zip");
+      const bundleName = archive.displayName || archive.downloadName || archive.name || "bundle";
+      const zipName = bundleName.toLowerCase().endsWith(".zip") ? bundleName : `${bundleName}.zip`;
+      const safeZipName = sanitizeName(zipName);
+      res.setHeader("Content-Disposition", `attachment; filename="${safeZipName}"`);
+
+      const zip = archiver("zip", { zlib: { level: 0 } });
+      zip.on("error", () => {
+        if (!res.headersSent) {
+          res.status(500).end();
+        } else {
+          res.destroy();
+        }
+      });
+      zip.pipe(res);
+      res.on("close", async () => {
+        await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      });
+
+      const nameCounts = new Map<string, number>();
+      const countTargets: { archiveId: string; fileIndex: number }[] = [];
+      let writeIndex = 0;
+      for (const fileIndex of activeIndices) {
+        const file = archive.files?.[fileIndex];
+        if (!file) continue;
+        const original = (file.originalName || file.name || `file_${fileIndex}`).replace(/[\\/]/g, "_");
+        const n = (nameCounts.get(original) || 0) + 1;
+        nameCounts.set(original, n);
+        let finalName = original;
+        if (n > 1) {
+          const extIndex = original.lastIndexOf(".");
+          finalName = extIndex > 0
+            ? `${original.slice(0, extIndex)} (${n})${original.slice(extIndex)}`
+            : `${original} (${n})`;
+        }
+        const outPath = path.join(tempDir, `${writeIndex}_${sanitizeName(finalName)}`);
+        writeIndex += 1;
+        await restoreArchiveFileToFile(archive, fileIndex, outPath, config.cacheDir, config.masterKey);
+        zip.file(outPath, { name: finalName });
+        countTargets.push({ archiveId: archive.id, fileIndex });
+      }
+      await zip.finalize();
+      await bumpDownloadCounts(countTargets);
+      return;
+    }
+
+    if (archive.files?.[0] && isFileDeleted(archive.files[0])) {
+      return res.status(404).json({ error: "file_deleted" });
+    }
+
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
       return;
     }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
-    const countTargets = [] as { archiveId: string; fileIndex: number }[];
-    if (archive.isBundle && archive.files && archive.files.length > 1) {
-      for (let i = 0; i < archive.files.length; i += 1) {
-        countTargets.push({ archiveId: archive.id, fileIndex: i });
-      }
-    } else {
-      countTargets.push({ archiveId: archive.id, fileIndex: 0 });
-    }
-    await bumpDownloadCounts(countTargets);
+    await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
   } catch (err) {
     log("download", `error ${archive.id} ${(err as Error).message}`);
     if (res.headersSent) {
@@ -1003,10 +1082,15 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
       const archive = archiveMap.get(item.archiveId);
       if (!archive) continue;
       const fileIndex = Number.isInteger(item.fileIndex) ? (item.fileIndex as number) : 0;
+      const targetIndex = archive.isBundle ? fileIndex : 0;
+      const targetFile = archive.files?.[targetIndex];
+      if (!targetFile || isFileDeleted(targetFile)) {
+        continue;
+      }
 
       let outputName = archive.downloadName || archive.name;
       if (archive.isBundle && archive.files?.[fileIndex]) {
-        outputName = archive.files[fileIndex].originalName || archive.files[fileIndex].name;
+        outputName = targetFile.originalName || targetFile.name;
       }
 
       const baseName = outputName;
@@ -1059,6 +1143,11 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
   if (!Number.isInteger(index) || index < 0) {
     return res.status(400).json({ error: "bad_index" });
   }
+  const targetIndex = archive.isBundle ? index : 0;
+  const targetFile = archive.files?.[targetIndex];
+  if (targetFile && isFileDeleted(targetFile)) {
+    return res.status(404).json({ error: "file_deleted" });
+  }
 
   try {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
@@ -1106,6 +1195,9 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
   const file = archive.files?.[index];
   if (!file) {
     return res.status(404).json({ error: "file_not_found" });
+  }
+  if (isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_deleted" });
   }
   const fileName = file.originalName || file.name || archive.displayName || archive.name;
   if (!supportsThumbnail(fileName, file.detectedKind)) {
@@ -1159,6 +1251,9 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   const file = archive.files?.[fileIndex];
   if (!file) {
     return res.status(404).json({ error: "file_not_found" });
+  }
+  if (isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_deleted" });
   }
 
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
@@ -1339,6 +1434,38 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
       res.status(500).json({ error: "relay_error" });
     }
   }
+});
+
+apiRouter.post("/archives/:id/files/:index/trash", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) return res.status(404).json({ error: "not_found" });
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+  if (!archive.isBundle || !Array.isArray(archive.files) || archive.files.length < 2) {
+    return res.status(400).json({ error: "not_bundle" });
+  }
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0 || index >= archive.files.length) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  if (isFileDeleted(archive.files[index])) {
+    return res.status(409).json({ error: "already_deleted" });
+  }
+
+  archive.files[index].deletedAt = new Date();
+  const remaining = activeBundleFileIndices(archive).length;
+  if (remaining <= 0) {
+    archive.trashedAt = new Date();
+    archive.deleteTotalParts = uniqueParts(archive.parts || []).length;
+    archive.deletedParts = 0;
+  }
+  await archive.save();
+  log("api", `bundle file trash ${archive.id} file=${index} remaining=${remaining}`);
+  return res.json({ ok: true, remaining, archiveTrashed: remaining <= 0 });
 });
 
 apiRouter.post("/archives/:id/trash", requireAuth, async (req, res) => {
@@ -1534,7 +1661,7 @@ apiRouter.get("/folders/:id/info", requireAuth, async (req, res) => {
   }).lean();
   const totalSize = archives.reduce((sum, a) => sum + (a.originalSize || 0), 0);
   const totalArchives = archives.length;
-  const totalFiles = archives.reduce((sum, a) => sum + (a.files?.length || 0), 0);
+  const totalFiles = archives.reduce((sum, a) => sum + activeBundleFileIndices(a).length, 0);
   const totalParts = archives.reduce((sum, a) => {
     if ((a.totalParts || 0) > 0) {
       return sum + (a.totalParts || 0);
@@ -1597,7 +1724,8 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
     for (const archive of archives) {
       const relPath = archive.folderId ? buildRelativePath(archive.folderId.toString()) : "";
       if (archive.isBundle && archive.files?.length > 1) {
-        for (let i = 0; i < archive.files.length; i += 1) {
+        const activeIndices = activeBundleFileIndices(archive);
+        for (const i of activeIndices) {
           const file = archive.files[i];
           const outputName = file.originalName || file.name;
           const safeName = sanitizeName(outputName);
@@ -1609,7 +1737,10 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
           downloadTargets.push({ archiveId: archive._id.toString(), fileIndex: i });
         }
       } else {
-        const file = archive.files?.[0];
+        const file = archive.files?.find((f: any) => !isFileDeleted(f));
+        if (!file) {
+          continue;
+        }
         const outputName = file?.originalName || file?.name || archive.downloadName || archive.name;
         const safeName = sanitizeName(outputName);
         const outputPath = path.join(tempDir, `${index}_${safeName}`);
@@ -1692,7 +1823,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
   const archiveIds = shares.filter((s) => s.archiveId).map((s) => s.archiveId);
   const folderIds = shares.filter((s) => s.folderId).map((s) => s.folderId);
   const archives = await Archive.find({ _id: { $in: archiveIds } })
-    .select("displayName name status isBundle files.originalName files.name files.detectedKind")
+    .select("displayName name status isBundle files.originalName files.name files.detectedKind files.deletedAt")
     .lean();
   const folders = await Folder.find({ _id: { $in: folderIds } })
     .select("name")
@@ -1715,7 +1846,9 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       name = a?.displayName || a?.name || name;
       archiveStatus = a?.status || null;
       archiveIsBundle = !!a?.isBundle;
-      const firstFile = a?.files?.[0];
+      const firstFile = Array.isArray(a?.files)
+        ? a.files.find((f: any) => !isFileDeleted(f))
+        : null;
       archiveFirstFileName = firstFile?.originalName || firstFile?.name || "";
       archiveFirstFileKind = firstFile?.detectedKind || "";
       const previewName = archiveFirstFileName || a?.displayName || a?.name || "";
@@ -1787,6 +1920,9 @@ apiRouter.patch("/archives/:id/rename", requireAuth, async (req, res) => {
   if (typeof fileIndex === "number") {
     if (!Number.isInteger(fileIndex) || fileIndex < 0 || !archive.files?.[fileIndex]) {
       return res.status(400).json({ error: "bad_index" });
+    }
+    if (isFileDeleted(archive.files[fileIndex])) {
+      return res.status(404).json({ error: "file_deleted" });
     }
     archive.files[fileIndex].originalName = safeName;
     if (!archive.isBundle && fileIndex === 0) {

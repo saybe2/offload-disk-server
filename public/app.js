@@ -906,13 +906,15 @@ async function loadFolders() {
 function buildFileItems(archives) {
   const items = [];
   for (const archive of archives) {
-    const files = archive.files || [];
+    const files = (archive.files || []).map((file, index) => ({ file, index })).filter((entry) => !entry.file?.deletedAt);
     if (archive.isBundle && files.length > 1) {
-      files.forEach((file, index) => {
-        items.push({ archive, file, fileIndex: index, isBundle: true });
+      files.forEach((entry) => {
+        items.push({ archive, file: entry.file, fileIndex: entry.index, isBundle: true });
       });
     } else {
-      items.push({ archive, file: files[0], fileIndex: 0, isBundle: false });
+      const first = files[0];
+      if (!first) continue;
+      items.push({ archive, file: first.file, fileIndex: first.index, isBundle: !!archive.isBundle });
     }
   }
   return items;
@@ -1201,7 +1203,10 @@ function renderArchives() {
     }
     nameTd.appendChild(nameWrap);
     if (a.files && a.files.length > 0) {
-      nameTd.title = a.files.map((f) => f.originalName || f.name).join(', ');
+      nameTd.title = a.files
+        .filter((f) => !f.deletedAt)
+        .map((f) => f.originalName || f.name)
+        .join(', ');
     }
 
     const statusTd = document.createElement('td');
@@ -1302,11 +1307,19 @@ function renderArchives() {
         actionTd.appendChild(link);
       }
       const delBtn = document.createElement('button');
-      delBtn.textContent = item.isBundle ? 'Delete Bundle' : 'Delete';
+      delBtn.textContent = item.isBundle ? 'Remove' : 'Delete';
       delBtn.addEventListener('click', async () => {
         const ok = await confirmDelete();
         if (!ok) return;
-        await fetch(`/api/archives/${a._id}/trash`, { method: 'POST' });
+        if (item.isBundle) {
+          const res = await fetch(`/api/archives/${a._id}/files/${item.fileIndex}/trash`, { method: 'POST' });
+          if (!res.ok) {
+            alert('Failed to remove file from bundle');
+            return;
+          }
+        } else {
+          await fetch(`/api/archives/${a._id}/trash`, { method: 'POST' });
+        }
         loadArchives();
       });
       actionTd.appendChild(delBtn);
@@ -1577,8 +1590,7 @@ async function openFileContextMenu(item, x, y) {
     items.push({ label: `Delete selected (${selectedItems.size})`, onClick: async () => {
       const ok = await confirmDelete();
       if (!ok) return;
-      const archiveIds = new Set(Array.from(selectedItems.values()).map((it) => it.archiveId));
-      await Promise.all(Array.from(archiveIds).map((id) => fetch(`/api/archives/${id}/trash`, { method: 'POST' })));
+      await deleteSelectedItems(Array.from(selectedItems.values()));
       selectedItems.clear();
       await loadArchives();
     } });
@@ -1653,6 +1665,18 @@ async function openFileContextMenu(item, x, y) {
       loadArchives();
     } });
   } else {
+    if (item.isBundle) {
+      items.push({ label: 'Remove from bundle', onClick: async () => {
+        const ok = await confirmDelete();
+        if (!ok) return;
+        const res = await fetch(`/api/archives/${a._id}/files/${item.fileIndex}/trash`, { method: 'POST' });
+        if (!res.ok) {
+          alert('Failed to remove file from bundle');
+          return;
+        }
+        loadArchives();
+      } });
+    }
     items.push({ label: item.isBundle ? 'Delete bundle' : 'Delete', onClick: async () => {
       const ok = await confirmDelete();
       if (!ok) return;
@@ -1891,6 +1915,29 @@ function submitDownloadSelected() {
   form.remove();
 }
 
+async function deleteSelectedItems(items) {
+  const byArchive = new Map();
+  for (const item of items) {
+    const key = `${item.archiveId}:${item.fileIndex}`;
+    const rendered = lastRenderedItems.find((it) => `${it.archive._id}:${it.fileIndex}` === key);
+    if (!rendered) continue;
+    const list = byArchive.get(item.archiveId) || [];
+    list.push({ fileIndex: item.fileIndex, isBundle: !!rendered.isBundle });
+    byArchive.set(item.archiveId, list);
+  }
+
+  for (const [archiveId, fileItems] of byArchive.entries()) {
+    const bundleFileDeletes = fileItems.filter((entry) => entry.isBundle);
+    if (bundleFileDeletes.length > 0) {
+      for (const entry of bundleFileDeletes) {
+        await fetch(`/api/archives/${archiveId}/files/${entry.fileIndex}/trash`, { method: 'POST' });
+      }
+      continue;
+    }
+    await fetch(`/api/archives/${archiveId}/trash`, { method: 'POST' });
+  }
+}
+
 navFiles.addEventListener('click', () => {
   currentView = 'files';
   currentFolderId = null;
@@ -1997,8 +2044,7 @@ deleteSelectedBtn.addEventListener('click', async () => {
   if (selectedItems.size === 0) return;
   const ok = await confirmDelete();
   if (!ok) return;
-  const archiveIds = new Set(Array.from(selectedItems.values()).map((item) => item.archiveId));
-  await Promise.all(Array.from(archiveIds).map((id) => fetch(`/api/archives/${id}/trash`, { method: 'POST' })));
+  await deleteSelectedItems(Array.from(selectedItems.values()));
   selectedItems.clear();
   await loadArchives();
 });

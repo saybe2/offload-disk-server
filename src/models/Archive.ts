@@ -11,6 +11,7 @@ export interface ArchiveFile {
   previewCount?: number;
   detectedKind?: string;
   detectedTypeLabel?: string;
+  deletedAt?: Date | null;
   thumbnail?: {
     contentType: string;
     size: number;
@@ -78,6 +79,7 @@ const FileSchema = new Schema<ArchiveFile>(
     previewCount: { type: Number, default: 0 },
     detectedKind: { type: String, default: "" },
     detectedTypeLabel: { type: String, default: "" },
+    deletedAt: { type: Date, default: null },
     thumbnail: {
       contentType: { type: String, default: "" },
       size: { type: Number, default: 0 },
