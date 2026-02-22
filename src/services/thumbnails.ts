@@ -102,17 +102,25 @@ async function tryRestoreThumbFromDiscord(
   }
 }
 
-function spawnFfmpegFrame(inputPath: string) {
+function spawnFfmpegFrameOnce(inputPath: string, seekSeconds: number) {
   if (!ffmpegPath) {
     throw new Error("ffmpeg_missing");
   }
   return new Promise<Buffer>((resolve, reject) => {
     const vf = `scale=${Math.max(64, config.thumbnailSizePx)}:-2:force_original_aspect_ratio=decrease`;
     const args = [
-      "-ss",
-      "00:00:01",
+      "-hide_banner",
+      "-loglevel",
+      "error",
       "-i",
       inputPath,
+      "-map",
+      "0:v:0",
+      "-an",
+      "-sn",
+      "-dn",
+      "-ss",
+      `${seekSeconds}`,
       "-frames:v",
       "1",
       "-vf",
@@ -141,6 +149,21 @@ function spawnFfmpegFrame(inputPath: string) {
       reject(new Error(`ffmpeg_failed:${code}:${stderr.slice(-400)}`));
     });
   });
+}
+
+async function spawnFfmpegFrame(inputPath: string) {
+  let lastError: Error | null = null;
+  for (const seek of [1, 0, 2, 3]) {
+    try {
+      const frame = await spawnFfmpegFrameOnce(inputPath, seek);
+      if (frame.length > 0) {
+        return frame;
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  throw lastError || new Error("ffmpeg_failed:no_frame");
 }
 
 async function generateThumbFromFile(sourcePath: string, fileName: string, outPath: string, detectedKind?: string) {
