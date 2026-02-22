@@ -496,7 +496,8 @@ function renderTextPreview(text, fileName) {
   previewCode.className = lang ? `language-${lang}` : '';
   if (window.hljs && typeof window.hljs.highlightElement === 'function') {
     try {
-      if (lang) {
+      const hasLang = lang && typeof window.hljs.getLanguage === 'function' && window.hljs.getLanguage(lang);
+      if (hasLang) {
         window.hljs.highlightElement(previewCode);
       } else {
         const out = window.hljs.highlightAuto(text);
