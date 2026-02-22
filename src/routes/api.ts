@@ -34,6 +34,7 @@ import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
+import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
 import {
   isPreviewAllowedForFile,
   isPreviewContentTypeAllowed,
@@ -786,6 +787,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
+        queueArchiveThumbnails(archive.id);
         if (config.cacheDeleteAfterUpload) {
           await fs.promises.rm(stagingDir, { recursive: true, force: true });
           if (useDisk) {

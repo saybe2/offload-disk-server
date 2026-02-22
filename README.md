@@ -13,6 +13,7 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 - MongoDB metadata storage (Discord stores file parts only).
 - Folders, nested folders, trash (30 days), share links, priorities.
 - Small-file preview (image/video/audio/text/code/pdf) with syntax highlighting for code, and image/video thumbnails.
+- Automatic thumbnail generation for new uploads + background backfill for existing files.
 - Background workers for upload/delete jobs.
 - Optional SMB 2/3 access via FUSE view.
 
@@ -105,6 +106,11 @@ Cache/disk:
 - `PREVIEW_MAX_MIB`
 - `THUMBNAIL_SIZE_PX`
 - `THUMBNAIL_QUALITY`
+- `THUMB_WORKER_ENABLED`
+- `THUMB_WORKER_CONCURRENCY`
+- `THUMB_WORKER_POLL_MS`
+- `THUMB_BACKFILL_SCAN_LIMIT`
+- `THUMB_RETRY_MS`
 
 Worker:
 - `WORKER_CONCURRENCY`

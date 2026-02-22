@@ -20,6 +20,7 @@ import { Folder } from "./models/Folder.js";
 import { uniqueParts } from "./services/parts.js";
 import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
+import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 
 const app = express();
 
@@ -200,6 +201,7 @@ async function ensureCacheDirs() {
     path.join(config.cacheDir, "selection"),
     path.join(config.cacheDir, "thumbs"),
     path.join(config.cacheDir, "thumb_work"),
+    path.join(config.cacheDir, "preview_public"),
     path.join(config.cacheDir, "smb_read"),
     path.join(config.cacheDir, "smb_write")
   ];
@@ -219,6 +221,7 @@ async function main() {
   await migrateFolders();
 
   startWorker();
+  startThumbnailWorker();
   startFuse();
   startCacheCleanup();
 
