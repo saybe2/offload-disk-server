@@ -45,34 +45,31 @@ function isTransientError(err: unknown) {
 }
 
 async function uploadWithRetry(partPath: string, webhookUrl: string, content: string) {
-  let attempt = 0;
-  while (true) {
-    try {
-      return await uploadToWebhook(partPath, webhookUrl, content);
-    } catch (err) {
-      attempt += 1;
-      if (!isTransientError(err) || attempt > config.uploadRetryMax) {
-        throw err;
-      }
-      const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
-      log(`retry upload attempt=${attempt} delay=${delay}ms`);
-      await sleep(delay);
-    }
-  }
+  return withRetry(
+    () => uploadToWebhook(partPath, webhookUrl, content),
+    "upload"
+  );
 }
 
 async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
+  return withRetry(
+    () => uploadBufferToWebhook(buffer, filename, webhookUrl, content),
+    "upload"
+  );
+}
+
+async function withRetry<T>(operation: () => Promise<T>, label: string) {
   let attempt = 0;
   while (true) {
     try {
-      return await uploadBufferToWebhook(buffer, filename, webhookUrl, content);
+      return await operation();
     } catch (err) {
       attempt += 1;
       if (!isTransientError(err) || attempt > config.uploadRetryMax) {
         throw err;
       }
       const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
-      log(`retry upload attempt=${attempt} delay=${delay}ms`);
+      log(`retry ${label} attempt=${attempt} delay=${delay}ms`);
       await sleep(delay);
     }
   }

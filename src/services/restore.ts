@@ -44,16 +44,6 @@ async function pipeFileToStream(filePath: string, target: PassThrough) {
   });
 }
 
-async function pipeFileToWritable(filePath: string, target: fs.WriteStream) {
-  await new Promise<void>((resolve, reject) => {
-    const rs = fs.createReadStream(filePath);
-    rs.on("error", reject);
-    target.on("error", reject);
-    target.on("finish", () => resolve());
-    rs.pipe(target);
-  });
-}
-
 async function waitDrainOrError(target: Writable) {
   await new Promise<void>((resolve, reject) => {
     const onDrain = () => {
@@ -502,7 +492,6 @@ export async function restoreArchiveFileToFile(
 
   const output = fs.createWriteStream(outputPath);
 
-  let entryDone = false;
   let entryFound = false;
   let entryDoneResolve: (() => void) | null = null;
   let entryDoneReject: ((err: Error) => void) | null = null;
@@ -521,7 +510,6 @@ export async function restoreArchiveFileToFile(
       entryFound = true;
       entry.on("error", (err: Error) => entryDoneReject?.(err));
       entry.on("end", () => {
-        entryDone = true;
         entryDoneResolve?.();
       });
       entry.pipe(output);
