@@ -679,8 +679,11 @@ async function openPreviewModal(item) {
     if (item.file) {
       item.file.previewCount = (Number(item.file.previewCount || 0) + 1);
     }
+    const detectedKind = String(item.file?.detectedKind || '').toLowerCase();
+    const ext = fileExtension(fileName);
+    const forceText = detectedKind === 'code' || (!detectedKind && ext === '.ts');
 
-    if (isTextLikeContentType(contentType)) {
+    if (forceText || isTextLikeContentType(contentType)) {
       const text = await blob.text();
       const baseType = contentType.split(';')[0].trim();
       const markdownLike = isMarkdownFileName(fileName) || baseType === 'text/markdown';
@@ -1843,7 +1846,8 @@ async function loadShared() {
         },
         file: {
           originalName: share.archiveFirstFileName || share.name || 'Shared',
-          name: share.archiveFirstFileName || share.name || 'Shared'
+          name: share.archiveFirstFileName || share.name || 'Shared',
+          detectedKind: share.archiveFirstFileKind || ''
         },
         fileIndex: 0,
         isBundle: !!share.archiveIsBundle

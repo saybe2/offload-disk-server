@@ -1167,7 +1167,12 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   }
 
   const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
-  const detectedType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  const ext = path.extname(fileName).toLowerCase();
+  const detectedKind = String(file.detectedKind || "").toLowerCase();
+  let detectedType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  if (detectedKind === "code" || (!detectedKind && ext === ".ts")) {
+    detectedType = ext === ".md" || ext === ".markdown" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8";
+  }
   if (!isPreviewAllowedForFile(fileName, detectedType)) {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
