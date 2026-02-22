@@ -67,6 +67,20 @@
             <label for="searchInput">Search</label>
             <input id="searchInput" type="search" placeholder="Search files..." />
           </div>
+          <div class="toolbar-item">
+            <label for="sortFieldSelect">By</label>
+            <select id="sortFieldSelect">
+              <option value="name">Name</option>
+              <option value="size">Size</option>
+              <option value="type">Type</option>
+              <option value="date">Date modified</option>
+            </select>
+            <label for="sortDirSelect">Order</label>
+            <select id="sortDirSelect">
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </div>
         </div>
         <table>
           <thead id="listHead"></thead>
