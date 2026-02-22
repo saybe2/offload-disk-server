@@ -1365,7 +1365,48 @@ async function loadShared() {
   for (const share of shares) {
     const tr = document.createElement('tr');
     const nameTd = document.createElement('td');
-    nameTd.textContent = share.name || 'Shared';
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'name-cell';
+    let iconEl = null;
+    if (share.type === 'folder') {
+      const folderIcon = document.createElement('span');
+      folderIcon.className = 'folder-icon';
+      iconEl = folderIcon;
+    } else if (
+      share.archiveId &&
+      share.archiveFirstFileName &&
+      supportsThumb(share.archiveFirstFileName) &&
+      shouldLoadThumb(share.archiveId, 0)
+    ) {
+      const thumb = document.createElement('img');
+      thumb.className = 'thumb-icon';
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.src = `/api/archives/${share.archiveId}/files/0/thumbnail`;
+      thumb.onerror = () => {
+        thumbFailureUntil.set(`${share.archiveId}:0`, Date.now() + THUMB_RETRY_MS);
+        if (thumb.parentElement) {
+          thumb.replaceWith(createFileIconElement());
+        }
+      };
+      thumb.onload = () => {
+        thumbFailureUntil.delete(`${share.archiveId}:0`);
+      };
+      iconEl = thumb;
+    } else {
+      iconEl = createFileIconElement();
+    }
+    const nameText = document.createElement('span');
+    nameText.textContent = share.name || 'Shared';
+    nameWrap.appendChild(iconEl);
+    nameWrap.appendChild(nameText);
+    if (share.archiveIsBundle) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'bundle';
+      nameWrap.appendChild(pill);
+    }
+    nameTd.appendChild(nameWrap);
     const typeTd = document.createElement('td');
     typeTd.textContent = share.type;
     const expTd = document.createElement('td');
@@ -1377,6 +1418,30 @@ async function loadShared() {
     linkEl.textContent = 'Open';
     linkTd.appendChild(linkEl);
     const actionTd = document.createElement('td');
+    const previewBtn = document.createElement('button');
+    previewBtn.textContent = 'Preview';
+    previewBtn.disabled = !(
+      share.type === 'archive' &&
+      share.archiveId &&
+      share.archiveStatus === 'ready' &&
+      share.previewSupported
+    );
+    previewBtn.addEventListener('click', async () => {
+      if (!share.archiveId) return;
+      await openPreviewModal({
+        archive: {
+          _id: share.archiveId,
+          name: share.name || 'Shared',
+          displayName: share.name || 'Shared'
+        },
+        file: {
+          originalName: share.archiveFirstFileName || share.name || 'Shared',
+          name: share.archiveFirstFileName || share.name || 'Shared'
+        },
+        fileIndex: 0,
+        isBundle: !!share.archiveIsBundle
+      });
+    });
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy link';
     copyBtn.addEventListener('click', async () => copyText(link));
@@ -1386,6 +1451,7 @@ async function loadShared() {
       await fetch(`/api/shares/${share.id}`, { method: 'DELETE' });
       loadShared();
     });
+    actionTd.appendChild(previewBtn);
     actionTd.appendChild(copyBtn);
     actionTd.appendChild(revokeBtn);
 
