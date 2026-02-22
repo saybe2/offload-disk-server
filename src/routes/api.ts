@@ -9,6 +9,7 @@ import multer from "multer";
 import busboy from "busboy";
 import crypto from "crypto";
 import { nanoid } from "nanoid";
+import mime from "mime-types";
 import { checkDiskSpace } from "../services/disk.js";
 import { requireAuth } from "../auth.js";
 import { Archive } from "../models/Archive.js";
@@ -43,6 +44,16 @@ export const apiRouter = Router();
 
 function sanitizeName(name: string) {
   return sanitizeFilename(name);
+}
+
+function isPreviewContentTypeAllowed(contentType: string) {
+  if (contentType.startsWith("image/")) return true;
+  if (contentType.startsWith("text/")) return true;
+  if (contentType === "application/pdf") return true;
+  if (contentType === "application/json") return true;
+  if (contentType === "application/xml") return true;
+  if (contentType === "text/xml") return true;
+  return false;
 }
 
 const CP1252_MAP: Record<number, number> = {
@@ -1021,6 +1032,71 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
       return;
     }
     return res.status(500).json({ error: "restore_failed" });
+  }
+});
+
+apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) {
+    return res.status(404).json({ error: "not_found" });
+  }
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  let fileIndex = 0;
+  if (typeof req.query.fileIndex === "string" && req.query.fileIndex.length > 0) {
+    fileIndex = Number(req.query.fileIndex);
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      return res.status(400).json({ error: "bad_index" });
+    }
+  }
+  if (!archive.isBundle) {
+    fileIndex = 0;
+  }
+
+  const file = archive.files?.[fileIndex];
+  if (!file) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+
+  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
+  const fileSize = Number(file.size || 0);
+  if (fileSize > previewMaxBytes) {
+    return res.status(413).json({ error: "preview_too_large", maxBytes: previewMaxBytes });
+  }
+
+  const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
+  const contentType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  if (!isPreviewContentTypeAllowed(contentType)) {
+    return res.status(415).json({ error: "unsupported_preview_type" });
+  }
+
+  const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}`);
+  await fs.promises.mkdir(tempDir, { recursive: true });
+
+  try {
+    if (archive.isBundle) {
+      await restoreArchiveFileToFile(archive, fileIndex, outputPath, config.cacheDir, config.masterKey);
+    } else {
+      await restoreArchiveToFile(archive, outputPath, config.cacheDir, config.masterKey);
+    }
+    const body = await fs.promises.readFile(outputPath);
+    const encodedName = encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, "%2A");
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", body.length);
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodedName}`);
+    res.setHeader("Cache-Control", "private, max-age=60");
+    return res.end(body);
+  } catch (err) {
+    log("preview", `error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
+    return res.status(500).json({ error: "preview_failed" });
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
   }
 });
 

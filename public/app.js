@@ -28,6 +28,13 @@ const infoModal = document.getElementById('infoModal');
 const infoTitle = document.getElementById('infoTitle');
 const infoBody = document.getElementById('infoBody');
 const infoClose = document.getElementById('infoClose');
+const previewModal = document.getElementById('previewModal');
+const previewTitle = document.getElementById('previewTitle');
+const previewState = document.getElementById('previewState');
+const previewText = document.getElementById('previewText');
+const previewImage = document.getElementById('previewImage');
+const previewFrame = document.getElementById('previewFrame');
+const previewClose = document.getElementById('previewClose');
 
 const deleteModal = document.getElementById('deleteModal');
 const deleteCancelBtn = document.getElementById('deleteCancelBtn');
@@ -71,6 +78,7 @@ let priorityTarget = null;
 const ROOT_DROP = '__root__';
 let dropUploadFolderId = null;
 const archiveProgress = new Map();
+let previewObjectUrl = null;
 
 const priorities = [
   { value: 0, label: 'lowest' },
@@ -305,6 +313,84 @@ function showInfoModal(title, rows) {
     infoBody.appendChild(line);
   }
   infoModal.classList.remove('hidden');
+}
+
+function resetPreviewContent(message) {
+  if (previewObjectUrl) {
+    URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = null;
+  }
+  previewState.textContent = message || '';
+  previewState.classList.remove('hidden');
+  previewText.classList.add('hidden');
+  previewImage.classList.add('hidden');
+  previewFrame.classList.add('hidden');
+  previewText.textContent = '';
+  previewImage.removeAttribute('src');
+  previewFrame.removeAttribute('src');
+}
+
+function closePreviewModal() {
+  previewModal.classList.add('hidden');
+  resetPreviewContent('');
+}
+
+async function openPreviewModal(item) {
+  const archive = item.archive;
+  const fileName = item.file?.originalName || item.file?.name || archive.displayName || archive.name;
+  previewTitle.textContent = `Preview: ${fileName}`;
+  resetPreviewContent('Loading preview...');
+  previewModal.classList.remove('hidden');
+
+  let url = `/api/archives/${archive._id}/preview`;
+  if (item.isBundle) {
+    url += `?fileIndex=${item.fileIndex}`;
+  }
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (res.status === 413) {
+        resetPreviewContent('File is too large for preview');
+      } else if (res.status === 415) {
+        resetPreviewContent('Preview is not supported for this file type');
+      } else if (res.status === 409) {
+        resetPreviewContent('File is not ready yet');
+      } else {
+        resetPreviewContent('Failed to load preview');
+      }
+      return;
+    }
+
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    const blob = await res.blob();
+
+    if (contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('xml')) {
+      previewText.textContent = await blob.text();
+      previewState.classList.add('hidden');
+      previewText.classList.remove('hidden');
+      return;
+    }
+
+    previewObjectUrl = URL.createObjectURL(blob);
+    previewState.classList.add('hidden');
+
+    if (contentType.startsWith('image/')) {
+      previewImage.src = previewObjectUrl;
+      previewImage.classList.remove('hidden');
+      return;
+    }
+
+    if (contentType === 'application/pdf') {
+      previewFrame.src = previewObjectUrl;
+      previewFrame.classList.remove('hidden');
+      return;
+    }
+
+    resetPreviewContent('Preview is not supported for this file type');
+  } catch (err) {
+    resetPreviewContent('Failed to load preview');
+  }
 }
 
 async function copyText(text) {
@@ -1047,6 +1133,12 @@ async function openFileContextMenu(item, x, y) {
     items.push({ label: 'Download', disabled: true });
   }
 
+  items.push({
+    label: 'Preview',
+    disabled: a.status !== 'ready',
+    onClick: async () => openPreviewModal(item)
+  });
+
   if (item.isBundle && a.status === 'ready') {
     items.push({ label: 'Download bundle', onClick: async () => { location.href = bundleUrl; } });
   }
@@ -1411,6 +1503,13 @@ infoClose.addEventListener('click', () => {
 infoModal.addEventListener('click', (e) => {
   if (e.target === infoModal) {
     infoModal.classList.add('hidden');
+  }
+});
+
+previewClose.addEventListener('click', () => closePreviewModal());
+previewModal.addEventListener('click', (e) => {
+  if (e.target === previewModal) {
+    closePreviewModal();
   }
 });
 

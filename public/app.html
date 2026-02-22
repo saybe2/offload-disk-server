@@ -153,6 +153,21 @@
     </div>
   </div>
 
+  <div id="previewModal" class="modal hidden">
+    <div class="modal-card preview-card">
+      <div class="modal-header">
+        <h3 id="previewTitle">Preview</h3>
+        <button id="previewClose">Close</button>
+      </div>
+      <div class="modal-body preview-body">
+        <div id="previewState" class="status">Loading preview...</div>
+        <pre id="previewText" class="preview-text hidden"></pre>
+        <img id="previewImage" class="preview-image hidden" alt="Preview" />
+        <iframe id="previewFrame" class="preview-frame hidden" title="Preview"></iframe>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
