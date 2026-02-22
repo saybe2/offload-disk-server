@@ -191,6 +191,10 @@ async function processNextArchive() {
       let totalEncryptedSize = 0;
       let uploadedNow = archive.uploadedParts || 0;
       let uploadedBytesNow = archive.uploadedBytes || 0;
+      const estimatedTotalParts = Math.max(
+        uploadedNow + 1,
+        Math.ceil((archive.originalSize || 0) / computed.chunkSizeBytes)
+      );
 
       for await (const chunk of rs) {
         const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -228,9 +232,9 @@ async function processNextArchive() {
         uploadedNow += 1;
         uploadedBytesNow += encrypted.length;
         if (uploadedNow % 10 === 0) {
-          const totalHint = archive.originalSize || totalEncryptedSize || 0;
-          const pct = totalHint > 0 ? Math.min(99, Math.floor((uploadedBytesNow / totalHint) * 100)) : 0;
-          log(`progress ${archive.id} uploadedParts=${uploadedNow} uploadedBytes=${uploadedBytesNow} pct~=${pct}%`);
+          const totalHint = archive.totalParts && archive.totalParts > 0 ? archive.totalParts : estimatedTotalParts;
+          const pct = totalHint > 0 ? Math.min(99, Math.floor((uploadedNow / totalHint) * 100)) : 0;
+          log(`progress ${archive.id} ${uploadedNow}/${totalHint} (${pct}%)`);
         }
         partIndex += 1;
       }
@@ -328,7 +332,8 @@ async function processNextArchive() {
         );
         completed += 1;
         if (completed % 10 === 0 || completed === totalParts) {
-          log(`progress ${archive.id} ${completed}/${totalParts}`);
+          const pct = totalParts > 0 ? Math.floor((completed / totalParts) * 100) : 0;
+          log(`progress ${archive.id} ${completed}/${totalParts} (${pct}%)`);
         }
       }
     })());
