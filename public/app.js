@@ -15,6 +15,8 @@ const folderPriorityWrap = document.getElementById('folderPriorityWrap');
 const folderPrioritySelect = document.getElementById('folderPrioritySelect');
 const folderPrioritySave = document.getElementById('folderPrioritySave');
 const searchInput = document.getElementById('searchInput');
+const sortFieldSelect = document.getElementById('sortFieldSelect');
+const sortDirSelect = document.getElementById('sortDirSelect');
 const newFolderBtn = document.getElementById('newFolderBtn');
 const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
 const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
@@ -72,6 +74,8 @@ let foldersById = {};
 let foldersCache = [];
 let archivesCache = [];
 let searchTerm = '';
+let sortField = 'name';
+let sortDir = 'asc';
 let selectedItems = new Map();
 let lastSelectedIndex = null;
 let lastRenderedItems = [];
@@ -105,6 +109,12 @@ function updateUrl() {
   }
   if (searchTerm) {
     params.set('search', searchTerm);
+  }
+  if (sortField !== 'name') {
+    params.set('sort', sortField);
+  }
+  if (sortDir !== 'asc') {
+    params.set('dir', sortDir);
   }
   const qs = params.toString();
   const url = qs ? `${location.pathname}?${qs}` : location.pathname;
@@ -273,6 +283,30 @@ function createFileIconElement() {
   const fileIcon = document.createElement('span');
   fileIcon.className = 'file-icon';
   return fileIcon;
+}
+
+function createCounterCell(kind, value) {
+  const wrap = document.createElement('div');
+  wrap.className = 'counter-cell';
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 16 16');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.classList.add('counter-icon');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute(
+    'd',
+    kind === 'views'
+      ? 'M8 2a9 9 0 0 1 8 4.873v2.254A9 9 0 0 1 8 14l-.325-.006A9 9 0 0 1 0 9.127V6.873A9 9 0 0 1 8 2m3.698 2.477a4 4 0 1 1-7.397 0A7.5 7.5 0 0 0 2 6.5l-.03.04a8 8 0 0 0-.469.715H1.5L1.094 8l.406.742q.106.183.222.36l.023.037q.103.153.212.3L2 9.5v-.003A7.49 7.49 0 0 0 8 12.5a7.49 7.49 0 0 0 6-3.002V9.5l.024-.036q.259-.345.476-.72L14.906 8l-.406-.743a8 8 0 0 0-.23-.372l-.016-.024a7.54 7.54 0 0 0-2.556-2.384M8 3.5A2.5 2.5 0 0 0 5.501 6l.013.255a2.5 2.5 0 0 0 2.231 2.231l.256.013a2.5 2.5 0 0 0 2.486-2.244L10.5 6a2.5 2.5 0 0 0-2.244-2.487z'
+      : 'M2.5 8v1.9c0 1.011.002 1.664.049 2.158.045.471.12.64.172.726a1.5 1.5 0 0 0 .495.495c.085.053.255.127.726.172.494.047 1.147.049 2.158.049h3.8c1.011 0 1.664-.002 2.158-.049.471-.045.64-.12.726-.172a1.5 1.5 0 0 0 .495-.495c.053-.085.127-.255.172-.726.047-.494.049-1.147.049-2.158V8H15v1.9c0 1.964 0 2.946-.442 3.667a3 3 0 0 1-.99.99C12.845 15 11.863 15 9.9 15H6.1c-1.964 0-2.946 0-3.667-.442a3 3 0 0 1-.99-.99C1 12.845 1 11.863 1 9.9V8zm6.25.19 2.22-2.22 1.06 1.06L8 11.06 3.97 7.03l1.06-1.06 2.22 2.22V1h1.5z'
+  );
+  path.setAttribute('fill', 'currentColor');
+  icon.appendChild(path);
+  const text = document.createElement('span');
+  text.className = 'counter-text';
+  text.textContent = String(value || 0);
+  wrap.appendChild(icon);
+  wrap.appendChild(text);
+  return wrap;
 }
 
 function shouldLoadThumb(archiveId, fileIndex) {
@@ -507,6 +541,9 @@ async function openPreviewModal(item) {
 
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const blob = await res.blob();
+    if (item.file) {
+      item.file.previewCount = (Number(item.file.previewCount || 0) + 1);
+    }
 
     if (isTextLikeContentType(contentType)) {
       renderTextPreview(await blob.text(), fileName);
@@ -569,7 +606,89 @@ function getChildFolders(parentId) {
   return foldersCache.filter((f) => {
     const pid = f.parentId ? f.parentId.toString() : null;
     return pid === parentId;
-  }).sort((a, b) => a.name.localeCompare(b.name));
+  });
+}
+
+function getSortFactor() {
+  return sortDir === 'desc' ? -1 : 1;
+}
+
+function fileTypeByName(name) {
+  const ext = fileExtension(name);
+  return ext ? ext.slice(1) : 'file';
+}
+
+function compareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base', numeric: true });
+}
+
+function compareNumber(a, b) {
+  return Number(a || 0) - Number(b || 0);
+}
+
+function compareDate(a, b) {
+  return new Date(a || 0).getTime() - new Date(b || 0).getTime();
+}
+
+function sortFolders(folders) {
+  const list = folders.slice();
+  const factor = getSortFactor();
+  list.sort((a, b) => {
+    if (sortField === 'date') {
+      const byDate = compareDate(a.updatedAt || a.createdAt, b.updatedAt || b.createdAt);
+      if (byDate !== 0) return byDate * factor;
+    }
+    return compareText(a.name, b.name) * factor;
+  });
+  return list;
+}
+
+function sortFileItems(items) {
+  const list = items.slice();
+  const factor = getSortFactor();
+  list.sort((left, right) => {
+    const leftName = left.file?.originalName || left.file?.name || left.archive.displayName || left.archive.name;
+    const rightName = right.file?.originalName || right.file?.name || right.archive.displayName || right.archive.name;
+
+    let result = 0;
+    if (sortField === 'size') {
+      result = compareNumber(left.file?.size ?? left.archive.originalSize, right.file?.size ?? right.archive.originalSize);
+    } else if (sortField === 'type') {
+      result = compareText(fileTypeByName(leftName), fileTypeByName(rightName));
+    } else if (sortField === 'date') {
+      result = compareDate(left.archive.updatedAt || left.archive.createdAt, right.archive.updatedAt || right.archive.createdAt);
+    } else {
+      result = compareText(leftName, rightName);
+    }
+
+    if (result === 0) {
+      result = compareText(leftName, rightName);
+    }
+    return result * factor;
+  });
+  return list;
+}
+
+function sortShares(shares) {
+  const list = shares.slice();
+  const factor = getSortFactor();
+  list.sort((a, b) => {
+    let result = 0;
+    if (sortField === 'size') {
+      result = 0;
+    } else if (sortField === 'type') {
+      result = compareText(a.type, b.type);
+    } else if (sortField === 'date') {
+      result = compareDate(a.createdAt, b.createdAt);
+    } else {
+      result = compareText(a.name, b.name);
+    }
+    if (result === 0) {
+      result = compareText(a.name, b.name);
+    }
+    return result * factor;
+  });
+  return list;
 }
 
 function renderHead() {
@@ -591,9 +710,10 @@ function renderHead() {
       <th>Name</th>
       <th>Status</th>
       <th>Processed</th>
+      <th>Views</th>
       <th>Downloads</th>
       <th>Priority</th>
-      <th>Date</th>
+      <th>Date modified</th>
       <th>Size</th>
       <th>Actions</th>
     </tr>
@@ -707,7 +827,7 @@ function renderArchives() {
       wrap.appendChild(icon);
       wrap.appendChild(text);
       nameTd.appendChild(wrap);
-      nameTd.colSpan = 8;
+      nameTd.colSpan = 9;
       trUp.appendChild(nameTd);
       trUp.addEventListener('click', () => {
         currentFolderId = parentId;
@@ -771,7 +891,7 @@ function renderArchives() {
       archiveList.appendChild(trUp);
     }
 
-    const folders = renderFoldersInList();
+    const folders = sortFolders(renderFoldersInList());
     for (const folder of folders) {
       const tr = document.createElement('tr');
       tr.className = 'folder-row-item';
@@ -857,13 +977,13 @@ function renderArchives() {
       wrap.appendChild(icon);
       wrap.appendChild(text);
       nameTd.appendChild(wrap);
-      nameTd.colSpan = 8;
+      nameTd.colSpan = 9;
       tr.appendChild(nameTd);
       archiveList.appendChild(tr);
     }
   }
 
-  const items = filterItems(buildFileItems(archivesCache));
+  const items = sortFileItems(filterItems(buildFileItems(archivesCache)));
   lastRenderedItems = items;
   for (const [index, item] of items.entries()) {
     const a = item.archive;
@@ -961,10 +1081,15 @@ function renderArchives() {
     discordTd.appendChild(progressWrap);
 
     const downloadsTd = document.createElement('td');
+    const previewCount = (item.file && typeof item.file.previewCount === 'number')
+      ? item.file.previewCount
+      : 0;
     const downloadCount = (item.file && typeof item.file.downloadCount === 'number')
       ? item.file.downloadCount
       : 0;
-    downloadsTd.textContent = String(downloadCount);
+    downloadsTd.appendChild(createCounterCell('downloads', downloadCount));
+    const viewsTd = document.createElement('td');
+    viewsTd.appendChild(createCounterCell('views', previewCount));
 
     const priorityTd = document.createElement('td');
     const prioritySelect = document.createElement('select');
@@ -988,7 +1113,7 @@ function renderArchives() {
     priorityTd.appendChild(prioritySelect);
 
     const dateTd = document.createElement('td');
-    dateTd.textContent = formatDate(a.createdAt);
+    dateTd.textContent = formatDate(a.updatedAt || a.createdAt);
 
     const sizeTd = document.createElement('td');
     const sizeValue = item.file?.size ?? a.originalSize;
@@ -1031,6 +1156,7 @@ function renderArchives() {
     tr.appendChild(nameTd);
     tr.appendChild(statusTd);
     tr.appendChild(discordTd);
+    tr.appendChild(viewsTd);
     tr.appendChild(downloadsTd);
     tr.appendChild(priorityTd);
     tr.appendChild(dateTd);
@@ -1345,6 +1471,7 @@ async function openFileContextMenu(item, x, y) {
     showInfoModal(`File: ${fileName}`, [
       { label: 'Status', value: a.status },
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
+      { label: 'Views', value: String((item.file && typeof item.file.previewCount === 'number') ? item.file.previewCount : 0) },
       { label: 'Downloads', value: String((item.file && typeof item.file.downloadCount === 'number') ? item.file.downloadCount : 0) },
       { label: 'Parts', value: String(partsCount) },
       { label: 'Size', value: formatSize(item.file?.size ?? a.originalSize) },
@@ -1484,7 +1611,7 @@ async function loadShared() {
   archiveList.innerHTML = '';
   renderHead();
   updateSelectionUI();
-  const shares = data.shares || [];
+  const shares = sortShares(data.shares || []);
   for (const share of shares) {
     const tr = document.createElement('tr');
     const nameTd = document.createElement('td');
@@ -1735,6 +1862,26 @@ searchInput.addEventListener('input', () => {
   renderArchives();
 });
 
+sortFieldSelect?.addEventListener('change', () => {
+  sortField = sortFieldSelect.value || 'name';
+  updateUrl();
+  if (currentView === 'shared') {
+    loadShared();
+    return;
+  }
+  renderArchives();
+});
+
+sortDirSelect?.addEventListener('change', () => {
+  sortDir = sortDirSelect.value === 'desc' ? 'desc' : 'asc';
+  updateUrl();
+  if (currentView === 'shared') {
+    loadShared();
+    return;
+  }
+  renderArchives();
+});
+
 infoClose.addEventListener('click', () => {
   infoModal.classList.add('hidden');
 });
@@ -1825,6 +1972,8 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   const view = params.get('view');
   const folder = params.get('folder');
   const search = params.get('search');
+  const sort = params.get('sort');
+  const dir = params.get('dir');
   if (view === 'trash' || view === 'shared' || view === 'files') {
     currentView = view;
   }
@@ -1834,6 +1983,18 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   if (search) {
     searchTerm = search;
     searchInput.value = search;
+  }
+  if (sort === 'name' || sort === 'size' || sort === 'type' || sort === 'date') {
+    sortField = sort;
+  }
+  if (dir === 'asc' || dir === 'desc') {
+    sortDir = dir;
+  }
+  if (sortFieldSelect) {
+    sortFieldSelect.value = sortField;
+  }
+  if (sortDirSelect) {
+    sortDirSelect.value = sortDir;
   }
   setActiveNav();
   updateTitle();

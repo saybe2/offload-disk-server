@@ -33,6 +33,7 @@ import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../
 import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
+import { bumpPreviewCount } from "../services/previewCounts.js";
 import { ensureArchiveThumbnail, ensureArchiveThumbnailFromSource, supportsThumbnail } from "../services/thumbnails.js";
 import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
 import {
@@ -1056,9 +1057,6 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
-  if (archive.status !== "ready") {
-    return res.status(409).json({ error: "not_ready" });
-  }
   let index = Number(req.params.index);
   if (!Number.isInteger(index) || index < 0) {
     return res.status(400).json({ error: "bad_index" });
@@ -1076,7 +1074,9 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
   }
 
   try {
-    const thumb = await ensureArchiveThumbnail(archive, index);
+    const thumb = archive.status === "ready"
+      ? await ensureArchiveThumbnail(archive, index)
+      : await ensureArchiveThumbnailFromSource(archive, index);
     res.setHeader("Content-Type", thumb.contentType);
     res.setHeader("Content-Length", thumb.size);
     res.setHeader("Cache-Control", "private, max-age=3600");
@@ -1086,6 +1086,9 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
     log("thumb", `error ${archive.id} file=${index} ${message}`);
     if (message === "file_not_found") {
       return res.status(404).json({ error: "file_not_found" });
+    }
+    if (message === "source_missing") {
+      return res.status(404).json({ error: "thumbnail_source_missing" });
     }
     return res.status(500).json({ error: "thumbnail_failed" });
   }
@@ -1148,6 +1151,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     res.setHeader("Content-Length", body.length);
     res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodedName}`);
     res.setHeader("Cache-Control", "private, max-age=60");
+    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
     return res.end(body);
   } catch (err) {
     log("preview", `error ${archive.id} file=${fileIndex} ${(err as Error).message}`);

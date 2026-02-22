@@ -14,6 +14,7 @@ import {
   streamArchiveToResponse
 } from "../services/restore.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
+import { bumpPreviewCount } from "../services/previewCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
@@ -286,6 +287,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     res.setHeader("Content-Length", body.length);
     res.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     res.setHeader("Cache-Control", "private, max-age=60");
+    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
     return res.end(body);
   } catch (err) {
     log("preview", `public error ${archive.id} file=${fileIndex} ${(err as Error).message}`);

@@ -8,6 +8,7 @@ export interface ArchiveFile {
   originalName: string;
   size: number;
   downloadCount?: number;
+  previewCount?: number;
   thumbnail?: {
     contentType: string;
     size: number;
@@ -72,6 +73,7 @@ const FileSchema = new Schema<ArchiveFile>(
     originalName: { type: String, required: true },
     size: { type: Number, required: true },
     downloadCount: { type: Number, default: 0 },
+    previewCount: { type: Number, default: 0 },
     thumbnail: {
       contentType: { type: String, default: "" },
       size: { type: Number, default: 0 },

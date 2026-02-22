@@ -41,6 +41,7 @@ tr.row-selected:hover { background: #22314a; }
 .drop-hint { margin-top: 8px; font-size: 12px; color: #9aa4b2; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .toolbar-item { display: flex; align-items: center; gap: 8px; }
+.toolbar-item select { min-width: 130px; }
 .name-cell { display: flex; align-items: center; gap: 8px; }
 .pill { background: #2b3240; color: #cbd5e1; padding: 2px 6px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 .folder-row { display: flex; align-items: center; gap: 10px; }
@@ -53,6 +54,9 @@ tr.row-selected:hover { background: #22314a; }
 .mini-bar { width: 140px; height: 8px; background: #0f1115; border: 1px solid #2b3240; border-radius: 999px; overflow: hidden; }
 .mini-bar-fill { height: 100%; background: #2d6cdf; width: 0%; }
 .mini-meta { font-size: 11px; color: #9aa4b2; }
+.counter-cell { display: inline-flex; align-items: center; gap: 6px; color: #9aa4b2; }
+.counter-icon { width: 16px; height: 16px; display: inline-block; }
+.counter-text { color: #e6e6e6; font-variant-numeric: tabular-nums; }
 
 .context-menu { position: fixed; background: #171a21; border: 1px solid #2b3240; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); padding: 6px; display: flex; flex-direction: column; min-width: 180px; z-index: 9999; }
 .context-menu.hidden { display: none; }
