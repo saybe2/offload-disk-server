@@ -17,6 +17,7 @@ function log(message: string) {
 }
 
 function fileNeedsThumbnail(file: any) {
+  if (file?.deletedAt) return false;
   const fileName = file?.originalName || file?.name || "";
   if (!supportsThumbnail(fileName, file?.detectedKind)) return false;
   return !file?.thumbnail?.updatedAt;

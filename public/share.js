@@ -361,18 +361,19 @@ async function loadShare() {
     const archive = data.archive;
     if (archive?.isBundle && archive.files?.length) {
       archive.files.forEach((file, index) => {
+        const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
         const isReady = archive.status === 'ready';
         addRow({
           archiveId: String(archive.id),
-          fileIndex: index,
+          fileIndex,
           isBundle: true,
           name: file.originalName || file.name,
           size: file.size,
           date: archive.createdAt,
           status: archive.status,
-          downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${index}` : null,
-          thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${index}/thumbnail` : null,
-          previewUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${index}` : null
+          downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}` : null,
+          thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
+          previewUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
         });
       });
     } else if (archive) {
@@ -400,23 +401,24 @@ async function loadShare() {
     for (const archive of archives) {
       if (archive.isBundle && archive.files?.length) {
         archive.files.forEach((file, index) => {
+          const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
           const isReady = archive.status === 'ready';
           addRow({
             archiveId: String(archive.id),
-            fileIndex: index,
+            fileIndex,
             isBundle: true,
             name: file.originalName || file.name,
             size: file.size,
             date: archive.createdAt,
             status: archive.status,
             downloadUrl: isReady
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${index}`
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`
               : null,
             thumbUrl: isReady
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${index}/thumbnail`
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
               : null,
             previewUrl: isReady
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${index}`
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
               : null
           });
         });

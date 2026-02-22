@@ -42,6 +42,21 @@ function parsePreviewIndex(rawValue: unknown) {
   return Number.isInteger(value) && value >= 0 ? value : -1;
 }
 
+function isFileDeleted(file: any) {
+  return !!file?.deletedAt;
+}
+
+function activeBundleFileIndices(archive: any) {
+  const indices: number[] = [];
+  const files = Array.isArray(archive?.files) ? archive.files : [];
+  for (let i = 0; i < files.length; i += 1) {
+    if (!isFileDeleted(files[i])) {
+      indices.push(i);
+    }
+  }
+  return indices;
+}
+
 async function resolveArchiveByShare(token: string, archiveId?: string): Promise<ResolveArchiveResult> {
   const share = await Share.findOne({ token }).lean();
   if (!share) return { status: 404, error: "not_found" as const };
@@ -93,7 +108,9 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
         originalSize: archive.originalSize,
         createdAt: archive.createdAt,
         isBundle: archive.isBundle,
-        files: archive.files || []
+        files: (archive.files || [])
+          .map((f: any, idx: number) => ({ ...f, fileIndex: idx }))
+          .filter((f: any) => !isFileDeleted(f))
       }
     });
   }
@@ -120,7 +137,9 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
         originalSize: a.originalSize,
         createdAt: a.createdAt,
         isBundle: a.isBundle,
-        files: a.files || []
+        files: (a.files || [])
+          .map((f: any, idx: number) => ({ ...f, fileIndex: idx }))
+          .filter((f: any) => !isFileDeleted(f))
       }))
     });
   }
@@ -140,14 +159,21 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
   try {
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
+      const file = archive.files?.[fileIndex as number];
+      if (!file || isFileDeleted(file)) {
+        return res.status(404).json({ error: "file_not_found" });
+      }
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
       return;
     }
+    if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
+      return res.status(404).json({ error: "file_not_found" });
+    }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
     const targets: { archiveId: string; fileIndex: number }[] = [];
     if (archive.isBundle && archive.files && archive.files.length > 1) {
-      for (let i = 0; i < archive.files.length; i += 1) {
+      for (const i of activeBundleFileIndices(archive)) {
         targets.push({ archiveId: archive.id, fileIndex: i });
       }
     } else {
@@ -171,14 +197,21 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
   try {
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
+      const file = archive.files?.[fileIndex as number];
+      if (!file || isFileDeleted(file)) {
+        return res.status(404).json({ error: "file_not_found" });
+      }
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
       return;
     }
+    if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
+      return res.status(404).json({ error: "file_not_found" });
+    }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
     const targets: { archiveId: string; fileIndex: number }[] = [];
     if (archive.isBundle && archive.files && archive.files.length > 1) {
-      for (let i = 0; i < archive.files.length; i += 1) {
+      for (const i of activeBundleFileIndices(archive)) {
         targets.push({ archiveId: archive.id, fileIndex: i });
       }
     } else {
@@ -208,6 +241,9 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/thum
   }
   const file = archive.files?.[fileIndex];
   if (!file) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  if (isFileDeleted(file)) {
     return res.status(404).json({ error: "file_not_found" });
   }
 
@@ -253,6 +289,9 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
 
   const file = archive.files?.[fileIndex];
   if (!file) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  if (isFileDeleted(file)) {
     return res.status(404).json({ error: "file_not_found" });
   }
 

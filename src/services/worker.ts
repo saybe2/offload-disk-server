@@ -134,6 +134,7 @@ async function generateLocalThumbnails(archive: any) {
   let generated = 0;
   for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
     const file = archive.files[fileIndex];
+    if (file?.deletedAt) continue;
     const fileName = file?.originalName || file?.name || "";
     if (!supportsThumbnail(fileName, file?.detectedKind)) continue;
     try {
