@@ -16,7 +16,7 @@ import {
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
 import { sanitizeFilename } from "../utils/names.js";
-import { isPreviewContentTypeAllowed } from "../services/preview.js";
+import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { log } from "../logger.js";
 
 export const publicRouter = Router();
@@ -261,10 +261,11 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
   }
 
   const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
-  const contentType = (mime.lookup(fileName) as string) || "application/octet-stream";
-  if (!isPreviewContentTypeAllowed(contentType)) {
+  const detectedType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  if (!isPreviewAllowedForFile(fileName, detectedType)) {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
+  const contentType = resolvePreviewContentType(fileName, detectedType);
 
   const tempDir = path.join(
     config.cacheDir,

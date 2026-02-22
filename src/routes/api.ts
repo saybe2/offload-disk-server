@@ -34,7 +34,11 @@ import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
-import { isPreviewContentTypeAllowed } from "../services/preview.js";
+import {
+  isPreviewAllowedForFile,
+  isPreviewContentTypeAllowed,
+  resolvePreviewContentType
+} from "../services/preview.js";
 import { fetch } from "undici";
 
 const upload = multer({
@@ -1105,10 +1109,11 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   }
 
   const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
-  const contentType = (mime.lookup(fileName) as string) || "application/octet-stream";
-  if (!isPreviewContentTypeAllowed(contentType)) {
+  const detectedType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  if (!isPreviewAllowedForFile(fileName, detectedType)) {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
+  const contentType = resolvePreviewContentType(fileName, detectedType);
 
   const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}`);
@@ -1639,7 +1644,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       archiveFirstFileName = firstFile?.originalName || firstFile?.name || "";
       const previewName = archiveFirstFileName || a?.displayName || a?.name || "";
       const contentType = (mime.lookup(previewName) as string) || "";
-      previewSupported = isPreviewContentTypeAllowed(contentType);
+      previewSupported = isPreviewAllowedForFile(previewName, contentType);
     } else if (s.folderId) {
       const f = folderMap.get(s.folderId.toString());
       name = f?.name || name;

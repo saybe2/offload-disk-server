@@ -76,7 +76,18 @@ function isTextLikeContentType(contentType) {
     'application/xml',
     'text/xml',
     'application/javascript',
+    'application/typescript',
     'application/x-javascript',
+    'text/x-python',
+    'application/x-python-code',
+    'text/x-php',
+    'application/x-httpd-php',
+    'text/x-c',
+    'text/x-c++src',
+    'text/x-java-source',
+    'text/x-go',
+    'text/x-rustsrc',
+    'application/sql',
     'application/yaml',
     'text/yaml',
     'text/x-yaml',
@@ -361,4 +372,3 @@ sharePreviewModal.addEventListener('click', (e) => {
 });
 
 loadShare();
-
