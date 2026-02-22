@@ -13,6 +13,7 @@ import { uniqueParts } from "./parts.js";
 
 let running = 0;
 let deleting = false;
+let startupRecoveryPromise: Promise<void> | null = null;
 
 function log(message: string) {
   console.log(`[worker] ${new Date().toISOString()} ${message}`);
@@ -87,6 +88,32 @@ async function resetStaleProcessing() {
     await Archive.updateOne({ _id: item._id }, { $set: reset });
     log(`reset stale ${item._id}`);
   }
+}
+
+async function recoverProcessingAfterRestart() {
+  const stuck = await Archive.find({ status: "processing", deletedAt: null }).lean();
+  if (stuck.length === 0) {
+    return;
+  }
+  for (const item of stuck) {
+    const reset: Record<string, unknown> = { status: "queued" };
+    if (!item.parts || item.parts.length === 0) {
+      reset.uploadedBytes = 0;
+      reset.uploadedParts = 0;
+    }
+    await Archive.updateOne({ _id: item._id }, { $set: reset });
+    log(`recovered after restart ${item._id}`);
+  }
+}
+
+async function ensureStartupRecovery() {
+  if (!startupRecoveryPromise) {
+    startupRecoveryPromise = recoverProcessingAfterRestart().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`startup recovery error ${message}`);
+    });
+  }
+  await startupRecoveryPromise;
 }
 
 async function hasDiskSpace() {
@@ -398,6 +425,7 @@ export function startWorker() {
       running += 1;
       (async () => {
         try {
+          await ensureStartupRecovery();
           await resetStaleProcessing();
           const before = await Archive.countDocuments({ status: "queued", deletedAt: null, trashedAt: null });
           if (before > 0) {
