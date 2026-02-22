@@ -63,6 +63,58 @@ async function waitDrainOrError(target: Writable) {
   });
 }
 
+async function extractZipEntryToFile(
+  zipInput: PassThrough,
+  entryName: string,
+  outputPath: string
+) {
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  const output = fs.createWriteStream(outputPath);
+  const parser = unzipper.Parse();
+  let entryFound = false;
+
+  const done = new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (err) {
+        output.destroy();
+        parser.destroy();
+        reject(err);
+        return;
+      }
+      resolve();
+    };
+
+    parser.on("entry", (entry: any) => {
+      if (entryFound) {
+        entry.autodrain();
+        return;
+      }
+      if (entry.path === entryName) {
+        entryFound = true;
+        entry.on("error", (err: Error) => finish(err));
+        entry.pipe(output);
+        return;
+      }
+      entry.autodrain();
+    });
+
+    parser.on("error", (err: Error) => finish(err));
+    parser.on("close", () => {
+      if (!entryFound) {
+        finish(new Error("file_not_found"));
+      }
+    });
+    output.on("error", (err: Error) => finish(err));
+    output.on("finish", () => finish());
+  });
+
+  zipInput.pipe(parser);
+  await done;
+}
+
 async function downloadPartWithRepair(
   archiveId: string,
   part: { index: number; url: string; messageId: string; webhookId: string },
@@ -420,33 +472,7 @@ export async function restoreArchiveFileToFile(
     await fs.promises.mkdir(workDirV2, { recursive: true });
     const key = deriveKey(masterKey);
     const zipStream = new PassThrough();
-
-    const output = fs.createWriteStream(outputPath);
-    let entryFound = false;
-    let entryDoneResolve: (() => void) | null = null;
-    let entryDoneReject: ((err: Error) => void) | null = null;
-    const entryDonePromise = new Promise<void>((resolve, reject) => {
-      entryDoneResolve = resolve;
-      entryDoneReject = reject;
-    });
-
-    const parser = unzipper.Parse();
-    parser.on("entry", (entry: any) => {
-      if (entryFound) {
-        entry.autodrain();
-        return;
-      }
-      if (entry.path === zipEntryName(file)) {
-        entryFound = true;
-        entry.on("error", (err: Error) => entryDoneReject?.(err));
-        entry.on("end", () => entryDoneResolve?.());
-        entry.pipe(output);
-        return;
-      }
-      entry.autodrain();
-    });
-    parser.on("error", (err: Error) => entryDoneReject?.(err));
-    zipStream.pipe(parser);
+    const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), outputPath);
 
     try {
       const webhookCache = new Map<string, string>();
@@ -466,9 +492,6 @@ export async function restoreArchiveFileToFile(
       }
 
       zipStream.end();
-      if (!entryFound) {
-        throw new Error("file_not_found");
-      }
       await entryDonePromise;
     } catch (err) {
       log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
@@ -490,36 +513,9 @@ export async function restoreArchiveFileToFile(
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(authTag);
 
-  const output = fs.createWriteStream(outputPath);
-
-  let entryFound = false;
-  let entryDoneResolve: (() => void) | null = null;
-  let entryDoneReject: ((err: Error) => void) | null = null;
-  const entryDonePromise = new Promise<void>((resolve, reject) => {
-    entryDoneResolve = resolve;
-    entryDoneReject = reject;
-  });
-
-  const parser = unzipper.Parse();
-  parser.on("entry", (entry: any) => {
-    if (entryFound) {
-      entry.autodrain();
-      return;
-    }
-    if (entry.path === zipEntryName(file)) {
-      entryFound = true;
-      entry.on("error", (err: Error) => entryDoneReject?.(err));
-      entry.on("end", () => {
-        entryDoneResolve?.();
-      });
-      entry.pipe(output);
-      return;
-    }
-    entry.autodrain();
-  });
-  parser.on("error", (err: Error) => entryDoneReject?.(err));
-
-  encryptedStream.pipe(decipher).pipe(parser);
+  const zipStream = new PassThrough();
+  encryptedStream.pipe(decipher).pipe(zipStream);
+  const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), outputPath);
 
   try {
     const webhookCache = new Map<string, string>();
@@ -536,13 +532,8 @@ export async function restoreArchiveFileToFile(
       await pipeFileToStream(partPath, encryptedStream);
       await fs.promises.unlink(partPath);
     }
-
-    if (!entryFound) {
-      throw new Error("file_not_found");
-    }
-
-    await entryDonePromise;
     encryptedStream.end();
+    await entryDonePromise;
   } catch (err) {
     log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
     throw err;
