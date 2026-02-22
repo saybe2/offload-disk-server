@@ -242,6 +242,26 @@ function isFileDeleted(file: any) {
   return !!file?.deletedAt;
 }
 
+function isPreviewSupportedForFile(archive: any, file: any) {
+  if (!file || isFileDeleted(file)) return false;
+  const fileSize = Number(file.size || 0);
+  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
+  if (fileSize > previewMaxBytes) return false;
+  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
+  const contentType = (mime.lookup(fileName) as string) || "";
+  return isPreviewAllowedForFile(fileName, contentType);
+}
+
+function withPreviewSupport(archive: any) {
+  const files = Array.isArray(archive?.files)
+    ? archive.files.map((file: any) => ({
+        ...file,
+        previewSupported: isPreviewSupportedForFile(archive, file)
+      }))
+    : [];
+  return { ...archive, files };
+}
+
 function activeBundleFileIndices(archive: any) {
   const indices: number[] = [];
   const files = Array.isArray(archive?.files) ? archive.files : [];
@@ -930,7 +950,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
     filter.folderId = null;
   }
   const archives = await Archive.find(filter).sort({ createdAt: -1 }).lean();
-  return res.json({ archives });
+  return res.json({ archives: archives.map((archive) => withPreviewSupport(archive)) });
 });
 
 apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
@@ -1823,7 +1843,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
   const archiveIds = shares.filter((s) => s.archiveId).map((s) => s.archiveId);
   const folderIds = shares.filter((s) => s.folderId).map((s) => s.folderId);
   const archives = await Archive.find({ _id: { $in: archiveIds } })
-    .select("displayName name status isBundle files.originalName files.name files.detectedKind files.deletedAt")
+    .select("displayName name status isBundle files.originalName files.name files.size files.detectedKind files.deletedAt")
     .lean();
   const folders = await Folder.find({ _id: { $in: folderIds } })
     .select("name")
@@ -1851,9 +1871,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
         : null;
       archiveFirstFileName = firstFile?.originalName || firstFile?.name || "";
       archiveFirstFileKind = firstFile?.detectedKind || "";
-      const previewName = archiveFirstFileName || a?.displayName || a?.name || "";
-      const contentType = (mime.lookup(previewName) as string) || "";
-      previewSupported = isPreviewAllowedForFile(previewName, contentType);
+      previewSupported = !!(a && firstFile && isPreviewSupportedForFile(a, firstFile));
     } else if (s.folderId) {
       const f = folderMap.get(s.folderId.toString());
       name = f?.name || name;

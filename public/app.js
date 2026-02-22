@@ -66,6 +66,7 @@ let currentFolderId = null;
 let currentView = 'files'; // files | trash | shared
 let STREAM_UPLOADS_ENABLED = false;
 let STREAM_SINGLE_MIN_MIB = 8;
+let PREVIEW_MAX_MIB = 5;
 let UI_REFRESH_MS = 5000;
 let UI_ETA_WINDOW_MS = 120000;
 let UI_ETA_MAX_SAMPLES = 30;
@@ -616,6 +617,29 @@ function codeLanguageFromFileName(fileName) {
     '.log': 'plaintext'
   };
   return map[ext] || '';
+}
+
+function canPreviewItem(item) {
+  const archive = item?.archive;
+  if (!archive || archive.status !== 'ready') return false;
+  const file = item?.file || null;
+  if (file && typeof file.previewSupported === 'boolean') {
+    return file.previewSupported;
+  }
+  const fileName = file?.originalName || file?.name || archive.displayName || archive.name || '';
+  if (!fileName) return false;
+  const size = Number(file?.size ?? archive.originalSize ?? 0);
+  const maxBytes = Math.max(1, Math.floor(PREVIEW_MAX_MIB * 1024 * 1024));
+  if (size > maxBytes) return false;
+  const ext = fileExtension(fileName);
+  const detectedKind = String(file?.detectedKind || '').toLowerCase();
+  if (detectedKind === 'image' || detectedKind === 'video' || detectedKind === 'audio' || detectedKind === 'code') {
+    return true;
+  }
+  if (ext === '.pdf' || ext === '.md' || ext === '.markdown') {
+    return true;
+  }
+  return !!codeLanguageFromFileName(fileName);
 }
 
 function renderTextPreview(text, fileName) {
@@ -1603,11 +1627,12 @@ async function openFileContextMenu(item, x, y) {
     items.push({ label: 'Download', disabled: true });
   }
 
-  items.push({
-    label: 'Preview',
-    disabled: a.status !== 'ready',
-    onClick: async () => openPreviewModal(item)
-  });
+  if (canPreviewItem(item)) {
+    items.push({
+      label: 'Preview',
+      onClick: async () => openPreviewModal(item)
+    });
+  }
 
   if (item.isBundle && a.status === 'ready') {
     items.push({ label: 'Download bundle', onClick: async () => { location.href = bundleUrl; } });
@@ -1852,31 +1877,34 @@ async function loadShared() {
     linkEl.textContent = 'Open';
     linkTd.appendChild(linkEl);
     const actionTd = document.createElement('td');
-    const previewBtn = document.createElement('button');
-    previewBtn.textContent = 'Preview';
-    previewBtn.disabled = !(
+    const canPreviewShare = (
       share.type === 'archive' &&
       share.archiveId &&
       share.archiveStatus === 'ready' &&
       share.previewSupported
     );
-    previewBtn.addEventListener('click', async () => {
-      if (!share.archiveId) return;
-      await openPreviewModal({
-        archive: {
-          _id: share.archiveId,
-          name: share.name || 'Shared',
-          displayName: share.name || 'Shared'
-        },
-        file: {
-          originalName: share.archiveFirstFileName || share.name || 'Shared',
-          name: share.archiveFirstFileName || share.name || 'Shared',
-          detectedKind: share.archiveFirstFileKind || ''
-        },
-        fileIndex: 0,
-        isBundle: !!share.archiveIsBundle
+    if (canPreviewShare) {
+      const previewBtn = document.createElement('button');
+      previewBtn.textContent = 'Preview';
+      previewBtn.addEventListener('click', async () => {
+        if (!share.archiveId) return;
+        await openPreviewModal({
+          archive: {
+            _id: share.archiveId,
+            name: share.name || 'Shared',
+            displayName: share.name || 'Shared'
+          },
+          file: {
+            originalName: share.archiveFirstFileName || share.name || 'Shared',
+            name: share.archiveFirstFileName || share.name || 'Shared',
+            detectedKind: share.archiveFirstFileKind || ''
+          },
+          fileIndex: 0,
+          isBundle: !!share.archiveIsBundle
+        });
       });
-    });
+      actionTd.appendChild(previewBtn);
+    }
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy link';
     copyBtn.addEventListener('click', async () => copyText(link));
@@ -1886,7 +1914,6 @@ async function loadShared() {
       await fetch(`/api/shares/${share.id}`, { method: 'DELETE' });
       loadShared();
     });
-    actionTd.appendChild(previewBtn);
     actionTd.appendChild(copyBtn);
     actionTd.appendChild(revokeBtn);
 
@@ -2163,6 +2190,9 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
       }
       if (typeof cfg.streamSingleMinMiB === 'number') {
         STREAM_SINGLE_MIN_MIB = cfg.streamSingleMinMiB;
+      }
+      if (typeof cfg.previewMaxMiB === 'number') {
+        PREVIEW_MAX_MIB = cfg.previewMaxMiB;
       }
       if (typeof cfg.refreshMs === 'number') {
         UI_REFRESH_MS = cfg.refreshMs;
