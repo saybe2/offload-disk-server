@@ -10,7 +10,7 @@ import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./di
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
-const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob"]);
+const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob", ".ts"]);
 const inFlight = new Map<string, Promise<ThumbnailResult>>();
 const require = createRequire(import.meta.url);
 const ffmpegPath: string | null = require("ffmpeg-static");
@@ -31,12 +31,19 @@ function isImage(fileName: string) {
   return imageExt.has(extOf(fileName));
 }
 
-function isVideo(fileName: string) {
-  return videoExt.has(extOf(fileName));
+function isVideo(fileName: string, detectedKind?: string) {
+  if (detectedKind === "video") return true;
+  if (detectedKind && detectedKind !== "video") return false;
+  const ext = extOf(fileName);
+  if (ext === ".ts") return false;
+  return videoExt.has(ext);
 }
 
-export function supportsThumbnail(fileName: string) {
-  return isImage(fileName) || isVideo(fileName);
+export function supportsThumbnail(fileName: string, detectedKind?: string) {
+  if (detectedKind === "image") return true;
+  if (detectedKind === "video") return true;
+  if (detectedKind && detectedKind !== "image" && detectedKind !== "video") return false;
+  return isImage(fileName) || isVideo(fileName, detectedKind);
 }
 
 function thumbTargetPath(archiveId: string, fileIndex: number) {
@@ -136,14 +143,14 @@ function spawnFfmpegFrame(inputPath: string) {
   });
 }
 
-async function generateThumbFromFile(sourcePath: string, fileName: string, outPath: string) {
+async function generateThumbFromFile(sourcePath: string, fileName: string, outPath: string, detectedKind?: string) {
   const size = Math.max(64, config.thumbnailSizePx);
   const quality = Math.max(30, Math.min(95, config.thumbnailQuality));
-  if (isImage(fileName)) {
+  if (detectedKind === "image" || isImage(fileName)) {
     await sharp(sourcePath).rotate().resize(size, size, { fit: "inside", withoutEnlargement: true }).webp({ quality }).toFile(outPath);
     return;
   }
-  if (isVideo(fileName)) {
+  if (detectedKind === "video" || isVideo(fileName, detectedKind)) {
     const frame = await spawnFfmpegFrame(sourcePath);
     await sharp(frame).rotate().resize(size, size, { fit: "inside", withoutEnlargement: true }).webp({ quality }).toFile(outPath);
     return;
@@ -188,9 +195,10 @@ async function generateThumbUsingSource(
   fileIndex: number,
   fileName: string,
   sourcePath: string,
-  localPath: string
+  localPath: string,
+  detectedKind?: string
 ) {
-  await generateThumbFromFile(sourcePath, fileName, localPath);
+  await generateThumbFromFile(sourcePath, fileName, localPath, detectedKind);
   return persistThumbMeta(archive.id, fileIndex, localPath);
 }
 
@@ -200,7 +208,7 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
     throw new Error("file_not_found");
   }
   const fileName = (file.originalName || file.name || "").trim();
-  if (!supportsThumbnail(fileName)) {
+  if (!supportsThumbnail(fileName, file.detectedKind)) {
     throw new Error("thumbnail_unsupported");
   }
   if (!file.path) {
@@ -218,7 +226,7 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
     throw new Error("source_missing");
   }
 
-  return generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath);
+  return generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath, file.detectedKind);
 }
 
 async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): Promise<ThumbnailResult> {
@@ -227,7 +235,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
     throw new Error("file_not_found");
   }
   const fileName = (file.originalName || file.name || "").trim();
-  if (!supportsThumbnail(fileName)) {
+  if (!supportsThumbnail(fileName, file.detectedKind)) {
     throw new Error("thumbnail_unsupported");
   }
 
@@ -241,7 +249,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
 
   if (file.path && fs.existsSync(file.path)) {
     try {
-      return await generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath);
+      return await generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath, file.detectedKind);
     } catch {
       // Fallback to Discord restore path if direct source-based generation failed.
     }
@@ -261,7 +269,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
     } else {
       await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
     }
-    return await generateThumbUsingSource(archive, fileIndex, fileName, sourcePath, localPath);
+    return await generateThumbUsingSource(archive, fileIndex, fileName, sourcePath, localPath, file.detectedKind);
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }

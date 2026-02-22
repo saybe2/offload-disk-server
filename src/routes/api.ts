@@ -36,6 +36,7 @@ import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
 import { ensureArchiveThumbnail, ensureArchiveThumbnailFromSource, supportsThumbnail } from "../services/thumbnails.js";
 import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
+import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
   isPreviewAllowedForFile,
   isPreviewContentTypeAllowed,
@@ -409,14 +410,29 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
     );
     await fs.promises.mkdir(stagingDir, { recursive: true });
 
-    const archiveFiles = [] as { path: string; name: string; originalName: string; size: number }[];
+    const archiveFiles = [] as {
+      path: string;
+      name: string;
+      originalName: string;
+      size: number;
+      detectedKind: string;
+      detectedTypeLabel: string;
+    }[];
     for (const [index, item] of ordered.entries()) {
       const file = item.file;
       const safeOriginal = normalizeFilename(item.clientName || file.originalname);
       const safeName = `${index}_${sanitizeName(safeOriginal)}`;
       const dest = path.join(stagingDir, safeName);
       await fs.promises.rename(file.path, dest);
-      archiveFiles.push({ path: dest, name: safeName, originalName: safeOriginal, size: file.size });
+      const detectedType = await detectStoredFileType(dest, safeOriginal);
+      archiveFiles.push({
+        path: dest,
+        name: safeName,
+        originalName: safeOriginal,
+        size: file.size,
+        detectedKind: detectedType.kind,
+        detectedTypeLabel: detectedType.label
+      });
     }
 
     if (aborted || req.aborted) {
@@ -576,6 +592,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       const rawWrite = useDisk ? fs.createWriteStream(rawPath) : null;
       activeRawWrite = rawWrite;
 
+      const initialDetectedType = detectFileTypeFromName(safeName);
       const archive = await Archive.create({
         userId: user.id,
         name: sanitizeName(safeName),
@@ -594,7 +611,14 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         totalParts: 0,
         chunkSizeBytes: computed.chunkSizeBytes,
         stagingDir,
-        files: [{ path: rawPath, name: path.basename(rawPath), originalName: safeName, size: 0 }],
+        files: [{
+          path: rawPath,
+          name: path.basename(rawPath),
+          originalName: safeName,
+          size: 0,
+          detectedKind: initialDetectedType.kind,
+          detectedTypeLabel: initialDetectedType.label
+        }],
         parts: []
       });
 
@@ -610,6 +634,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       let encryptedBytes = 0;
       let partIndex = 0;
       let originalSize = 0;
+      let typeSample = Buffer.alloc(0);
       let failed: Error | null = null;
       let uploadedPartsCount = 0;
 
@@ -734,6 +759,10 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         if (failed) break;
         const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any);
         originalSize += data.length;
+        if (typeSample.length < 188 * 12) {
+          const remaining = 188 * 12 - typeSample.length;
+          typeSample = Buffer.concat([typeSample, data.subarray(0, remaining)]);
+        }
         if (rawWrite) {
           await writeRawChunk(data);
           if (failed) break;
@@ -764,6 +793,13 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         resolveUploadsFinished();
       }
 
+      let detectedType = initialDetectedType;
+      if (useDisk) {
+        detectedType = await detectStoredFileType(rawPath, safeName);
+      } else if (typeSample.length > 0) {
+        detectedType = detectFileTypeFromSample(safeName, typeSample);
+      }
+
       await Archive.updateOne(
         { _id: archive.id },
         {
@@ -774,7 +810,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
             encryptedSize: encryptedBytes,
             totalParts: partIndex,
             originalSize,
-            "files.0.size": originalSize
+            "files.0.size": originalSize,
+            "files.0.detectedKind": detectedType.kind,
+            "files.0.detectedTypeLabel": detectedType.label
           }
         }
       );
@@ -792,7 +830,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
         if (useDisk) {
           const sourceName = archive.files?.[0]?.originalName || archive.files?.[0]?.name || archive.displayName || archive.name;
-          if (supportsThumbnail(sourceName)) {
+          if (supportsThumbnail(sourceName, detectedType.kind)) {
             try {
               await ensureArchiveThumbnailFromSource(archive, 0);
               log("stream", `thumbnail ready archive=${archive.id}`);
@@ -1069,7 +1107,7 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
     return res.status(404).json({ error: "file_not_found" });
   }
   const fileName = file.originalName || file.name || archive.displayName || archive.name;
-  if (!supportsThumbnail(fileName)) {
+  if (!supportsThumbnail(fileName, file.detectedKind)) {
     return res.status(415).json({ error: "unsupported_thumbnail_type" });
   }
 
@@ -1639,7 +1677,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
   const archiveIds = shares.filter((s) => s.archiveId).map((s) => s.archiveId);
   const folderIds = shares.filter((s) => s.folderId).map((s) => s.folderId);
   const archives = await Archive.find({ _id: { $in: archiveIds } })
-    .select("displayName name status isBundle files.originalName files.name")
+    .select("displayName name status isBundle files.originalName files.name files.detectedKind")
     .lean();
   const folders = await Folder.find({ _id: { $in: folderIds } })
     .select("name")
@@ -1654,6 +1692,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
     let archiveStatus: string | null = null;
     let archiveIsBundle = false;
     let archiveFirstFileName = "";
+    let archiveFirstFileKind = "";
     let previewSupported = false;
     if (s.archiveId) {
       archiveId = s.archiveId.toString();
@@ -1663,6 +1702,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       archiveIsBundle = !!a?.isBundle;
       const firstFile = a?.files?.[0];
       archiveFirstFileName = firstFile?.originalName || firstFile?.name || "";
+      archiveFirstFileKind = firstFile?.detectedKind || "";
       const previewName = archiveFirstFileName || a?.displayName || a?.name || "";
       const contentType = (mime.lookup(previewName) as string) || "";
       previewSupported = isPreviewAllowedForFile(previewName, contentType);
@@ -1681,6 +1721,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       archiveStatus,
       archiveIsBundle,
       archiveFirstFileName,
+      archiveFirstFileKind,
       previewSupported
     };
   });

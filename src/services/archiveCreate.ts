@@ -5,6 +5,7 @@ import { User } from "../models/User.js";
 import { Folder } from "../models/Folder.js";
 import { config, computed } from "../config.js";
 import { queueArchiveThumbnails } from "./thumbnailWorker.js";
+import { detectStoredFileType } from "./fileType.js";
 
 function sanitizeName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -32,6 +33,7 @@ export async function createArchiveFromLocalFile(params: {
   const dest = path.join(stagingDir, `0_${sanitizeName(originalName)}`);
   await fs.promises.rename(sourcePath, dest);
   const stat = await fs.promises.stat(dest);
+  const detectedType = await detectStoredFileType(dest, safeName);
 
   let folderRef: any = null;
   let basePriority = 2;
@@ -61,7 +63,14 @@ export async function createArchiveFromLocalFile(params: {
     totalParts: 0,
     chunkSizeBytes: computed.chunkSizeBytes,
     stagingDir,
-    files: [{ path: dest, name: path.basename(dest), originalName: safeName, size: stat.size }],
+    files: [{
+      path: dest,
+      name: path.basename(dest),
+      originalName: safeName,
+      size: stat.size,
+      detectedKind: detectedType.kind,
+      detectedTypeLabel: detectedType.label
+    }],
     parts: []
   });
 

@@ -211,7 +211,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/thum
   }
 
   const fileName = file.originalName || file.name || archive.displayName || archive.name;
-  if (!supportsThumbnail(fileName)) {
+  if (!supportsThumbnail(fileName, file.detectedKind)) {
     return res.status(415).json({ error: "unsupported_thumbnail_type" });
   }
 
