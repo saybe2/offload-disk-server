@@ -7,6 +7,7 @@ export interface ArchiveFile {
   name: string;
   originalName: string;
   size: number;
+  contentModifiedAt?: Date;
   downloadCount?: number;
   previewCount?: number;
   detectedKind?: string;
@@ -47,6 +48,7 @@ export interface ArchiveDoc extends mongoose.Document {
   priorityOverride: boolean;
   status: ArchiveStatus;
   retryCount: number;
+  contentModifiedAt?: Date;
   originalSize: number;
   encryptedSize: number;
   uploadedBytes: number;
@@ -75,6 +77,7 @@ const FileSchema = new Schema<ArchiveFile>(
     name: { type: String, required: true },
     originalName: { type: String, required: true },
     size: { type: Number, required: true },
+    contentModifiedAt: { type: Date, default: Date.now },
     downloadCount: { type: Number, default: 0 },
     previewCount: { type: Number, default: 0 },
     detectedKind: { type: String, default: "" },
@@ -121,6 +124,7 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     priorityOverride: { type: Boolean, default: false },
     status: { type: String, enum: ["queued", "processing", "ready", "error"], default: "queued", index: true },
     retryCount: { type: Number, default: 0 },
+    contentModifiedAt: { type: Date, default: Date.now },
     originalSize: { type: Number, required: true },
     encryptedSize: { type: Number, default: 0 },
     uploadedBytes: { type: Number, default: 0 },

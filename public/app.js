@@ -801,6 +801,14 @@ function compareDate(a, b) {
   return new Date(a || 0).getTime() - new Date(b || 0).getTime();
 }
 
+function itemModifiedAt(item) {
+  return (
+    item?.file?.contentModifiedAt ||
+    item?.archive?.contentModifiedAt ||
+    item?.archive?.createdAt
+  );
+}
+
 function sortFolders(folders) {
   const list = folders.slice();
   const factor = getSortFactor();
@@ -831,7 +839,7 @@ function sortFileItems(items) {
     } else if (sortField === 'type') {
       result = compareText(fileTypeByName(leftName, left.file), fileTypeByName(rightName, right.file));
     } else if (sortField === 'date') {
-      result = compareDate(left.archive.updatedAt || left.archive.createdAt, right.archive.updatedAt || right.archive.createdAt);
+      result = compareDate(itemModifiedAt(left), itemModifiedAt(right));
     } else {
       result = compareText(leftName, rightName);
     }
@@ -1301,7 +1309,7 @@ function renderArchives() {
     priorityTd.appendChild(prioritySelect);
 
     const dateTd = document.createElement('td');
-    dateTd.textContent = formatDate(a.updatedAt || a.createdAt);
+    dateTd.textContent = formatDate(itemModifiedAt(item));
 
     const sizeTd = document.createElement('td');
     const sizeValue = item.file?.size ?? a.originalSize;
