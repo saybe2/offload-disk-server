@@ -74,12 +74,14 @@ async function waitDrainOrError(target: Writable) {
 async function extractZipEntryToFile(
   zipInput: PassThrough,
   entryName: string,
+  targetFileIndex: number,
   outputPath: string
 ) {
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
   const output = fs.createWriteStream(outputPath);
   const parser = createZipParser();
   let entryFound = false;
+  let fileOrdinal = -1;
 
   const done = new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -96,11 +98,18 @@ async function extractZipEntryToFile(
     };
 
     parser.on("entry", (entry: any) => {
+      const entryType = String(entry?.type || "");
+      const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
+      if (isDirectory) {
+        entry.autodrain();
+        return;
+      }
+      fileOrdinal += 1;
       if (entryFound) {
         entry.autodrain();
         return;
       }
-      if (entry.path === entryName) {
+      if (entry.path === entryName || fileOrdinal === targetFileIndex) {
         entryFound = true;
         entry.on("error", (err: Error) => finish(err));
         entry.pipe(output);
@@ -481,7 +490,7 @@ export async function restoreArchiveFileToFile(
     await fs.promises.mkdir(workDirV2, { recursive: true });
     const key = deriveKey(masterKey);
     const zipStream = new PassThrough();
-    const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), outputPath);
+    const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), fileIndex, outputPath);
 
     try {
       const webhookCache = new Map<string, string>();
@@ -524,7 +533,7 @@ export async function restoreArchiveFileToFile(
 
   const zipStream = new PassThrough();
   encryptedStream.pipe(decipher).pipe(zipStream);
-  const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), outputPath);
+  const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), fileIndex, outputPath);
 
   try {
     const webhookCache = new Map<string, string>();
@@ -581,17 +590,25 @@ export async function streamArchiveFileToResponse(
     }
 
     let entryFound = false;
+    let fileOrdinal = -1;
     const parser = createZipParser();
     zipStream.on("error", () => {
       log("restore", `bundle stream source error ${archive.id}`);
       res.destroy();
     });
     parser.on("entry", (entry: any) => {
+      const entryType = String(entry?.type || "");
+      const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
+      if (isDirectory) {
+        entry.autodrain();
+        return;
+      }
+      fileOrdinal += 1;
       if (entryFound) {
         entry.autodrain();
         return;
       }
-      if (entry.path === zipEntryName(file)) {
+      if (entry.path === zipEntryName(file) || fileOrdinal === fileIndex) {
         entryFound = true;
         entry.on("error", () => res.destroy());
         entry.on("end", () => {
@@ -675,6 +692,7 @@ export async function streamArchiveFileToResponse(
   }
 
   let entryFound = false;
+  let fileOrdinal = -1;
 
   const parser = createZipParser();
   encryptedStream.on("error", () => {
@@ -682,11 +700,18 @@ export async function streamArchiveFileToResponse(
     res.destroy();
   });
   parser.on("entry", (entry: any) => {
+    const entryType = String(entry?.type || "");
+    const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
+    if (isDirectory) {
+      entry.autodrain();
+      return;
+    }
+    fileOrdinal += 1;
     if (entryFound) {
       entry.autodrain();
       return;
     }
-    if (entry.path === zipEntryName(file)) {
+    if (entry.path === zipEntryName(file) || fileOrdinal === fileIndex) {
       entryFound = true;
       entry.on("error", () => res.destroy());
       entry.on("end", () => {
