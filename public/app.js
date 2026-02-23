@@ -102,6 +102,7 @@ const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 const VIEW_MODES = new Set(['list', 'tile', 'large']);
 let activeArchiveShares = new Map();
+let activeFolderShares = new Map();
 let lastStructureSignature = '';
 if (!VIEW_MODES.has(viewMode)) {
   viewMode = 'list';
@@ -379,6 +380,10 @@ function createSharedIndicatorButton(onClick) {
 
 function listArchiveShares(archiveId) {
   return activeArchiveShares.get(String(archiveId)) || [];
+}
+
+function listFolderShares(folderId) {
+  return activeFolderShares.get(String(folderId)) || [];
 }
 
 function shouldLoadThumb(archiveId, fileIndex) {
@@ -1063,6 +1068,16 @@ function buildStructureSignature() {
     })
     .sort()
     .join('~');
+  const folderShareBits = Array.from(activeFolderShares.entries())
+    .map(([folderId, shares]) => {
+      const list = (shares || [])
+        .map((s) => `${s.id || ''}:${s.token || ''}:${s.expiresAt || ''}`)
+        .sort()
+        .join(';');
+      return `${folderId}|${list}`;
+    })
+    .sort()
+    .join('~');
 
   return [
     currentView,
@@ -1073,7 +1088,8 @@ function buildStructureSignature() {
     sortDir,
     folderBits,
     archiveBits,
-    shareBits
+    shareBits,
+    folderShareBits
   ].join('||');
 }
 
@@ -1162,9 +1178,10 @@ async function loadArchives() {
   const data = await res.json();
   archivesCache = data.archives || [];
   if (currentView === 'files') {
-    await loadArchiveSharesMap();
+    await loadActiveSharesMap();
   } else {
     activeArchiveShares = new Map();
+    activeFolderShares = new Map();
   }
   updateArchiveProgress(archivesCache);
   const structureSignature = buildStructureSignature();
@@ -1178,20 +1195,29 @@ async function loadArchives() {
   renderArchives();
 }
 
-async function loadArchiveSharesMap() {
+async function loadActiveSharesMap() {
   try {
     const res = await fetch('/api/shares?active=1');
     if (!res.ok) return;
     const data = await res.json();
-    const nextMap = new Map();
+    const nextArchiveMap = new Map();
+    const nextFolderMap = new Map();
     for (const share of (data.shares || [])) {
-      if (share.type !== 'archive' || !share.archiveId) continue;
-      const key = String(share.archiveId);
-      const list = nextMap.get(key) || [];
-      list.push(share);
-      nextMap.set(key, list);
+      if (share.type === 'archive' && share.archiveId) {
+        const key = String(share.archiveId);
+        const list = nextArchiveMap.get(key) || [];
+        list.push(share);
+        nextArchiveMap.set(key, list);
+      }
+      if (share.type === 'folder' && share.folderId) {
+        const key = String(share.folderId);
+        const list = nextFolderMap.get(key) || [];
+        list.push(share);
+        nextFolderMap.set(key, list);
+      }
     }
-    activeArchiveShares = nextMap;
+    activeArchiveShares = nextArchiveMap;
+    activeFolderShares = nextFolderMap;
   } catch {}
 }
 
@@ -1200,14 +1226,15 @@ function closeShareLinksModal() {
   shareLinksBody.innerHTML = '';
 }
 
-async function openShareLinksModal(item) {
-  if (!item?.archive?._id) return;
-  await loadArchiveSharesMap();
-  const archiveId = String(item.archive._id);
-  const fileName = item.file?.originalName || item.file?.name || item.archive.displayName || item.archive.name || 'File';
-  shareLinksTitle.textContent = `Shared links: ${fileName}`;
+async function openShareLinksModal(target) {
+  if (!target?.id || (target.type !== 'archive' && target.type !== 'folder')) return;
+  await loadActiveSharesMap();
+  const isArchive = target.type === 'archive';
+  const targetId = String(target.id);
+  const targetName = target.name || (isArchive ? 'File' : 'Folder');
+  shareLinksTitle.textContent = `Shared links: ${targetName}`;
   shareLinksBody.innerHTML = '';
-  const shares = listArchiveShares(archiveId);
+  const shares = isArchive ? listArchiveShares(targetId) : listFolderShares(targetId);
 
   if (shares.length === 0) {
     const empty = document.createElement('div');
@@ -1230,9 +1257,9 @@ async function openShareLinksModal(item) {
       revokeBtn.textContent = 'Revoke';
       revokeBtn.addEventListener('click', async () => {
         await fetch(`/api/shares/${share.id}`, { method: 'DELETE' });
-        await loadArchiveSharesMap();
+        await loadActiveSharesMap();
         renderArchives();
-        await openShareLinksModal(item);
+        await openShareLinksModal(target);
       });
       row.appendChild(url);
       row.appendChild(copyBtn);
@@ -1247,7 +1274,7 @@ async function openShareLinksModal(item) {
   createBtn.textContent = 'Create link';
   createBtn.addEventListener('click', () => {
     closeShareLinksModal();
-    openShareModal({ type: 'archive', id: archiveId, name: fileName });
+    openShareModal({ type: target.type, id: targetId, name: targetName });
   });
   actions.appendChild(createBtn);
   shareLinksBody.appendChild(actions);
@@ -1453,6 +1480,11 @@ function renderArchives() {
       text.textContent = folder.name;
       wrap.appendChild(icon);
       wrap.appendChild(text);
+      if (listFolderShares(folder._id).length > 0) {
+        wrap.appendChild(createSharedIndicatorButton(() => {
+          openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
+        }));
+      }
       nameTd.appendChild(wrap);
       nameTd.colSpan = 9;
       tr.appendChild(nameTd);
@@ -1519,7 +1551,7 @@ function renderArchives() {
     }
     if (listArchiveShares(a._id).length > 0) {
       nameWrap.appendChild(createSharedIndicatorButton(() => {
-        openShareLinksModal(item);
+        openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
       }));
     }
     nameTd.appendChild(nameWrap);
@@ -1831,6 +1863,16 @@ function renderArchivesGrid() {
     content.appendChild(icon);
     content.appendChild(name);
     content.appendChild(meta);
+
+    const folderShares = listFolderShares(folder._id);
+    if (folderShares.length > 0) {
+      const shareBtn = createSharedIndicatorButton(() => {
+        openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
+      });
+      shareBtn.classList.add('grid-share');
+      card.appendChild(shareBtn);
+    }
+
     card.appendChild(content);
     gridView.appendChild(card);
   }
@@ -1913,7 +1955,7 @@ function renderArchivesGrid() {
     const shares = listArchiveShares(a._id);
     if (shares.length > 0) {
       const shareBtn = createSharedIndicatorButton(() => {
-        openShareLinksModal(item);
+        openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
       });
       shareBtn.classList.add('grid-share');
       card.appendChild(shareBtn);
@@ -1931,6 +1973,14 @@ function updateSelectionUI() {
   deleteSelectedBtn.disabled = selectedItems.size === 0 || !isFiles;
   deleteSelectedBtn.classList.toggle('hidden', !isFiles);
   newFolderBtn.classList.toggle('hidden', !isFiles);
+}
+
+function applySelectionVisuals() {
+  const rows = document.querySelectorAll('[data-archive-id][data-file-index]');
+  for (const node of rows) {
+    const key = `${node.dataset.archiveId}:${node.dataset.fileIndex}`;
+    node.classList.toggle('row-selected', selectedItems.has(key));
+  }
 }
 
 function updateViewVisibility() {
@@ -1969,7 +2019,8 @@ function handleRowSelection(item, key, index, event) {
   }
 
   lastSelectedIndex = index;
-  renderArchives();
+  applySelectionVisuals();
+  updateSelectionUI();
 }
 
 async function uploadFiles(fileList, targetFolderId) {
@@ -2169,7 +2220,8 @@ async function openFileContextMenu(item, x, y) {
     selectedItems.clear();
     selectedItems.set(key, { archiveId: a._id, fileIndex: item.fileIndex });
     lastSelectedIndex = lastRenderedItems.findIndex((it) => `${it.archive._id}:${it.fileIndex}` === key);
-    renderArchives();
+    applySelectionVisuals();
+    updateSelectionUI();
   }
   const items = [];
 
@@ -2204,7 +2256,7 @@ async function openFileContextMenu(item, x, y) {
 
   items.push({ label: 'Share', onClick: async () => openShareModal({ type: 'archive', id: a._id, name: fileName }) });
   if (listArchiveShares(a._id).length > 0) {
-    items.push({ label: 'Shared links', onClick: async () => openShareLinksModal(item) });
+    items.push({ label: 'Shared links', onClick: async () => openShareLinksModal({ type: 'archive', id: a._id, name: fileName }) });
   }
   items.push({ label: 'Rename', onClick: async () => {
     const nextName = prompt('New name', fileName);
@@ -2380,7 +2432,7 @@ async function createShareLink() {
   shareCopyBtn.dataset.link = link;
   shareCopyBtn.classList.remove('hidden');
   if (currentView === 'files') {
-    await loadArchiveSharesMap();
+    await loadActiveSharesMap();
     renderArchives();
   }
 }
