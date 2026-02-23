@@ -590,9 +590,13 @@ export async function streamArchiveFileToResponse(
     }
 
     let entryFound = false;
+    let entryCompleted = false;
     let fileOrdinal = -1;
     const parser = createZipParser();
     zipStream.on("error", () => {
+      if (entryCompleted || res.writableEnded || (res as any).destroyed) {
+        return;
+      }
       log("restore", `bundle stream source error ${archive.id}`);
       res.destroy();
     });
@@ -612,9 +616,12 @@ export async function streamArchiveFileToResponse(
         entryFound = true;
         entry.on("error", () => res.destroy());
         entry.on("end", () => {
+          entryCompleted = true;
           if (!res.writableEnded) {
             res.end();
           }
+          zipStream.destroy();
+          parser.destroy();
         });
         entry.pipe(res);
         return;
@@ -622,6 +629,9 @@ export async function streamArchiveFileToResponse(
       entry.autodrain();
     });
     parser.on("error", () => {
+      if (entryCompleted || res.writableEnded || (res as any).destroyed) {
+        return;
+      }
       log("restore", `bundle stream parse error ${archive.id}`);
       res.destroy();
     });
@@ -692,10 +702,21 @@ export async function streamArchiveFileToResponse(
   }
 
   let entryFound = false;
+  let entryCompleted = false;
   let fileOrdinal = -1;
+  decipher.removeAllListeners("error");
+  decipher.on("error", () => {
+    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
+      return;
+    }
+    res.destroy();
+  });
 
   const parser = createZipParser();
   encryptedStream.on("error", () => {
+    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
+      return;
+    }
     log("restore", `bundle stream source error ${archive.id}`);
     res.destroy();
   });
@@ -715,9 +736,12 @@ export async function streamArchiveFileToResponse(
       entryFound = true;
       entry.on("error", () => res.destroy());
       entry.on("end", () => {
+        entryCompleted = true;
         if (!res.writableEnded) {
           res.end();
         }
+        encryptedStream.destroy();
+        parser.destroy();
       });
       entry.pipe(res);
       return;
@@ -725,6 +749,9 @@ export async function streamArchiveFileToResponse(
     entry.autodrain();
   });
   parser.on("error", () => {
+    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
+      return;
+    }
     log("restore", `bundle stream parse error ${archive.id}`);
     res.destroy();
   });
