@@ -102,6 +102,7 @@ const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 const VIEW_MODES = new Set(['list', 'tile', 'large']);
 let activeArchiveShares = new Map();
+let lastStructureSignature = '';
 if (!VIEW_MODES.has(viewMode)) {
   viewMode = 'list';
 }
@@ -1022,6 +1023,127 @@ function getDownloadUrl(item) {
   return `/api/archives/${item.archive._id}/download`;
 }
 
+function buildCurrentFileItems() {
+  return sortFileItems(filterItems(buildFileItems(archivesCache)));
+}
+
+function buildStructureSignature() {
+  const folderBits = foldersCache
+    .map((f) => `${f._id}|${f.name}|${f.parentId || ''}|${f.priority ?? 2}|${f.updatedAt || f.createdAt || ''}`)
+    .sort()
+    .join('~');
+
+  const archiveBits = archivesCache
+    .map((a) => {
+      const files = (a.files || [])
+        .map((f, i) => `${i}:${f.originalName || f.name || ''}|${f.size || 0}|${f.deletedAt ? 1 : 0}|${f.detectedKind || ''}|${f.previewCount || 0}|${f.downloadCount || 0}`)
+        .join(';');
+      return [
+        a._id,
+        a.folderId || '',
+        a.status || '',
+        a.isBundle ? 1 : 0,
+        a.priority ?? 2,
+        a.deleting ? 1 : 0,
+        a.deleteRequestedAt || '',
+        a.contentModifiedAt || a.createdAt || '',
+        files
+      ].join('|');
+    })
+    .sort()
+    .join('~');
+
+  const shareBits = Array.from(activeArchiveShares.entries())
+    .map(([archiveId, shares]) => {
+      const list = (shares || [])
+        .map((s) => `${s.id || ''}:${s.token || ''}:${s.expiresAt || ''}`)
+        .sort()
+        .join(';');
+      return `${archiveId}|${list}`;
+    })
+    .sort()
+    .join('~');
+
+  return [
+    currentView,
+    currentFolderId || '',
+    viewMode,
+    searchTerm,
+    sortField,
+    sortDir,
+    folderBits,
+    archiveBits,
+    shareBits
+  ].join('||');
+}
+
+function updateVisibleDynamicFields(items) {
+  if (currentView !== 'files') return;
+  const itemMap = new Map();
+  for (const item of items) {
+    itemMap.set(`${item.archive._id}:${item.fileIndex}`, item);
+  }
+
+  const rows = archiveList.querySelectorAll('tr[data-archive-id][data-file-index]');
+  for (const tr of rows) {
+    const key = `${tr.dataset.archiveId}:${tr.dataset.fileIndex}`;
+    const item = itemMap.get(key);
+    if (!item) continue;
+    const a = item.archive;
+
+    const statusTd = tr.children[1];
+    if (statusTd) {
+      if (currentView === 'trash' && (a.deleting || a.deleteRequestedAt)) {
+        statusTd.textContent = `deleting ${deleteProgress(a)}`;
+      } else {
+        statusTd.textContent = a.status;
+      }
+    }
+
+    const discordTd = tr.children[2];
+    if (discordTd) {
+      const fill = discordTd.querySelector('.mini-bar-fill');
+      const meta = discordTd.querySelector('.mini-meta');
+      const totalBytes = processedTotalBytes(a);
+      const uploadedBytes = Number(a.uploadedBytes || 0);
+      const pct = processedPercent(a);
+      if (fill) {
+        fill.style.width = `${pct}%`;
+      }
+      if (meta) {
+        const entry = archiveProgress.get(a._id);
+        let etaText = '';
+        if (a.status !== 'ready' && totalBytes > 0 && uploadedBytes < totalBytes && entry?.speed) {
+          const remaining = totalBytes - uploadedBytes;
+          const eta = formatDuration(remaining / entry.speed);
+          if (eta) etaText = `ETA ${eta}`;
+        }
+        meta.textContent = a.status === 'ready'
+          ? '100%'
+          : `${pct}%${etaText ? ` | ${etaText}` : ''}`;
+      }
+    }
+  }
+
+  if (isGridMode()) {
+    const cards = gridView.querySelectorAll('.grid-card[data-archive-id][data-file-index]');
+    for (const card of cards) {
+      const key = `${card.dataset.archiveId}:${card.dataset.fileIndex}`;
+      const item = itemMap.get(key);
+      if (!item) continue;
+      const meta = card.querySelector('.grid-meta');
+      if (!meta) continue;
+      if (item.archive.status === 'ready') {
+        meta.textContent = formatSize(item.file?.size ?? item.archive.originalSize);
+      } else {
+        meta.textContent = `${discordProgress(item.archive)} | ${item.archive.status}`;
+      }
+    }
+  }
+
+  lastRenderedItems = items;
+}
+
 async function loadArchives() {
   if (currentView === 'shared') {
     await loadShared();
@@ -1045,6 +1167,14 @@ async function loadArchives() {
     activeArchiveShares = new Map();
   }
   updateArchiveProgress(archivesCache);
+  const structureSignature = buildStructureSignature();
+  if (structureSignature === lastStructureSignature) {
+    if (currentView === 'files') {
+      updateVisibleDynamicFields(buildCurrentFileItems());
+    }
+    return;
+  }
+  lastStructureSignature = structureSignature;
   renderArchives();
 }
 
@@ -1144,6 +1274,7 @@ function renderArchives() {
   if (currentView === 'shared') {
     listTable.classList.remove('hidden');
     gridView.classList.add('hidden');
+    lastStructureSignature = buildStructureSignature();
     return;
   }
 
@@ -1152,6 +1283,7 @@ function renderArchives() {
   gridView.classList.toggle('hidden', !gridMode);
   if (gridMode) {
     renderArchivesGrid();
+    lastStructureSignature = buildStructureSignature();
     return;
   }
   gridView.classList.remove('mode-tile', 'mode-large');
@@ -1526,6 +1658,7 @@ function renderArchives() {
 
     archiveList.appendChild(tr);
   }
+  lastStructureSignature = buildStructureSignature();
 }
 
 function renderArchivesGrid() {
