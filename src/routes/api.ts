@@ -1859,6 +1859,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
   const payload = shares.map((s) => {
     let name = "Shared item";
     let archiveId: string | null = null;
+    let folderId: string | null = null;
     let archiveStatus: string | null = null;
     let archiveIsBundle = false;
     let archiveFirstFileName = "";
@@ -1877,7 +1878,8 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       archiveFirstFileKind = firstFile?.detectedKind || "";
       previewSupported = !!(a && firstFile && isPreviewSupportedForFile(a, firstFile));
     } else if (s.folderId) {
-      const f = folderMap.get(s.folderId.toString());
+      folderId = s.folderId.toString();
+      const f = folderMap.get(folderId);
       name = f?.name || name;
     }
     return {
@@ -1888,6 +1890,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
       createdAt: s.createdAt,
       name,
       archiveId,
+      folderId,
       archiveStatus,
       archiveIsBundle,
       archiveFirstFileName,
