@@ -582,6 +582,10 @@ export async function streamArchiveFileToResponse(
 
     let entryFound = false;
     const parser = createZipParser();
+    zipStream.on("error", () => {
+      log("restore", `bundle stream source error ${archive.id}`);
+      res.destroy();
+    });
     parser.on("entry", (entry: any) => {
       if (entryFound) {
         entry.autodrain();
@@ -673,6 +677,10 @@ export async function streamArchiveFileToResponse(
   let entryFound = false;
 
   const parser = createZipParser();
+  encryptedStream.on("error", () => {
+    log("restore", `bundle stream source error ${archive.id}`);
+    res.destroy();
+  });
   parser.on("entry", (entry: any) => {
     if (entryFound) {
       entry.autodrain();

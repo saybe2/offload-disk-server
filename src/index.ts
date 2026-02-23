@@ -22,6 +22,17 @@ import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 
+process.on("uncaughtException", (err) => {
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack || "" : "";
+  if (/invalid signature: 0x/i.test(message) && /unzipper\/lib\/parse\.js/i.test(stack)) {
+    log("restore", `zip parse guard ${message}`);
+    return;
+  }
+  log("server", `uncaught exception ${message}`);
+  process.exit(1);
+});
+
 const app = express();
 
 app.use((req, _res, next) => {
