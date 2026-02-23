@@ -3,6 +3,7 @@ import { config } from "../config.js";
 import {
   ensureArchiveThumbnail,
   ensureArchiveThumbnailFromSource,
+  isPermanentThumbnailFailureMessage,
   supportsThumbnail
 } from "./thumbnails.js";
 
@@ -18,6 +19,7 @@ function log(message: string) {
 
 function fileNeedsThumbnail(file: any) {
   if (file?.deletedAt) return false;
+  if (file?.thumbnail?.failedAt) return false;
   const fileName = file?.originalName || file?.name || "";
   if (!supportsThumbnail(fileName, file?.detectedKind)) return false;
   return !file?.thumbnail?.updatedAt;
@@ -97,6 +99,9 @@ async function processArchive(archiveId: string) {
       generated += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (isPermanentThumbnailFailureMessage(message)) {
+        continue;
+      }
       if (message === "source_missing" && archive.status === "ready") {
         try {
           await ensureArchiveThumbnail(archive, fileIndex);
@@ -104,6 +109,9 @@ async function processArchive(archiveId: string) {
           continue;
         } catch (fallbackErr) {
           const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          if (isPermanentThumbnailFailureMessage(fallbackMessage)) {
+            continue;
+          }
           log(`error ${archiveId} file=${fileIndex} ${fallbackMessage}`);
           retryAt.set(archiveId, Date.now() + config.thumbRetryMs);
           queued.add(archiveId);

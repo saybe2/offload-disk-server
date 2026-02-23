@@ -34,7 +34,12 @@ import { sanitizeFilename } from "../utils/names.js";
 import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
-import { ensureArchiveThumbnail, ensureArchiveThumbnailFromSource, supportsThumbnail } from "../services/thumbnails.js";
+import {
+  ensureArchiveThumbnail,
+  ensureArchiveThumbnailFromSource,
+  isPermanentThumbnailFailureMessage,
+  supportsThumbnail
+} from "../services/thumbnails.js";
 import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
@@ -1238,6 +1243,9 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
     return fs.createReadStream(thumb.filePath).pipe(res);
   } catch (err) {
     const message = (err as Error).message || "thumbnail_failed";
+    if (isPermanentThumbnailFailureMessage(message)) {
+      return res.status(415).json({ error: "thumbnail_unavailable" });
+    }
     log("thumb", `error ${archive.id} file=${index} ${message}`);
     if (message === "file_not_found") {
       return res.status(404).json({ error: "file_not_found" });
