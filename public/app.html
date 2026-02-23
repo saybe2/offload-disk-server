@@ -82,12 +82,19 @@
               <option value="asc">Ascending</option>
               <option value="desc">Descending</option>
             </select>
+            <label for="viewModeSelect">View</label>
+            <select id="viewModeSelect">
+              <option value="large">Large tiles</option>
+              <option value="tile">Tiles</option>
+              <option value="list">List</option>
+            </select>
           </div>
         </div>
-        <table>
+        <table id="listTable">
           <thead id="listHead"></thead>
           <tbody id="archiveList"></tbody>
         </table>
+        <div id="gridView" class="grid-view hidden"></div>
       </section>
     </main>
   </div>
@@ -167,6 +174,16 @@
         <button id="infoClose">Close</button>
       </div>
       <div id="infoBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="shareLinksModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="shareLinksTitle">Shared links</h3>
+        <button id="shareLinksClose">Close</button>
+      </div>
+      <div id="shareLinksBody" class="modal-body"></div>
     </div>
   </div>
 
