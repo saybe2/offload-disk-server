@@ -56,6 +56,7 @@ export async function createArchiveFromLocalFile(params: {
     priority: basePriority,
     priorityOverride: false,
     status: "queued",
+    contentModifiedAt: new Date(),
     originalSize: stat.size,
     encryptedSize: 0,
     uploadedBytes: 0,
@@ -68,6 +69,7 @@ export async function createArchiveFromLocalFile(params: {
       name: path.basename(dest),
       originalName: safeName,
       size: stat.size,
+      contentModifiedAt: new Date(),
       detectedKind: detectedType.kind,
       detectedTypeLabel: detectedType.label
     }],

@@ -456,6 +456,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       name: string;
       originalName: string;
       size: number;
+      contentModifiedAt: Date;
       detectedKind: string;
       detectedTypeLabel: string;
     }[];
@@ -471,6 +472,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
         name: safeName,
         originalName: safeOriginal,
         size: file.size,
+        contentModifiedAt: new Date(),
         detectedKind: detectedType.kind,
         detectedTypeLabel: detectedType.label
       });
@@ -494,6 +496,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       priority: basePriority,
       priorityOverride: false,
       status: "queued",
+      contentModifiedAt: new Date(),
       originalSize: groupSize,
       encryptedSize: 0,
       uploadedBytes: 0,
@@ -657,6 +660,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           name: path.basename(rawPath),
           originalName: safeName,
           size: 0,
+          contentModifiedAt: new Date(),
           detectedKind: initialDetectedType.kind,
           detectedTypeLabel: initialDetectedType.label
         }],
@@ -1943,15 +1947,19 @@ apiRouter.patch("/archives/:id/rename", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "file_deleted" });
     }
     archive.files[fileIndex].originalName = safeName;
+    archive.files[fileIndex].contentModifiedAt = new Date();
     if (!archive.isBundle && fileIndex === 0) {
       archive.displayName = safeName;
       archive.downloadName = safeName;
+      archive.contentModifiedAt = new Date();
     }
   } else {
     archive.displayName = safeName;
     archive.downloadName = safeName;
+    archive.contentModifiedAt = new Date();
     if (archive.files?.[0]) {
       archive.files[0].originalName = safeName;
+      archive.files[0].contentModifiedAt = new Date();
     }
   }
 
