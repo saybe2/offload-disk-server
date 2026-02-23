@@ -21,6 +21,29 @@ export interface ThumbnailResult {
   size: number;
 }
 
+const THUMB_PERMANENT_PREFIX = "thumbnail_permanent_failure:";
+
+function toMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err || "");
+}
+
+export function isPermanentThumbnailFailureMessage(message: string) {
+  if (!message) return false;
+  if (message.startsWith(THUMB_PERMANENT_PREFIX)) return true;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("vipsjpeg: invalid sos parameters") ||
+    lower.includes("invalid sos parameters") ||
+    lower.includes("input file contains unsupported image format") ||
+    lower.includes("corrupt jpeg") ||
+    lower.includes("invalid data found when processing input")
+  );
+}
+
+function makePermanentThumbnailFailure(message: string) {
+  return new Error(`${THUMB_PERMANENT_PREFIX}${message}`.slice(0, 1200));
+}
+
 function extOf(fileName: string) {
   const lower = fileName.toLowerCase();
   const dot = lower.lastIndexOf(".");
@@ -206,7 +229,9 @@ async function persistThumbMeta(archiveId: string, fileIndex: number, localPath:
         [`files.${fileIndex}.thumbnail.url`]: backup?.url || "",
         [`files.${fileIndex}.thumbnail.messageId`]: backup?.messageId || "",
         [`files.${fileIndex}.thumbnail.webhookId`]: backup?.webhookId || "",
-        [`files.${fileIndex}.thumbnail.updatedAt`]: new Date()
+        [`files.${fileIndex}.thumbnail.updatedAt`]: new Date(),
+        [`files.${fileIndex}.thumbnail.failedAt`]: null,
+        [`files.${fileIndex}.thumbnail.error`]: ""
       }
     }
   );
@@ -221,7 +246,25 @@ async function generateThumbUsingSource(
   localPath: string,
   detectedKind?: string
 ) {
-  await generateThumbFromFile(sourcePath, fileName, localPath, detectedKind);
+  try {
+    await generateThumbFromFile(sourcePath, fileName, localPath, detectedKind);
+  } catch (err) {
+    const message = toMessage(err);
+    if (isPermanentThumbnailFailureMessage(message)) {
+      await Archive.updateOne(
+        { _id: archive.id },
+        {
+          $set: {
+            [`files.${fileIndex}.thumbnail.failedAt`]: new Date(),
+            [`files.${fileIndex}.thumbnail.error`]: message.slice(0, 500),
+            [`files.${fileIndex}.thumbnail.updatedAt`]: null
+          }
+        }
+      );
+      throw makePermanentThumbnailFailure(message);
+    }
+    throw err;
+  }
   return persistThumbMeta(archive.id, fileIndex, localPath);
 }
 
@@ -229,6 +272,9 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
   const file = archive.files?.[fileIndex];
   if (!file) {
     throw new Error("file_not_found");
+  }
+  if (file.thumbnail?.failedAt) {
+    throw makePermanentThumbnailFailure(file.thumbnail.error || "marked_failed");
   }
   const fileName = (file.originalName || file.name || "").trim();
   if (!supportsThumbnail(fileName, file.detectedKind)) {
@@ -257,6 +303,9 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
   if (!file) {
     throw new Error("file_not_found");
   }
+  if (file.thumbnail?.failedAt) {
+    throw makePermanentThumbnailFailure(file.thumbnail.error || "marked_failed");
+  }
   const fileName = (file.originalName || file.name || "").trim();
   if (!supportsThumbnail(fileName, file.detectedKind)) {
     throw new Error("thumbnail_unsupported");
@@ -273,7 +322,10 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
   if (file.path && fs.existsSync(file.path)) {
     try {
       return await generateThumbUsingSource(archive, fileIndex, fileName, file.path, localPath, file.detectedKind);
-    } catch {
+    } catch (err) {
+      if (isPermanentThumbnailFailureMessage(toMessage(err))) {
+        throw err;
+      }
       // Fallback to Discord restore path if direct source-based generation failed.
     }
   }

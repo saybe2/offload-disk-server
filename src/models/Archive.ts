@@ -21,6 +21,8 @@ export interface ArchiveFile {
     messageId?: string;
     webhookId?: string;
     updatedAt?: Date;
+    failedAt?: Date | null;
+    error?: string;
   };
 }
 
@@ -90,7 +92,9 @@ const FileSchema = new Schema<ArchiveFile>(
       url: { type: String, default: "" },
       messageId: { type: String, default: "" },
       webhookId: { type: String, default: "" },
-      updatedAt: { type: Date, default: null }
+      updatedAt: { type: Date, default: null },
+      failedAt: { type: Date, default: null },
+      error: { type: String, default: "" }
     }
   },
   { _id: false }

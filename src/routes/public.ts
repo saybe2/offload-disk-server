@@ -15,7 +15,11 @@ import {
 } from "../services/restore.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
-import { ensureArchiveThumbnail, supportsThumbnail } from "../services/thumbnails.js";
+import {
+  ensureArchiveThumbnail,
+  isPermanentThumbnailFailureMessage,
+  supportsThumbnail
+} from "../services/thumbnails.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
@@ -278,6 +282,9 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/thum
     return fs.createReadStream(thumb.filePath).pipe(res);
   } catch (err) {
     const message = (err as Error).message || "thumbnail_failed";
+    if (isPermanentThumbnailFailureMessage(message)) {
+      return res.status(415).json({ error: "thumbnail_unavailable" });
+    }
     log("thumb", `public error ${archive.id} file=${fileIndex} ${message}`);
     if (message === "file_not_found") {
       return res.status(404).json({ error: "file_not_found" });
