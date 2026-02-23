@@ -17,6 +17,7 @@ const folderPrioritySave = document.getElementById('folderPrioritySave');
 const searchInput = document.getElementById('searchInput');
 const sortFieldSelect = document.getElementById('sortFieldSelect');
 const sortDirSelect = document.getElementById('sortDirSelect');
+const viewModeSelect = document.getElementById('viewModeSelect');
 const newFolderBtn = document.getElementById('newFolderBtn');
 const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
 const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
@@ -24,12 +25,18 @@ const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
 const navTrash = document.getElementById('navTrash');
 const sidebar = document.querySelector('.sidebar');
+const listTable = document.getElementById('listTable');
+const gridView = document.getElementById('gridView');
 
 const contextMenu = document.getElementById('contextMenu');
 const infoModal = document.getElementById('infoModal');
 const infoTitle = document.getElementById('infoTitle');
 const infoBody = document.getElementById('infoBody');
 const infoClose = document.getElementById('infoClose');
+const shareLinksModal = document.getElementById('shareLinksModal');
+const shareLinksTitle = document.getElementById('shareLinksTitle');
+const shareLinksBody = document.getElementById('shareLinksBody');
+const shareLinksClose = document.getElementById('shareLinksClose');
 const previewModal = document.getElementById('previewModal');
 const previewTitle = document.getElementById('previewTitle');
 const previewState = document.getElementById('previewState');
@@ -78,6 +85,7 @@ let archivesCache = [];
 let searchTerm = '';
 let sortField = 'name';
 let sortDir = 'asc';
+let viewMode = localStorage.getItem('filesViewMode') || 'list';
 let selectedItems = new Map();
 let lastSelectedIndex = null;
 let lastRenderedItems = [];
@@ -92,6 +100,11 @@ const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp',
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob']);
 const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
+const VIEW_MODES = new Set(['list', 'tile', 'large']);
+let activeArchiveShares = new Map();
+if (!VIEW_MODES.has(viewMode)) {
+  viewMode = 'list';
+}
 
 const priorities = [
   { value: 0, label: 'lowest' },
@@ -108,6 +121,9 @@ function updateUrl() {
   }
   if (currentView === 'files' && currentFolderId) {
     params.set('folder', currentFolderId);
+  }
+  if (currentView === 'files' && viewMode !== 'list') {
+    params.set('layout', viewMode);
   }
   if (searchTerm) {
     params.set('search', searchTerm);
@@ -324,6 +340,44 @@ function createCounterCell(kind, value) {
   wrap.appendChild(icon);
   wrap.appendChild(text);
   return wrap;
+}
+
+function isGridMode() {
+  return currentView === 'files' && (viewMode === 'tile' || viewMode === 'large');
+}
+
+function normalizeViewMode(mode) {
+  return VIEW_MODES.has(mode) ? mode : 'list';
+}
+
+function createShareIconSvg() {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('viewBox', '0 0 12 12');
+  icon.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', 'M7.456 4.28a3.25 3.25 0 0 1-.115 4.475L5.927 10.17A3.25 3.25 0 0 1 1.33 5.573l1.06 1.06A1.751 1.751 0 0 0 4.867 9.11L6.28 7.695a1.75 1.75 0 0 0 0-2.476l1.06-1.06zM5.573 1.33a3.25 3.25 0 1 1 4.596 4.596l-1.06-1.06A1.75 1.75 0 1 0 6.633 2.39L5.22 3.805a1.75 1.75 0 0 0 0 2.475L4.16 7.34a3.25 3.25 0 0 1 0-4.595z');
+  icon.appendChild(path);
+  return icon;
+}
+
+function createSharedIndicatorButton(onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'shared-indicator';
+  btn.title = 'Shared links';
+  btn.setAttribute('aria-label', 'Shared links');
+  btn.appendChild(createShareIconSvg());
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+function listArchiveShares(archiveId) {
+  return activeArchiveShares.get(String(archiveId)) || [];
 }
 
 function shouldLoadThumb(archiveId, fileIndex) {
@@ -985,8 +1039,89 @@ async function loadArchives() {
   const res = await fetch(`/api/archives?${params.toString()}`);
   const data = await res.json();
   archivesCache = data.archives || [];
+  if (currentView === 'files') {
+    await loadArchiveSharesMap();
+  } else {
+    activeArchiveShares = new Map();
+  }
   updateArchiveProgress(archivesCache);
   renderArchives();
+}
+
+async function loadArchiveSharesMap() {
+  try {
+    const res = await fetch('/api/shares?active=1');
+    if (!res.ok) return;
+    const data = await res.json();
+    const nextMap = new Map();
+    for (const share of (data.shares || [])) {
+      if (share.type !== 'archive' || !share.archiveId) continue;
+      const key = String(share.archiveId);
+      const list = nextMap.get(key) || [];
+      list.push(share);
+      nextMap.set(key, list);
+    }
+    activeArchiveShares = nextMap;
+  } catch {}
+}
+
+function closeShareLinksModal() {
+  shareLinksModal.classList.add('hidden');
+  shareLinksBody.innerHTML = '';
+}
+
+async function openShareLinksModal(item) {
+  if (!item?.archive?._id) return;
+  await loadArchiveSharesMap();
+  const archiveId = String(item.archive._id);
+  const fileName = item.file?.originalName || item.file?.name || item.archive.displayName || item.archive.name || 'File';
+  shareLinksTitle.textContent = `Shared links: ${fileName}`;
+  shareLinksBody.innerHTML = '';
+  const shares = listArchiveShares(archiveId);
+
+  if (shares.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'share-links-empty';
+    empty.textContent = 'No active links';
+    shareLinksBody.appendChild(empty);
+  } else {
+    for (const share of shares) {
+      const row = document.createElement('div');
+      row.className = 'share-links-item';
+      const link = `${location.origin}/share/${share.token}`;
+      const url = document.createElement('div');
+      url.className = 'share-links-url';
+      const exp = share.expiresAt ? ` (expires ${formatDate(share.expiresAt)})` : '';
+      url.textContent = `${link}${exp}`;
+      const copyBtn = document.createElement('button');
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', async () => copyText(link));
+      const revokeBtn = document.createElement('button');
+      revokeBtn.textContent = 'Revoke';
+      revokeBtn.addEventListener('click', async () => {
+        await fetch(`/api/shares/${share.id}`, { method: 'DELETE' });
+        await loadArchiveSharesMap();
+        renderArchives();
+        await openShareLinksModal(item);
+      });
+      row.appendChild(url);
+      row.appendChild(copyBtn);
+      row.appendChild(revokeBtn);
+      shareLinksBody.appendChild(row);
+    }
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const createBtn = document.createElement('button');
+  createBtn.textContent = 'Create link';
+  createBtn.addEventListener('click', () => {
+    closeShareLinksModal();
+    openShareModal({ type: 'archive', id: archiveId, name: fileName });
+  });
+  actions.appendChild(createBtn);
+  shareLinksBody.appendChild(actions);
+  shareLinksModal.classList.remove('hidden');
 }
 
 function renderFoldersInList() {
@@ -999,10 +1134,27 @@ function renderFoldersInList() {
 
 function renderArchives() {
   archiveList.innerHTML = '';
+  gridView.innerHTML = '';
+  if (viewModeSelect) {
+    viewModeSelect.value = normalizeViewMode(viewMode);
+  }
   renderHead();
   updateSelectionUI();
 
-  if (currentView === 'shared') return;
+  if (currentView === 'shared') {
+    listTable.classList.remove('hidden');
+    gridView.classList.add('hidden');
+    return;
+  }
+
+  const gridMode = isGridMode();
+  listTable.classList.toggle('hidden', gridMode);
+  gridView.classList.toggle('hidden', !gridMode);
+  if (gridMode) {
+    renderArchivesGrid();
+    return;
+  }
+  gridView.classList.remove('mode-tile', 'mode-large');
 
   if (currentView === 'files') {
     if (currentFolderId) {
@@ -1233,6 +1385,11 @@ function renderArchives() {
       pill.textContent = 'bundle';
       nameWrap.appendChild(pill);
     }
+    if (listArchiveShares(a._id).length > 0) {
+      nameWrap.appendChild(createSharedIndicatorButton(() => {
+        openShareLinksModal(item);
+      }));
+    }
     nameTd.appendChild(nameWrap);
     if (a.files && a.files.length > 0) {
       nameTd.title = a.files
@@ -1371,6 +1528,269 @@ function renderArchives() {
   }
 }
 
+function renderArchivesGrid() {
+  gridView.innerHTML = '';
+  gridView.classList.remove('mode-tile', 'mode-large');
+  gridView.classList.add(viewMode === 'tile' ? 'mode-tile' : 'mode-large');
+
+  if (currentFolderId) {
+    const current = foldersById[currentFolderId];
+    const parentId = current?.parentId ? current.parentId.toString() : null;
+    const upCard = document.createElement('div');
+    upCard.className = 'grid-card grid-up folder-row-item';
+    const upContent = document.createElement('div');
+    upContent.className = 'grid-card-content';
+    const upIcon = document.createElement('span');
+    upIcon.className = 'folder-icon grid-folder-icon';
+    const upName = document.createElement('div');
+    upName.className = 'grid-name';
+    upName.textContent = '..';
+    upContent.appendChild(upIcon);
+    upContent.appendChild(upName);
+    upCard.appendChild(upContent);
+    upCard.addEventListener('click', () => {
+      currentFolderId = parentId;
+      selectedItems.clear();
+      updateTitle();
+      loadFolders();
+      loadArchives();
+    });
+    upCard.addEventListener('dragover', (e) => {
+      e.stopPropagation();
+      if (dragFolderId || dragArchiveId) {
+        e.preventDefault();
+        upCard.classList.add('drop');
+        return;
+      }
+      if (isFileDrag(e)) {
+        e.preventDefault();
+        upCard.classList.add('drop');
+        dropUploadFolderId = parentId ?? ROOT_DROP;
+      }
+    });
+    upCard.addEventListener('dragleave', () => {
+      upCard.classList.remove('drop');
+      if (dropUploadFolderId === parentId || (parentId === null && dropUploadFolderId === ROOT_DROP)) {
+        dropUploadFolderId = null;
+      }
+    });
+    upCard.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      upCard.classList.remove('drop');
+      if (dragFolderId) {
+        await fetch(`/api/folders/${dragFolderId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parentId })
+        });
+        dragFolderId = null;
+        loadFolders();
+        loadArchives();
+        return;
+      }
+      if (dragArchiveId) {
+        await fetch(`/api/archives/${dragArchiveId}/move`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderId: parentId })
+        });
+        dragArchiveId = null;
+        loadArchives();
+        return;
+      }
+      if (isFileDrag(e)) {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          await uploadFiles(files, parentId ?? null);
+        }
+        dropUploadFolderId = null;
+      }
+    });
+    gridView.appendChild(upCard);
+  }
+
+  const folders = sortFolders(renderFoldersInList());
+  for (const folder of folders) {
+    const card = document.createElement('div');
+    card.className = 'grid-card folder-row-item';
+    card.draggable = true;
+    card.addEventListener('dragstart', () => { dragFolderId = folder._id; });
+    card.addEventListener('dragend', () => { dragFolderId = null; });
+    card.addEventListener('click', () => {
+      currentFolderId = folder._id;
+      selectedItems.clear();
+      updateTitle();
+      loadFolders();
+      loadArchives();
+    });
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openFolderContextMenu(folder, e.clientX, e.clientY);
+    });
+    card.addEventListener('dragover', (e) => {
+      e.stopPropagation();
+      if (dragFolderId || dragArchiveId) {
+        e.preventDefault();
+        card.classList.add('drop');
+        return;
+      }
+      if (isFileDrag(e)) {
+        e.preventDefault();
+        card.classList.add('drop');
+        dropUploadFolderId = folder._id;
+      }
+    });
+    card.addEventListener('dragleave', () => {
+      card.classList.remove('drop');
+      if (dropUploadFolderId === folder._id) {
+        dropUploadFolderId = null;
+      }
+    });
+    card.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.remove('drop');
+      if (dragFolderId) {
+        if (dragFolderId === folder._id) {
+          dragFolderId = null;
+          return;
+        }
+        await fetch(`/api/folders/${dragFolderId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parentId: folder._id })
+        });
+        dragFolderId = null;
+        loadFolders();
+        loadArchives();
+        return;
+      }
+      if (dragArchiveId) {
+        await fetch(`/api/archives/${dragArchiveId}/move`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderId: folder._id })
+        });
+        dragArchiveId = null;
+        loadArchives();
+        return;
+      }
+      if (isFileDrag(e)) {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          await uploadFiles(files, folder._id);
+        }
+        dropUploadFolderId = null;
+      }
+    });
+
+    const content = document.createElement('div');
+    content.className = 'grid-card-content';
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon grid-folder-icon';
+    const name = document.createElement('div');
+    name.className = 'grid-name';
+    name.textContent = folder.name;
+    const meta = document.createElement('div');
+    meta.className = 'grid-meta';
+    meta.textContent = 'Folder';
+    content.appendChild(icon);
+    content.appendChild(name);
+    content.appendChild(meta);
+    card.appendChild(content);
+    gridView.appendChild(card);
+  }
+
+  const items = sortFileItems(filterItems(buildFileItems(archivesCache)));
+  lastRenderedItems = items;
+  for (const [index, item] of items.entries()) {
+    const a = item.archive;
+    const key = `${a._id}:${item.fileIndex}`;
+    const card = document.createElement('div');
+    card.className = 'grid-card';
+    card.dataset.archiveId = a._id;
+    card.dataset.fileIndex = String(item.fileIndex ?? 0);
+    if (selectedItems.has(key)) {
+      card.classList.add('row-selected');
+    }
+    card.draggable = currentView !== 'trash';
+    card.addEventListener('dragstart', () => { dragArchiveId = a._id; });
+    card.addEventListener('dragend', () => { dragArchiveId = null; });
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openFileContextMenu(item, e.clientX, e.clientY);
+    });
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('a,button,select')) return;
+      handleRowSelection(item, key, index, e);
+    });
+
+    const content = document.createElement('div');
+    content.className = 'grid-card-content';
+    const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+    if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 'grid-thumb-wrap';
+      const thumb = document.createElement('img');
+      thumb.className = 'grid-thumb';
+      thumb.alt = '';
+      thumb.loading = 'lazy';
+      thumb.src = `/api/archives/${a._id}/files/${item.fileIndex}/thumbnail`;
+      thumb.onerror = () => {
+        thumbFailureUntil.set(`${a._id}:${item.fileIndex}`, Date.now() + THUMB_RETRY_MS);
+        if (thumbWrap.parentElement) {
+          const fallback = createFileIconElement();
+          fallback.classList.add('grid-file-icon');
+          thumbWrap.replaceWith(fallback);
+        }
+      };
+      thumb.onload = () => {
+        thumbFailureUntil.delete(`${a._id}:${item.fileIndex}`);
+      };
+      thumbWrap.appendChild(thumb);
+      content.appendChild(thumbWrap);
+    } else {
+      const icon = createFileIconElement();
+      icon.classList.add('grid-file-icon');
+      content.appendChild(icon);
+    }
+
+    const name = document.createElement('div');
+    name.className = 'grid-name';
+    name.textContent = fileName;
+    content.appendChild(name);
+
+    if (item.isBundle) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'bundle';
+      content.appendChild(pill);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'grid-meta';
+    if (a.status === 'ready') {
+      meta.textContent = formatSize(item.file?.size ?? a.originalSize);
+    } else {
+      meta.textContent = `${discordProgress(a)} | ${a.status}`;
+    }
+    content.appendChild(meta);
+
+    const shares = listArchiveShares(a._id);
+    if (shares.length > 0) {
+      const shareBtn = createSharedIndicatorButton(() => {
+        openShareLinksModal(item);
+      });
+      shareBtn.classList.add('grid-share');
+      card.appendChild(shareBtn);
+    }
+
+    card.appendChild(content);
+    gridView.appendChild(card);
+  }
+}
+
 function updateSelectionUI() {
   const isFiles = currentView === 'files';
   downloadSelectedBtn.disabled = selectedItems.size === 0 || !isFiles;
@@ -1383,6 +1803,9 @@ function updateSelectionUI() {
 function updateViewVisibility() {
   uploadArea.classList.toggle('hidden', currentView !== 'files');
   folderPriorityWrap.style.display = currentView === 'files' && currentFolderId ? 'flex' : 'none';
+  if (viewModeSelect) {
+    viewModeSelect.disabled = currentView !== 'files';
+  }
 }
 
 function handleRowSelection(item, key, index, event) {
@@ -1647,6 +2070,9 @@ async function openFileContextMenu(item, x, y) {
   }
 
   items.push({ label: 'Share', onClick: async () => openShareModal({ type: 'archive', id: a._id, name: fileName }) });
+  if (listArchiveShares(a._id).length > 0) {
+    items.push({ label: 'Shared links', onClick: async () => openShareLinksModal(item) });
+  }
   items.push({ label: 'Rename', onClick: async () => {
     const nextName = prompt('New name', fileName);
     if (!nextName) return;
@@ -1820,9 +2246,16 @@ async function createShareLink() {
   shareResult.textContent = link;
   shareCopyBtn.dataset.link = link;
   shareCopyBtn.classList.remove('hidden');
+  if (currentView === 'files') {
+    await loadArchiveSharesMap();
+    renderArchives();
+  }
 }
 
 async function loadShared() {
+  listTable.classList.remove('hidden');
+  gridView.classList.add('hidden');
+  gridView.innerHTML = '';
   const res = await fetch('/api/shares?active=1');
   const data = await res.json();
   archiveList.innerHTML = '';
@@ -2124,6 +2557,13 @@ sortDirSelect?.addEventListener('change', () => {
   renderArchives();
 });
 
+viewModeSelect?.addEventListener('change', () => {
+  viewMode = normalizeViewMode(viewModeSelect.value);
+  localStorage.setItem('filesViewMode', viewMode);
+  updateUrl();
+  renderArchives();
+});
+
 infoClose.addEventListener('click', () => {
   infoModal.classList.add('hidden');
 });
@@ -2172,6 +2612,13 @@ shareModal.addEventListener('click', (e) => {
   }
 });
 
+shareLinksClose.addEventListener('click', () => closeShareLinksModal());
+shareLinksModal.addEventListener('click', (e) => {
+  if (e.target === shareLinksModal) {
+    closeShareLinksModal();
+  }
+});
+
 priorityCloseBtn.addEventListener('click', () => closePriorityModal());
 prioritySaveBtn.addEventListener('click', savePriority);
 priorityModal.addEventListener('click', (e) => {
@@ -2216,6 +2663,7 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   const params = new URLSearchParams(location.search);
   const view = params.get('view');
   const folder = params.get('folder');
+  const layout = params.get('layout');
   const search = params.get('search');
   const sort = params.get('sort');
   const dir = params.get('dir');
@@ -2224,6 +2672,9 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   }
   if (currentView === 'files' && folder) {
     currentFolderId = folder;
+  }
+  if (layout) {
+    viewMode = normalizeViewMode(layout);
   }
   if (search) {
     searchTerm = search;
@@ -2247,6 +2698,9 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   }
   if (sortDirSelect) {
     sortDirSelect.value = sortDir;
+  }
+  if (viewModeSelect) {
+    viewModeSelect.value = normalizeViewMode(viewMode);
   }
   setActiveNav();
   updateTitle();
