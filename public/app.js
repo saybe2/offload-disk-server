@@ -1778,7 +1778,7 @@ function renderArchivesGrid() {
   const folders = sortFolders(renderFoldersInList());
   for (const folder of folders) {
     const card = document.createElement('div');
-    card.className = 'grid-card folder-row-item';
+    card.className = 'grid-card grid-card-no-thumb folder-row-item';
     card.draggable = true;
     card.addEventListener('dragstart', () => { dragFolderId = folder._id; });
     card.addEventListener('dragend', () => { dragFolderId = null; });
@@ -1904,7 +1904,9 @@ function renderArchivesGrid() {
     const content = document.createElement('div');
     content.className = 'grid-card-content';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+    let hasThumbPreview = false;
     if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
+      hasThumbPreview = true;
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'grid-thumb-wrap';
       const thumb = document.createElement('img');
@@ -1930,6 +1932,7 @@ function renderArchivesGrid() {
       icon.classList.add('grid-file-icon');
       content.appendChild(icon);
     }
+    card.classList.add(hasThumbPreview ? 'grid-card-has-thumb' : 'grid-card-no-thumb');
 
     const name = document.createElement('div');
     name.className = 'grid-name';
