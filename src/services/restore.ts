@@ -24,14 +24,6 @@ function contentDisposition(filename: string) {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
-function createZipParser() {
-  const parser = unzipper.Parse();
-  parser.on("error", () => {
-    // Guard listener to avoid unhandled parser errors if a caller exits early.
-  });
-  return parser;
-}
-
 async function hashFile(filePath: string) {
   const hash = crypto.createHash("sha256");
   await new Promise<void>((resolve, reject) => {
@@ -72,65 +64,33 @@ async function waitDrainOrError(target: Writable) {
 }
 
 async function extractZipEntryToFile(
-  zipInput: PassThrough,
+  zipPath: string,
   entryName: string,
   targetFileIndex: number,
   outputPath: string
 ) {
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
-  const output = fs.createWriteStream(outputPath);
-  const parser = createZipParser();
-  let entryFound = false;
-  let fileOrdinal = -1;
-
-  const done = new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (err?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (err) {
-        output.destroy();
-        parser.destroy();
-        reject(err);
-        return;
-      }
-      resolve();
-    };
-
-    parser.on("entry", (entry: any) => {
-      const entryType = String(entry?.type || "");
-      const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
-      if (isDirectory) {
-        entry.autodrain();
-        return;
-      }
-      fileOrdinal += 1;
-      if (entryFound) {
-        entry.autodrain();
-        return;
-      }
-      if (entry.path === entryName || fileOrdinal === targetFileIndex) {
-        entryFound = true;
-        entry.on("error", (err: Error) => finish(err));
-        entry.pipe(output);
-        return;
-      }
-      entry.autodrain();
-    });
-
-    parser.on("error", (err: Error) => finish(err));
-    zipInput.on("error", (err: Error) => finish(err));
-    parser.on("close", () => {
-      if (!entryFound) {
-        finish(new Error("file_not_found"));
-      }
-    });
-    output.on("error", (err: Error) => finish(err));
-    output.on("finish", () => finish());
+  const directory = await unzipper.Open.file(zipPath);
+  const fileEntries = (directory.files || []).filter((entry: any) => {
+    const entryType = String(entry?.type || "");
+    return !(entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/"));
   });
-
-  zipInput.pipe(parser);
-  await done;
+  const byName = fileEntries.find((entry: any) => entry.path === entryName);
+  const byIndex = targetFileIndex >= 0 && targetFileIndex < fileEntries.length
+    ? fileEntries[targetFileIndex]
+    : null;
+  const target = byName || byIndex;
+  if (!target) {
+    throw new Error("file_not_found");
+  }
+  const input = await target.stream();
+  const output = fs.createWriteStream(outputPath);
+  await new Promise<void>((resolve, reject) => {
+    input.on("error", reject);
+    output.on("error", reject);
+    output.on("finish", resolve);
+    input.pipe(output);
+  });
 }
 
 async function downloadPartWithRepair(
@@ -485,73 +445,12 @@ export async function restoreArchiveFileToFile(
     throw new Error("file_not_found");
   }
 
-  if (archiveEncryptionVersion(archive) >= 2) {
-    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_${fileIndex}_v2`);
-    await fs.promises.mkdir(workDirV2, { recursive: true });
-    const key = deriveKey(masterKey);
-    const zipStream = new PassThrough();
-    const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), fileIndex, outputPath);
-
-    try {
-      const webhookCache = new Map<string, string>();
-      const parts = uniqueParts(archive.parts);
-      for (const part of parts) {
-        const partPath = path.join(workDirV2, `part_${part.index}`);
-        await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
-        const actualHash = await hashFile(partPath);
-        if (actualHash !== part.hash) {
-          throw new Error(`part_hash_mismatch:${part.index}`);
-        }
-        const plain = await decryptPartToBuffer(partPath, part as any, key);
-        await fs.promises.unlink(partPath).catch(() => undefined);
-        if (!zipStream.write(plain)) {
-          await waitDrainOrError(zipStream);
-        }
-      }
-
-      zipStream.end();
-      await entryDonePromise;
-    } catch (err) {
-      log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
-      throw err;
-    } finally {
-      await fs.promises.rm(workDirV2, { recursive: true, force: true });
-      endRestore();
-    }
-    return;
-  }
-
   const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_${fileIndex}`);
   await fs.promises.mkdir(workDir, { recursive: true });
-
-  const encryptedStream = new PassThrough();
-  const key = deriveKey(masterKey);
-  const iv = Buffer.from(archive.iv, "base64");
-  const authTag = Buffer.from(archive.authTag, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-
-  const zipStream = new PassThrough();
-  encryptedStream.pipe(decipher).pipe(zipStream);
-  const entryDonePromise = extractZipEntryToFile(zipStream, zipEntryName(file), fileIndex, outputPath);
-
+  const zipPath = path.join(workDir, "bundle.zip");
   try {
-    const webhookCache = new Map<string, string>();
-    const parts = uniqueParts(archive.parts);
-    for (const part of parts) {
-      const partPath = path.join(workDir, `part_${part.index}`);
-      await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
-
-      const actualHash = await hashFile(partPath);
-      if (actualHash !== part.hash) {
-        throw new Error(`part_hash_mismatch:${part.index}`);
-      }
-
-      await pipeFileToStream(partPath, encryptedStream);
-      await fs.promises.unlink(partPath);
-    }
-    encryptedStream.end();
-    await entryDonePromise;
+    await restoreArchiveToFileInternal(archive, zipPath, tempBaseDir, masterKey);
+    await extractZipEntryToFile(zipPath, zipEntryName(file), fileIndex, outputPath);
   } catch (err) {
     log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
     throw err;
@@ -574,224 +473,50 @@ export async function streamArchiveFileToResponse(
     endRestore();
     throw new Error("file_not_found");
   }
-
-  if (archiveEncryptionVersion(archive) >= 2) {
-    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_bundle_${fileIndex}_v2`);
-    await fs.promises.mkdir(workDirV2, { recursive: true });
-    const key = deriveKey(masterKey);
-    const zipStream = new PassThrough();
-    const downloadName = (file.originalName || file.name || "file").replace(/[\\/]/g, "_");
-    const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
-
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", contentDisposition(downloadName));
-    if (file.size) {
-      res.setHeader("Content-Length", file.size);
-    }
-
-    let entryFound = false;
-    let entryCompleted = false;
-    let fileOrdinal = -1;
-    const parser = createZipParser();
-    zipStream.on("error", () => {
-      if (entryCompleted || res.writableEnded || (res as any).destroyed) {
-        return;
-      }
-      log("restore", `bundle stream source error ${archive.id}`);
-      res.destroy();
-    });
-    parser.on("entry", (entry: any) => {
-      const entryType = String(entry?.type || "");
-      const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
-      if (isDirectory) {
-        entry.autodrain();
-        return;
-      }
-      fileOrdinal += 1;
-      if (entryFound) {
-        entry.autodrain();
-        return;
-      }
-      if (entry.path === zipEntryName(file) || fileOrdinal === fileIndex) {
-        entryFound = true;
-        entry.on("error", () => res.destroy());
-        entry.on("end", () => {
-          entryCompleted = true;
-          if (!res.writableEnded) {
-            res.end();
-          }
-          zipStream.destroy();
-          parser.destroy();
-        });
-        entry.pipe(res);
-        return;
-      }
-      entry.autodrain();
-    });
-    parser.on("error", () => {
-      if (entryCompleted || res.writableEnded || (res as any).destroyed) {
-        return;
-      }
-      log("restore", `bundle stream parse error ${archive.id}`);
-      res.destroy();
-    });
-    parser.on("close", () => {
-      if (!entryFound && !res.headersSent) {
-        res.status(404).end();
-      }
-    });
-    zipStream.pipe(parser);
-
-    let aborted = false;
-    res.on("close", () => {
-      aborted = true;
-      zipStream.destroy();
-      parser.destroy();
-    });
-
-    try {
-      const webhookCache = new Map<string, string>();
-      const parts = uniqueParts(archive.parts);
-      for (const part of parts) {
-        if (aborted) break;
-        const partPath = path.join(workDirV2, `part_${part.index}`);
-        await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
-        const actualHash = await hashFile(partPath);
-        if (actualHash !== part.hash) {
-          throw new Error(`part_hash_mismatch:${part.index}`);
-        }
-        const plain = await decryptPartToBuffer(partPath, part as any, key);
-        await fs.promises.unlink(partPath).catch(() => undefined);
-        if (!zipStream.write(plain)) {
-          await waitDrainOrError(zipStream);
-        }
-      }
-      if (!aborted) {
-        zipStream.end();
-      }
-    } catch (err) {
-      log("restore", `bundle stream failed ${archive.id} ${(err as Error).message}`);
-      res.destroy();
-    } finally {
-      await fs.promises.rm(workDirV2, { recursive: true, force: true });
-      endRestore();
-    }
-    return;
-  }
-
   const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_bundle_${fileIndex}`);
   await fs.promises.mkdir(workDir, { recursive: true });
-
-  const encryptedStream = new PassThrough();
-  const key = deriveKey(masterKey);
-  const iv = Buffer.from(archive.iv, "base64");
-  const authTag = Buffer.from(archive.authTag, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-  decipher.on("error", () => {
-    res.destroy();
-  });
-
+  const zipPath = path.join(workDir, "bundle.zip");
+  const restoredPath = path.join(workDir, "file");
   const downloadName = (file.originalName || file.name || "file").replace(/[\\/]/g, "_");
   const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
-
-  res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", contentDisposition(downloadName));
-  if (file.size) {
-    res.setHeader("Content-Length", file.size);
-  }
-
-  let entryFound = false;
-  let entryCompleted = false;
-  let fileOrdinal = -1;
-  decipher.removeAllListeners("error");
-  decipher.on("error", () => {
-    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
-      return;
-    }
-    res.destroy();
-  });
-
-  const parser = createZipParser();
-  encryptedStream.on("error", () => {
-    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
-      return;
-    }
-    log("restore", `bundle stream source error ${archive.id}`);
-    res.destroy();
-  });
-  parser.on("entry", (entry: any) => {
-    const entryType = String(entry?.type || "");
-    const isDirectory = entryType.toLowerCase() === "directory" || String(entry?.path || "").endsWith("/");
-    if (isDirectory) {
-      entry.autodrain();
-      return;
-    }
-    fileOrdinal += 1;
-    if (entryFound) {
-      entry.autodrain();
-      return;
-    }
-    if (entry.path === zipEntryName(file) || fileOrdinal === fileIndex) {
-      entryFound = true;
-      entry.on("error", () => res.destroy());
-      entry.on("end", () => {
-        entryCompleted = true;
-        if (!res.writableEnded) {
-          res.end();
-        }
-        encryptedStream.destroy();
-        parser.destroy();
-      });
-      entry.pipe(res);
-      return;
-    }
-    entry.autodrain();
-  });
-  parser.on("error", () => {
-    if (entryCompleted || res.writableEnded || (res as any).destroyed) {
-      return;
-    }
-    log("restore", `bundle stream parse error ${archive.id}`);
-    res.destroy();
-  });
-  parser.on("close", () => {
-    if (!entryFound && !res.headersSent) {
-      res.status(404).end();
-    }
-  });
-
-  encryptedStream.pipe(decipher).pipe(parser);
 
   let aborted = false;
   res.on("close", () => {
     aborted = true;
-    encryptedStream.destroy();
-    parser.destroy();
   });
 
   try {
-    const webhookCache = new Map<string, string>();
-    const parts = uniqueParts(archive.parts);
-    for (const part of parts) {
-      if (aborted) break;
-      const partPath = path.join(workDir, `part_${part.index}`);
-      await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
+    await restoreArchiveToFileInternal(archive, zipPath, tempBaseDir, masterKey);
+    if (aborted) {
+      return;
+    }
+    await extractZipEntryToFile(zipPath, zipEntryName(file), fileIndex, restoredPath);
+    const stat = await fs.promises.stat(restoredPath);
 
-      const actualHash = await hashFile(partPath);
-      if (actualHash !== part.hash) {
-        throw new Error(`part_hash_mismatch:${part.index}`);
-      }
-
-      await pipeFileToStream(partPath, encryptedStream);
-      await fs.promises.unlink(partPath);
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Disposition", contentDisposition(downloadName));
+      res.setHeader("Content-Length", stat.size);
     }
 
-    if (!aborted) {
-      encryptedStream.end();
-    }
+    await new Promise<void>((resolve, reject) => {
+      const rs = fs.createReadStream(restoredPath);
+      rs.on("error", reject);
+      res.on("error", reject);
+      rs.on("end", resolve);
+      rs.pipe(res);
+    });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "file_not_found" && !res.headersSent) {
+      res.status(404).json({ error: "file_not_found" });
+      return;
+    }
     log("restore", `bundle stream failed ${archive.id} ${(err as Error).message}`);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "restore_failed" });
+      return;
+    }
     res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
