@@ -122,8 +122,8 @@ th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 .grid-share { position: absolute; right: 8px; bottom: 8px; z-index: 2; }
 .grid-view.mode-tile .grid-card-no-thumb .grid-share { right: 17px; bottom: 68px; }
 .grid-view.mode-large .grid-card-no-thumb .grid-share { right: 49px; bottom: 68px; }
-.grid-view.mode-tile .grid-card-has-thumb .grid-share { right: 10px; bottom: 76px; }
-.grid-view.mode-large .grid-card-has-thumb .grid-share { right: 10px; bottom: 90px; }
+.grid-view.mode-tile .grid-card-has-thumb .grid-share { right: -3px; bottom: 95px; }
+.grid-view.mode-large .grid-card-has-thumb .grid-share { right: -3px; bottom: 95px; }
 .grid-up { border-style: dashed; border-color: #2b3240; }
 
 input[type=\"search\"] { min-width: 180px; }
