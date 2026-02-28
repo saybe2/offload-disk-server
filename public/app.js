@@ -1705,12 +1705,18 @@ function renderArchivesGrid() {
     upCard.className = 'grid-card grid-up folder-row-item';
     const upContent = document.createElement('div');
     upContent.className = 'grid-card-content';
+    const upMedia = document.createElement('div');
+    upMedia.className = 'grid-media no-thumb';
+    const upIconWrap = document.createElement('div');
+    upIconWrap.className = 'grid-icon-wrap';
     const upIcon = document.createElement('span');
     upIcon.className = 'folder-icon grid-folder-icon';
     const upName = document.createElement('div');
     upName.className = 'grid-name';
     upName.textContent = '..';
-    upContent.appendChild(upIcon);
+    upIconWrap.appendChild(upIcon);
+    upMedia.appendChild(upIconWrap);
+    upContent.appendChild(upMedia);
     upContent.appendChild(upName);
     upCard.appendChild(upContent);
     upCard.addEventListener('click', () => {
