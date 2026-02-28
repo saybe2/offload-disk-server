@@ -1778,7 +1778,7 @@ function renderArchivesGrid() {
   const folders = sortFolders(renderFoldersInList());
   for (const folder of folders) {
     const card = document.createElement('div');
-    card.className = 'grid-card grid-card-no-thumb folder-row-item';
+    card.className = 'grid-card folder-row-item';
     card.draggable = true;
     card.addEventListener('dragstart', () => { dragFolderId = folder._id; });
     card.addEventListener('dragend', () => { dragFolderId = null; });
@@ -1852,6 +1852,8 @@ function renderArchivesGrid() {
 
     const content = document.createElement('div');
     content.className = 'grid-card-content';
+    const media = document.createElement('div');
+    media.className = 'grid-media';
     const icon = document.createElement('span');
     icon.className = 'folder-icon grid-folder-icon';
     const name = document.createElement('div');
@@ -1860,7 +1862,8 @@ function renderArchivesGrid() {
     const meta = document.createElement('div');
     meta.className = 'grid-meta';
     meta.textContent = 'Folder';
-    content.appendChild(icon);
+    media.appendChild(icon);
+    content.appendChild(media);
     content.appendChild(name);
     content.appendChild(meta);
 
@@ -1869,8 +1872,8 @@ function renderArchivesGrid() {
       const shareBtn = createSharedIndicatorButton(() => {
         openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
       });
-      shareBtn.classList.add('grid-share', 'grid-share-folder');
-      card.appendChild(shareBtn);
+      shareBtn.classList.add('grid-share');
+      media.appendChild(shareBtn);
     }
 
     card.appendChild(content);
@@ -1903,12 +1906,10 @@ function renderArchivesGrid() {
 
     const content = document.createElement('div');
     content.className = 'grid-card-content';
+    const media = document.createElement('div');
+    media.className = 'grid-media';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
-    let hasThumbPreview = false;
     if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
-      hasThumbPreview = true;
-      const thumbWrap = document.createElement('div');
-      thumbWrap.className = 'grid-thumb-wrap';
       const thumb = document.createElement('img');
       thumb.className = 'grid-thumb';
       thumb.alt = '';
@@ -1916,23 +1917,23 @@ function renderArchivesGrid() {
       thumb.src = `/api/archives/${a._id}/files/${item.fileIndex}/thumbnail`;
       thumb.onerror = () => {
         thumbFailureUntil.set(`${a._id}:${item.fileIndex}`, Date.now() + THUMB_RETRY_MS);
-        if (thumbWrap.parentElement) {
+        if (media.parentElement) {
           const fallback = createFileIconElement();
           fallback.classList.add('grid-file-icon');
-          thumbWrap.replaceWith(fallback);
+          media.innerHTML = '';
+          media.appendChild(fallback);
         }
       };
       thumb.onload = () => {
         thumbFailureUntil.delete(`${a._id}:${item.fileIndex}`);
       };
-      thumbWrap.appendChild(thumb);
-      content.appendChild(thumbWrap);
+      media.appendChild(thumb);
     } else {
       const icon = createFileIconElement();
       icon.classList.add('grid-file-icon');
-      content.appendChild(icon);
+      media.appendChild(icon);
     }
-    card.classList.add(hasThumbPreview ? 'grid-card-has-thumb' : 'grid-card-no-thumb');
+    content.appendChild(media);
 
     const name = document.createElement('div');
     name.className = 'grid-name';
@@ -1960,8 +1961,8 @@ function renderArchivesGrid() {
       const shareBtn = createSharedIndicatorButton(() => {
         openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
       });
-      shareBtn.classList.add('grid-share', hasThumbPreview ? 'grid-share-thumb' : 'grid-share-plain');
-      card.appendChild(shareBtn);
+      shareBtn.classList.add('grid-share');
+      media.appendChild(shareBtn);
     }
 
     card.appendChild(content);
