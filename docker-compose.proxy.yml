@@ -1,0 +1,41 @@
+services:
+  offload:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: offload
+    user: "0:0"
+    restart: unless-stopped
+    depends_on:
+      - xray
+    command: >
+      bash -lc "chmod +x tools/start_container.sh && tools/start_container.sh"
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-3010}
+      SMB_ENABLED: ${SMB_ENABLED:-true}
+      SMB_PORT: ${SMB_PORT:-445}
+      SMB_SHARE_NAME: ${SMB_SHARE_NAME:-offload}
+      OUTBOUND_PROXY_ENABLED: ${OUTBOUND_PROXY_ENABLED:-true}
+      OUTBOUND_PROXY_URL: ${OUTBOUND_PROXY_URL:-http://xray:10808}
+    ports:
+      - "3010:3010"
+      - "445:445"
+    volumes:
+      - ./:/home/container
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+      - NET_BIND_SERVICE
+    security_opt:
+      - apparmor:unconfined
+
+  xray:
+    image: teddysun/xray:latest
+    container_name: offload-xray
+    restart: unless-stopped
+    command: ["/usr/bin/xray", "-config", "/etc/xray/config.json"]
+    volumes:
+      - ./deploy/xray/config.json:/etc/xray/config.json:ro
