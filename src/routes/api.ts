@@ -47,7 +47,7 @@ import {
   resolvePreviewContentType
 } from "../services/preview.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
-import { fetch } from "undici";
+import { outboundFetch } from "../services/outbound.js";
 
 const upload = multer({
   dest: path.join(config.cacheDir, "uploads_tmp"),
@@ -1433,11 +1433,11 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
   }
 
   const fetchWithRetry = async () => {
-    let response = await fetch(part.url);
+    let response = await outboundFetch(part.url);
     if (response.status === 404) {
       try {
         await refreshPartUrl(archive.id, part);
-        response = await fetch(part.url);
+        response = await outboundFetch(part.url);
       } catch {
         // fall through with original response
       }

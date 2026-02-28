@@ -8,6 +8,25 @@ const toNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const toList = (value: string | undefined, fallback: string[]) => {
+  if (!value || !value.trim()) return fallback;
+  return value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const defaultProxyTargets = [
+  "discord.com",
+  "discordapp.com",
+  "discordapp.net",
+  "discordcdn.com",
+  "telegram.org",
+  "t.me",
+  "telegra.ph",
+  "telegram-cdn.org"
+];
+
 export const config = {
   port: toNumber(process.env.PORT, 3000),
   mongoUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017",
@@ -49,6 +68,10 @@ export const config = {
   uiRefreshMs: toNumber(process.env.UI_REFRESH_MS, 5000),
   uiEtaWindowMs: toNumber(process.env.UI_ETA_WINDOW_MS, 120000),
   uiEtaMaxSamples: toNumber(process.env.UI_ETA_MAX_SAMPLES, 30),
+  outboundProxyEnabled: (process.env.OUTBOUND_PROXY_ENABLED || "false") === "true",
+  outboundProxyUrl: (process.env.OUTBOUND_PROXY_URL || "").trim(),
+  outboundProxyTargets: toList(process.env.OUTBOUND_PROXY_TARGETS, defaultProxyTargets),
+  outboundProxyLogMatches: (process.env.OUTBOUND_PROXY_LOG_MATCHES || "false") === "true",
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
   smbShareName: process.env.SMB_SHARE_NAME || "offload",

@@ -21,6 +21,7 @@ import { uniqueParts } from "./services/parts.js";
 import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
+import { getOutboundProxyStatus } from "./services/outbound.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -236,6 +237,20 @@ async function main() {
   startThumbnailWorker();
   startFuse();
   startCacheCleanup();
+
+  const proxyStatus = getOutboundProxyStatus();
+  if (proxyStatus.enabled) {
+    if (proxyStatus.active) {
+      log(
+        "proxy",
+        `enabled url=${proxyStatus.proxyUrl} targets=${proxyStatus.targets.join(",")}`
+      );
+    } else {
+      log("proxy", "enabled but inactive (OUTBOUND_PROXY_URL is empty)");
+    }
+  } else {
+    log("proxy", "disabled");
+  }
 
   app.listen(config.port, () => {
     log("server", `listening on ${config.port}`);
