@@ -1869,7 +1869,7 @@ function renderArchivesGrid() {
       const shareBtn = createSharedIndicatorButton(() => {
         openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
       });
-      shareBtn.classList.add('grid-share');
+      shareBtn.classList.add('grid-share', 'grid-share-folder');
       card.appendChild(shareBtn);
     }
 
@@ -1960,7 +1960,7 @@ function renderArchivesGrid() {
       const shareBtn = createSharedIndicatorButton(() => {
         openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
       });
-      shareBtn.classList.add('grid-share');
+      shareBtn.classList.add('grid-share', hasThumbPreview ? 'grid-share-thumb' : 'grid-share-plain');
       card.appendChild(shareBtn);
     }
 
