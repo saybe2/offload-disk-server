@@ -1854,6 +1854,8 @@ function renderArchivesGrid() {
     content.className = 'grid-card-content';
     const media = document.createElement('div');
     media.className = 'grid-media no-thumb';
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'grid-icon-wrap';
     const icon = document.createElement('span');
     icon.className = 'folder-icon grid-folder-icon';
     const name = document.createElement('div');
@@ -1862,7 +1864,8 @@ function renderArchivesGrid() {
     const meta = document.createElement('div');
     meta.className = 'grid-meta';
     meta.textContent = 'Folder';
-    media.appendChild(icon);
+    iconWrap.appendChild(icon);
+    media.appendChild(iconWrap);
     content.appendChild(media);
     content.appendChild(name);
     content.appendChild(meta);
@@ -1873,7 +1876,7 @@ function renderArchivesGrid() {
         openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
       });
       shareBtn.classList.add('grid-share');
-      media.appendChild(shareBtn);
+      iconWrap.appendChild(shareBtn);
     }
 
     card.appendChild(content);
@@ -1908,8 +1911,12 @@ function renderArchivesGrid() {
     content.className = 'grid-card-content';
     const media = document.createElement('div');
     media.className = 'grid-media';
+    const iconWrap = document.createElement('div');
+    iconWrap.className = 'grid-icon-wrap';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+    let hasThumbPreview = false;
     if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
+      hasThumbPreview = true;
       media.classList.add('has-thumb');
       media.classList.remove('no-thumb');
       const thumbFrame = document.createElement('div');
@@ -1939,7 +1946,8 @@ function renderArchivesGrid() {
       media.classList.add('no-thumb');
       const icon = createFileIconElement();
       icon.classList.add('grid-file-icon');
-      media.appendChild(icon);
+      iconWrap.appendChild(icon);
+      media.appendChild(iconWrap);
     }
     content.appendChild(media);
 
@@ -1970,7 +1978,11 @@ function renderArchivesGrid() {
         openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
       });
       shareBtn.classList.add('grid-share');
-      media.appendChild(shareBtn);
+      if (hasThumbPreview) {
+        media.appendChild(shareBtn);
+      } else {
+        iconWrap.appendChild(shareBtn);
+      }
     }
 
     card.appendChild(content);
