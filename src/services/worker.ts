@@ -6,9 +6,9 @@ import { Archive } from "../models/Archive.js";
 import { User } from "../models/User.js";
 import { Webhook } from "../models/Webhook.js";
 import { config, computed } from "../config.js";
-import { createZip, splitFileIntoParts } from "./archive.js";
-import { deriveKey, encryptFile } from "./crypto.js";
-import { deleteWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "./discord.js";
+import { createZip } from "./archive.js";
+import { deriveKey } from "./crypto.js";
+import { deleteWebhookMessage, uploadBufferToWebhook } from "./discord.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
 
@@ -44,13 +44,6 @@ function isTransientError(err: unknown) {
     if (code >= 500 && code <= 599) return true;
   }
   return false;
-}
-
-async function uploadWithRetry(partPath: string, webhookUrl: string, content: string) {
-  return withRetry(
-    () => uploadToWebhook(partPath, webhookUrl, content),
-    "upload"
-  );
 }
 
 async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
@@ -170,9 +163,6 @@ async function processNextArchive() {
 
   const workDir = path.join(config.cacheDir, "work", archive.id);
   const zipPath = path.join(workDir, "archive.zip");
-  const encPath = path.join(workDir, "archive.enc");
-  const partsDir = path.join(workDir, "parts");
-
   try {
     await fs.promises.mkdir(workDir, { recursive: true });
     let inputPath = zipPath;
@@ -190,178 +180,153 @@ async function processNextArchive() {
       }
       inputPath = archive.files[0].path;
     }
-
-    const encryptionVersion = archive.encryptionVersion || 1;
-    if (encryptionVersion >= 2) {
-      const webhooks = await Webhook.find({ enabled: true });
-      if (webhooks.length === 0) {
-        throw new Error("no_webhooks_configured");
-      }
-      const uploadedParts = uniqueParts(archive.parts || []);
-      const uploadedIndex = new Set(uploadedParts.map((p) => p.index));
-      const completedFromParts = uploadedParts.length;
-      if (!archive.uploadedParts || archive.uploadedParts < completedFromParts) {
-        archive.uploadedParts = completedFromParts;
-      }
-      if (!archive.uploadedBytes || archive.uploadedBytes === 0) {
-        archive.uploadedBytes = uploadedParts.reduce((sum, p) => sum + (p.size || 0), 0);
-      }
-
-      const key = deriveKey(config.masterKey);
-      const rs = fs.createReadStream(inputPath, { highWaterMark: computed.chunkSizeBytes });
-      let partIndex = 0;
-      let totalEncryptedSize = 0;
-      let uploadedNow = archive.uploadedParts || 0;
-      let uploadedBytesNow = archive.uploadedBytes || 0;
-      const estimatedTotalParts = Math.max(
-        uploadedNow + 1,
-        Math.ceil((archive.originalSize || 0) / computed.chunkSizeBytes)
-      );
-
-      for await (const chunk of rs) {
-        const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        totalEncryptedSize += plainChunk.length;
-
-        if (uploadedIndex.has(partIndex)) {
-          partIndex += 1;
-          continue;
-        }
-
-        const iv = crypto.randomBytes(12);
-        const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-        const encrypted = Buffer.concat([cipher.update(plainChunk), cipher.final()]);
-        const authTag = cipher.getAuthTag();
-        const hash = crypto.createHash("sha256").update(encrypted).digest("hex");
-        const webhook = webhooks[partIndex % webhooks.length];
-        const content = `archive:${archive.id} part:${partIndex}`;
-        const result = await uploadBufferWithRetry(encrypted, `part_${partIndex}`, webhook.url, content);
-
-        const partDoc = {
-          index: partIndex,
-          size: encrypted.length,
-          plainSize: plainChunk.length,
-          hash,
-          url: result.url,
-          messageId: result.messageId,
-          webhookId: webhook.id,
-          iv: iv.toString("base64"),
-          authTag: authTag.toString("base64")
-        };
-        await Archive.updateOne(
-          { _id: archive.id },
-          { $push: { parts: partDoc }, $inc: { uploadedBytes: encrypted.length, uploadedParts: 1 } }
-        );
-        uploadedNow += 1;
-        uploadedBytesNow += encrypted.length;
-        if (uploadedNow % 10 === 0) {
-          const totalHint = archive.totalParts && archive.totalParts > 0 ? archive.totalParts : estimatedTotalParts;
-          const pct = totalHint > 0 ? Math.min(99, Math.floor((uploadedNow / totalHint) * 100)) : 0;
-          log(`progress ${archive.id} ${uploadedNow}/${totalHint} (${pct}%)`);
-        }
-        partIndex += 1;
-      }
-
-      archive.encryptedSize = totalEncryptedSize;
-      archive.totalParts = partIndex;
-      archive.iv = "";
-      archive.authTag = "";
-      archive.encryptionVersion = 2;
-      await archive.save();
-
-      await generateLocalThumbnails(archive);
-      await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
-      log(`ready ${archive.id}`);
-
-      if (config.cacheDeleteAfterUpload) {
-        await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
-        await fs.promises.rm(workDir, { recursive: true, force: true });
-      }
-
-      if (disk.mode === "soft") {
-        await new Promise((r) => setTimeout(r, config.workerPollMs));
-      }
-      return;
-    }
-
-    if (!fs.existsSync(encPath) || !archive.iv || !archive.authTag) {
-      const done = startStage(archive.id, "encrypt");
-      const key = deriveKey(config.masterKey);
-      const encMeta = await encryptFile(inputPath, encPath, key);
-      archive.iv = encMeta.iv;
-      archive.authTag = encMeta.authTag;
-      done();
-      if (config.deleteStagingAfterEncrypt && inputPath === archive.files[0]?.path) {
-        await fs.promises.unlink(inputPath).catch(() => undefined);
-        const stagingDir = archive.stagingDir;
-        if (stagingDir) {
-          const entries = await fs.promises.readdir(stagingDir).catch(() => []);
-          if (entries.length === 0) {
-            await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-          }
-        }
-      }
-    } else {
-      log(`stage ${archive.id} encrypt reuse`);
-    }
-
-    const splitDone = startStage(archive.id, "split");
-    const parts = await splitFileIntoParts(encPath, computed.chunkSizeBytes, partsDir);
-    splitDone();
-    const encStats = await fs.promises.stat(encPath);
-
-    archive.encryptedSize = encStats.size;
-    archive.totalParts = parts.length;
-    if (!archive.uploadedBytes) archive.uploadedBytes = 0;
-    if (!archive.uploadedParts) archive.uploadedParts = 0;
-    if (archive.parts && archive.parts.length > 0 && archive.uploadedParts === 0) {
-      archive.uploadedParts = archive.parts.length;
-      archive.uploadedBytes = archive.parts.reduce((sum, p) => sum + p.size, 0);
-    }
-    await archive.save();
-
     const webhooks = await Webhook.find({ enabled: true });
     if (webhooks.length === 0) {
       throw new Error("no_webhooks_configured");
     }
 
-    const uploadedParts = archive.parts || [];
+    const uploadedParts = uniqueParts(archive.parts || []);
     const uploadedIndex = new Set(uploadedParts.map((p) => p.index));
-    const pendingParts = parts.filter((p) => !uploadedIndex.has(p.index));
-    const totalParts = archive.totalParts;
-    let completed = archive.uploadedParts || uploadedParts.length;
+    const completedFromParts = uploadedParts.length;
+    if (!archive.uploadedParts || archive.uploadedParts < completedFromParts) {
+      archive.uploadedParts = completedFromParts;
+    }
+    if (!archive.uploadedBytes || archive.uploadedBytes === 0) {
+      archive.uploadedBytes = uploadedParts.reduce((sum, p) => sum + (p.size || 0), 0);
+    }
 
+    const key = deriveKey(config.masterKey);
+    const rs = fs.createReadStream(inputPath, { highWaterMark: computed.chunkSizeBytes });
     const concurrency = Math.max(1, Math.min(config.uploadPartsConcurrency, webhooks.length));
-    log(`upload ${archive.id} parts=${pendingParts.length}/${totalParts} concurrency=${concurrency}`);
+    const maxPending = Math.max(10, concurrency * 3);
+    let partIndex = 0;
+    let totalEncryptedSize = 0;
+    let uploadedNow = archive.uploadedParts || 0;
+    const estimatedTotalParts = Math.max(
+      uploadedNow + 1,
+      Math.ceil((archive.originalSize || 0) / computed.chunkSizeBytes)
+    );
 
-    const workers = Array.from({ length: concurrency }, () => (async () => {
-      while (true) {
-        const part = pendingParts.shift();
-        if (!part) return;
+    type PendingPart = {
+      index: number;
+      encrypted: Buffer;
+      plainSize: number;
+      hash: string;
+      iv: string;
+      authTag: string;
+    };
 
-        const webhook = webhooks[part.index % webhooks.length];
-        const content = `archive:${archive.id} part:${part.index}`;
-        const result = await uploadWithRetry(part.path, webhook.url, content);
-        const partDoc = {
-          index: part.index,
-          size: part.size,
-          hash: part.hash,
-          url: result.url,
-          messageId: result.messageId,
-          webhookId: webhook.id
-        };
-        await Archive.updateOne(
-          { _id: archive.id },
-          { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } }
-        );
-        completed += 1;
-        if (completed % 10 === 0 || completed === totalParts) {
-          const pct = totalParts > 0 ? Math.floor((completed / totalParts) * 100) : 0;
-          log(`progress ${archive.id} ${completed}/${totalParts} (${pct}%)`);
-        }
+    const pending: PendingPart[] = [];
+    let activeUploads = 0;
+    let finishedAdding = false;
+    let uploadFailed: Error | null = null;
+    let resolveUploadDone: (() => void) | null = null;
+    const uploadDone = new Promise<void>((resolve) => {
+      resolveUploadDone = resolve;
+    });
+
+    const maybeFinish = () => {
+      if (finishedAdding && activeUploads === 0 && pending.length === 0 && resolveUploadDone) {
+        resolveUploadDone();
       }
-    })());
+    };
 
-    await Promise.all(workers);
+    const spawnUploadWorkers = () => {
+      while (!uploadFailed && activeUploads < concurrency && pending.length > 0) {
+        const part = pending.shift();
+        if (!part) break;
+        activeUploads += 1;
+        (async () => {
+          try {
+            const webhook = webhooks[part.index % webhooks.length];
+            const content = `archive:${archive.id} part:${part.index}`;
+            const result = await uploadBufferWithRetry(part.encrypted, `part_${part.index}`, webhook.url, content);
+            const partDoc = {
+              index: part.index,
+              size: part.encrypted.length,
+              plainSize: part.plainSize,
+              hash: part.hash,
+              url: result.url,
+              messageId: result.messageId,
+              webhookId: webhook.id,
+              iv: part.iv,
+              authTag: part.authTag
+            };
+            await Archive.updateOne(
+              { _id: archive.id },
+              { $push: { parts: partDoc }, $inc: { uploadedBytes: part.encrypted.length, uploadedParts: 1 } }
+            );
+            uploadedNow += 1;
+            if (uploadedNow % 10 === 0) {
+              const totalHint = archive.totalParts && archive.totalParts > 0 ? archive.totalParts : estimatedTotalParts;
+              const pct = totalHint > 0 ? Math.min(99, Math.floor((uploadedNow / totalHint) * 100)) : 0;
+              log(`progress ${archive.id} ${uploadedNow}/${totalHint} (${pct}%)`);
+            }
+          } catch (err) {
+            const asError = err instanceof Error ? err : new Error(String(err));
+            if (!uploadFailed) {
+              uploadFailed = asError;
+              log(`upload error ${archive.id} ${asError.message}`);
+            }
+          } finally {
+            activeUploads -= 1;
+            if (!uploadFailed) {
+              spawnUploadWorkers();
+            }
+            maybeFinish();
+          }
+        })();
+      }
+    };
+
+    log(`upload ${archive.id} parts=stream/${estimatedTotalParts} concurrency=${concurrency}`);
+
+    for await (const chunk of rs) {
+      if (uploadFailed) {
+        break;
+      }
+      const plainChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalEncryptedSize += plainChunk.length;
+
+      if (uploadedIndex.has(partIndex)) {
+        partIndex += 1;
+        continue;
+      }
+
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+      const encrypted = Buffer.concat([cipher.update(plainChunk), cipher.final()]);
+      const authTag = cipher.getAuthTag();
+      const hash = crypto.createHash("sha256").update(encrypted).digest("hex");
+      pending.push({
+        index: partIndex,
+        encrypted,
+        plainSize: plainChunk.length,
+        hash,
+        iv: iv.toString("base64"),
+        authTag: authTag.toString("base64")
+      });
+      partIndex += 1;
+      spawnUploadWorkers();
+      while (!uploadFailed && pending.length >= maxPending) {
+        await sleep(20);
+      }
+    }
+
+    finishedAdding = true;
+    spawnUploadWorkers();
+    maybeFinish();
+    await uploadDone;
+    if (uploadFailed) {
+      throw uploadFailed;
+    }
+
+    archive.encryptedSize = totalEncryptedSize;
+    archive.totalParts = partIndex;
+    archive.iv = "";
+    archive.authTag = "";
+    archive.encryptionVersion = 2;
+    await archive.save();
 
     await generateLocalThumbnails(archive);
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
