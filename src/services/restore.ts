@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { PassThrough, Writable } from "stream";
+import { Writable } from "stream";
 import type { Response } from "express";
 import mime from "mime-types";
 import unzipper from "unzipper";
@@ -33,15 +33,6 @@ async function hashFile(filePath: string) {
     rs.on("end", () => resolve());
   });
   return hash.digest("hex");
-}
-
-async function pipeFileToStream(filePath: string, target: PassThrough) {
-  await new Promise<void>((resolve, reject) => {
-    const rs = fs.createReadStream(filePath);
-    rs.on("error", reject);
-    rs.on("end", () => resolve());
-    rs.pipe(target, { end: false });
-  });
 }
 
 async function waitDrainOrError(target: Writable) {
@@ -130,10 +121,6 @@ async function downloadPartWithRepair(
   }
 }
 
-function archiveEncryptionVersion(archive: ArchiveDoc | any) {
-  return archive.encryptionVersion || 1;
-}
-
 function resolveSingleFileSize(archive: ArchiveDoc | any) {
   if (archive.isBundle) {
     return 0;
@@ -145,11 +132,8 @@ function resolveSingleFileSize(archive: ArchiveDoc | any) {
   if ((archive.originalSize || 0) > 0) {
     return archive.originalSize;
   }
-  if (archiveEncryptionVersion(archive) >= 2) {
-    const parts = uniqueParts(archive.parts || []);
-    return parts.reduce((sum, part) => sum + (part.plainSize || part.size || 0), 0);
-  }
-  return 0;
+  const parts = uniqueParts(archive.parts || []);
+  return parts.reduce((sum, part) => sum + (part.plainSize || part.size || 0), 0);
 }
 
 function makeRestoreWorkDir(tempBaseDir: string, key: string) {
@@ -251,7 +235,7 @@ export async function streamArchiveRangeToResponse(
   tempBaseDir: string,
   masterKey: string
 ) {
-  if (archiveEncryptionVersion(archive) < 2 || archive.isBundle) {
+  if (archive.isBundle) {
     throw new Error("range_not_supported");
   }
 
@@ -352,56 +336,10 @@ async function restoreArchiveToFileInternal(
   tempBaseDir: string,
   masterKey: string
 ) {
-  if (archiveEncryptionVersion(archive) >= 2) {
-    const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_v2`);
-    await fs.promises.mkdir(workDir, { recursive: true });
-    const output = fs.createWriteStream(outputPath);
-    const key = deriveKey(masterKey);
-    try {
-      const webhookCache = new Map<string, string>();
-      const parts = uniqueParts(archive.parts);
-      for (const part of parts) {
-        const partPath = path.join(workDir, `part_${part.index}`);
-        await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
-
-        const actualHash = await hashFile(partPath);
-        if (actualHash !== part.hash) {
-          throw new Error(`part_hash_mismatch:${part.index}`);
-        }
-
-        const plain = await decryptPartToBuffer(partPath, part as any, key);
-        await fs.promises.unlink(partPath).catch(() => undefined);
-        if (!output.write(plain)) {
-          await waitDrainOrError(output);
-        }
-      }
-      await new Promise<void>((resolve, reject) => {
-        output.on("finish", resolve);
-        output.on("error", reject);
-        output.end();
-      });
-    } catch (err) {
-      log("restore", `file restore failed ${archive.id} ${(err as Error).message}`);
-      throw err;
-    } finally {
-      await fs.promises.rm(workDir, { recursive: true, force: true });
-    }
-    return;
-  }
-
-  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file`);
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_file_v2`);
   await fs.promises.mkdir(workDir, { recursive: true });
-
-  const encryptedStream = new PassThrough();
   const key = deriveKey(masterKey);
-  const iv = Buffer.from(archive.iv, "base64");
-  const authTag = Buffer.from(archive.authTag, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-
   const output = fs.createWriteStream(outputPath);
-  encryptedStream.pipe(decipher).pipe(output);
-
   try {
     const webhookCache = new Map<string, string>();
     const parts = uniqueParts(archive.parts);
@@ -414,14 +352,17 @@ async function restoreArchiveToFileInternal(
         throw new Error(`part_hash_mismatch:${part.index}`);
       }
 
-      await pipeFileToStream(partPath, encryptedStream);
-      await fs.promises.unlink(partPath);
+      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      await fs.promises.unlink(partPath).catch(() => undefined);
+      if (!output.write(plain)) {
+        await waitDrainOrError(output);
+      }
     }
 
-    encryptedStream.end();
     await new Promise<void>((resolve, reject) => {
-      output.on("finish", () => resolve());
+      output.on("finish", resolve);
       output.on("error", reject);
+      output.end();
     });
   } catch (err) {
     log("restore", `file restore failed ${archive.id} ${(err as Error).message}`);
@@ -530,76 +471,10 @@ export async function streamArchiveToResponse(
   tempBaseDir: string,
   masterKey: string
 ) {
-  if (archiveEncryptionVersion(archive) >= 2) {
-    startRestore();
-    const workDirV2 = makeRestoreWorkDir(tempBaseDir, `${archive.id}_v2`);
-    await fs.promises.mkdir(workDirV2, { recursive: true });
-    const key = deriveKey(masterKey);
-    const downloadName = archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
-    const contentType = archive.isBundle
-      ? "application/zip"
-      : (mime.lookup(downloadName) as string) || "application/octet-stream";
-
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Disposition", contentDisposition(downloadName));
-    res.setHeader("Accept-Ranges", "bytes");
-    if (!archive.isBundle) {
-      const size = resolveSingleFileSize(archive);
-      if (size > 0) {
-        res.setHeader("Content-Length", size);
-        setResumeIdentityHeaders(archive, res, size);
-      }
-    }
-
-    let aborted = false;
-    res.on("close", () => {
-      aborted = true;
-    });
-
-    try {
-      const webhookCache = new Map<string, string>();
-      const parts = uniqueParts(archive.parts);
-      for (const part of parts) {
-        if (aborted) break;
-        const partPath = path.join(workDirV2, `part_${part.index}`);
-        await downloadPartWithRepair(archive.id, part, partPath, webhookCache);
-        const actualHash = await hashFile(partPath);
-        if (actualHash !== part.hash) {
-          throw new Error(`part_hash_mismatch:${part.index}`);
-        }
-        const plain = await decryptPartToBuffer(partPath, part as any, key);
-        await fs.promises.unlink(partPath).catch(() => undefined);
-        if (!res.write(plain)) {
-          await waitDrainOrError(res as unknown as Writable);
-        }
-      }
-      if (!aborted) {
-        res.end();
-      }
-    } catch (err) {
-      log("restore", `stream failed ${archive.id} ${(err as Error).message}`);
-      res.destroy();
-    } finally {
-      await fs.promises.rm(workDirV2, { recursive: true, force: true });
-      endRestore();
-    }
-    return;
-  }
-
   startRestore();
-  const workDir = makeRestoreWorkDir(tempBaseDir, archive.id);
+  const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_v2`);
   await fs.promises.mkdir(workDir, { recursive: true });
-
-  const encryptedStream = new PassThrough();
   const key = deriveKey(masterKey);
-  const iv = Buffer.from(archive.iv, "base64");
-  const authTag = Buffer.from(archive.authTag, "base64");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(authTag);
-  decipher.on("error", () => {
-    res.destroy();
-  });
-
   const downloadName = archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
   const contentType = archive.isBundle
     ? "application/zip"
@@ -616,12 +491,9 @@ export async function streamArchiveToResponse(
     }
   }
 
-  encryptedStream.pipe(decipher).pipe(res);
-
   let aborted = false;
   res.on("close", () => {
     aborted = true;
-    encryptedStream.destroy();
   });
 
   try {
@@ -637,12 +509,15 @@ export async function streamArchiveToResponse(
         throw new Error(`part_hash_mismatch:${part.index}`);
       }
 
-      await pipeFileToStream(partPath, encryptedStream);
-      await fs.promises.unlink(partPath);
+      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      await fs.promises.unlink(partPath).catch(() => undefined);
+      if (!res.write(plain)) {
+        await waitDrainOrError(res as unknown as Writable);
+      }
     }
 
     if (!aborted) {
-      encryptedStream.end();
+      res.end();
     }
   } catch (err) {
     log("restore", `stream failed ${archive.id} ${(err as Error).message}`);

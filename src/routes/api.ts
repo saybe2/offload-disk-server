@@ -31,7 +31,6 @@ import { Webhook } from "../models/Webhook.js";
 import { deriveKey } from "../services/crypto.js";
 import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../services/discord.js";
 import { sanitizeFilename } from "../utils/names.js";
-import { serveFileWithRange } from "../services/downloads.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
 import {
@@ -976,7 +975,7 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
 
   try {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-    const canUseRange = !!rangeHeader && !archive.isBundle && (archive.encryptionVersion || 1) >= 2;
+    const canUseRange = !!rangeHeader && !archive.isBundle;
     log("download", canUseRange ? `start ${archive.id} range=${rangeHeader}` : `start ${archive.id}`);
     if (archive.isBundle) {
       const activeIndices = activeBundleFileIndices(archive);
@@ -1180,7 +1179,7 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
 
   try {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-    const canUseRange = !!rangeHeader && !archive.isBundle && (archive.encryptionVersion || 1) >= 2;
+  const canUseRange = !!rangeHeader && !archive.isBundle;
     log(
       "download",
       canUseRange ? `start ${archive.id} file=${index} range=${rangeHeader}` : `start ${archive.id} file=${index}`
