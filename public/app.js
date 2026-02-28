@@ -1910,6 +1910,7 @@ function renderArchivesGrid() {
     media.className = 'grid-media';
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
     if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
+      media.classList.add('has-thumb');
       const thumb = document.createElement('img');
       thumb.className = 'grid-thumb';
       thumb.alt = '';
@@ -1918,6 +1919,7 @@ function renderArchivesGrid() {
       thumb.onerror = () => {
         thumbFailureUntil.set(`${a._id}:${item.fileIndex}`, Date.now() + THUMB_RETRY_MS);
         if (media.parentElement) {
+          media.classList.remove('has-thumb');
           const fallback = createFileIconElement();
           fallback.classList.add('grid-file-icon');
           media.innerHTML = '';
