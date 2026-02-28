@@ -42,6 +42,7 @@ tr.row-selected:hover { background: #22314a; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .toolbar-item { display: flex; align-items: center; gap: 8px; }
 .toolbar-item select { min-width: 130px; }
+#listTable, #gridView { margin-top: 12px; }
 .name-cell { display: flex; align-items: center; gap: 8px; }
 .pill { background: #2b3240; color: #cbd5e1; padding: 2px 6px; border-radius: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 .folder-row { display: flex; align-items: center; gap: 10px; }
@@ -119,11 +120,13 @@ th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 .grid-view.mode-large .grid-folder-icon { margin-top: 10px; }
 .grid-name { font-size: 15px; line-height: 1.2; text-align: center; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.4em; }
 .grid-meta { font-size: 12px; color: #9aa4b2; text-align: center; }
-.grid-share { position: absolute; right: 8px; bottom: 8px; z-index: 2; }
-.grid-view.mode-tile .grid-card-no-thumb .grid-share { right: 17px; bottom: 68px; }
-.grid-view.mode-large .grid-card-no-thumb .grid-share { right: 49px; bottom: 68px; }
-.grid-view.mode-tile .grid-card-has-thumb .grid-share { right: -3px; bottom: 95px; }
-.grid-view.mode-large .grid-card-has-thumb .grid-share { right: -3px; bottom: 95px; }
+.grid-share { position: absolute; z-index: 2; }
+.grid-view.mode-tile .grid-share-folder,
+.grid-view.mode-tile .grid-share-plain { right: 17px; bottom: 68px; }
+.grid-view.mode-large .grid-share-folder,
+.grid-view.mode-large .grid-share-plain { right: 49px; bottom: 68px; }
+.grid-view.mode-tile .grid-share-thumb,
+.grid-view.mode-large .grid-share-thumb { right: -3px; bottom: 95px; }
 .grid-up { border-style: dashed; border-color: #2b3240; }
 
 input[type=\"search\"] { min-width: 180px; }
