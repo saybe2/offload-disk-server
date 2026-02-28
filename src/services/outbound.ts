@@ -44,10 +44,13 @@ const proxyStatus = {
   enabled: config.outboundProxyEnabled,
   active: !!proxyAgent,
   targets: proxyTargets,
-  proxyUrl: sanitizeProxyUrl(proxyUrl)
+  proxyUrl: sanitizeProxyUrl(proxyUrl),
+  fallbackDirect: config.outboundProxyFallbackDirect
 };
 
 const loggedHosts = new Set<string>();
+let proxyBypassUntil = 0;
+let proxyDegraded = false;
 
 export function getOutboundProxyStatus() {
   return proxyStatus;
@@ -67,19 +70,46 @@ export function shouldUseProxyForUrl(rawUrl: string) {
 export async function outboundFetch(input: FetchInput, init?: RequestInit) {
   const url = resolveInputUrl(input);
   if (url && shouldUseProxyForUrl(url)) {
-    if (config.outboundProxyLogMatches) {
+    const host = (() => {
       try {
-        const host = new URL(url).hostname.toLowerCase();
-        if (!loggedHosts.has(host)) {
-          loggedHosts.add(host);
-          log("proxy", `route via proxy host=${host}`);
-        }
+        return new URL(url).hostname.toLowerCase();
       } catch {
-        // ignore parse errors
+        return "unknown";
+      }
+    })();
+
+    if (config.outboundProxyLogMatches) {
+      if (!loggedHosts.has(host)) {
+        loggedHosts.add(host);
+        log("proxy", `route via proxy host=${host}`);
       }
     }
-    return undiciFetch(input as any, { ...(init || {}), dispatcher: proxyAgent! });
+
+    const now = Date.now();
+    if (config.outboundProxyFallbackDirect && now < proxyBypassUntil) {
+      return undiciFetch(input as any, init);
+    }
+
+    try {
+      const response = await undiciFetch(input as any, { ...(init || {}), dispatcher: proxyAgent! });
+      if (proxyDegraded) {
+        proxyDegraded = false;
+        log("proxy", "recovered; proxy routing resumed");
+      }
+      return response;
+    } catch (err) {
+      if (!config.outboundProxyFallbackDirect) {
+        throw err;
+      }
+      proxyDegraded = true;
+      proxyBypassUntil = Date.now() + config.outboundProxyBypassMs;
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        "proxy",
+        `proxy failed host=${host}; fallback=direct for ${config.outboundProxyBypassMs}ms reason=${message}`
+      );
+      return undiciFetch(input as any, init);
+    }
   }
   return undiciFetch(input as any, init);
 }
-

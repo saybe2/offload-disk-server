@@ -72,6 +72,8 @@ export const config = {
   outboundProxyUrl: (process.env.OUTBOUND_PROXY_URL || "").trim(),
   outboundProxyTargets: toList(process.env.OUTBOUND_PROXY_TARGETS, defaultProxyTargets),
   outboundProxyLogMatches: (process.env.OUTBOUND_PROXY_LOG_MATCHES || "false") === "true",
+  outboundProxyFallbackDirect: (process.env.OUTBOUND_PROXY_FALLBACK_DIRECT || "true") === "true",
+  outboundProxyBypassMs: Math.max(1000, toNumber(process.env.OUTBOUND_PROXY_BYPASS_MS, 15000)),
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
   smbShareName: process.env.SMB_SHARE_NAME || "offload",
