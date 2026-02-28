@@ -1853,7 +1853,7 @@ function renderArchivesGrid() {
     const content = document.createElement('div');
     content.className = 'grid-card-content';
     const media = document.createElement('div');
-    media.className = 'grid-media';
+    media.className = 'grid-media no-thumb';
     const icon = document.createElement('span');
     icon.className = 'folder-icon grid-folder-icon';
     const name = document.createElement('div');
@@ -1911,6 +1911,9 @@ function renderArchivesGrid() {
     const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
     if (supportsThumb(fileName, item.file?.detectedKind) && shouldLoadThumb(a._id, item.fileIndex)) {
       media.classList.add('has-thumb');
+      media.classList.remove('no-thumb');
+      const thumbFrame = document.createElement('div');
+      thumbFrame.className = 'grid-thumb-frame';
       const thumb = document.createElement('img');
       thumb.className = 'grid-thumb';
       thumb.alt = '';
@@ -1920,6 +1923,7 @@ function renderArchivesGrid() {
         thumbFailureUntil.set(`${a._id}:${item.fileIndex}`, Date.now() + THUMB_RETRY_MS);
         if (media.parentElement) {
           media.classList.remove('has-thumb');
+          media.classList.add('no-thumb');
           const fallback = createFileIconElement();
           fallback.classList.add('grid-file-icon');
           media.innerHTML = '';
@@ -1929,8 +1933,10 @@ function renderArchivesGrid() {
       thumb.onload = () => {
         thumbFailureUntil.delete(`${a._id}:${item.fileIndex}`);
       };
-      media.appendChild(thumb);
+      thumbFrame.appendChild(thumb);
+      media.appendChild(thumbFrame);
     } else {
+      media.classList.add('no-thumb');
       const icon = createFileIconElement();
       icon.classList.add('grid-file-icon');
       media.appendChild(icon);
