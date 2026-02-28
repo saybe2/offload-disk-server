@@ -110,11 +110,13 @@ th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 .grid-card.row-selected { background: #1b2638; border-color: #314764; }
 .grid-card-content { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .grid-media { display: flex; align-items: center; justify-content: center; overflow: visible; position: relative; width: max-content; margin: 0 auto; }
-.grid-media.no-thumb { width: max-content; }
+.grid-media.no-thumb { width: 100%; aspect-ratio: 16 / 10; }
+.grid-view.mode-large .grid-media.no-thumb { aspect-ratio: 16 / 9; }
 .grid-media.has-thumb { width: 100%; aspect-ratio: 16 / 10; }
 .grid-view.mode-large .grid-media.has-thumb { aspect-ratio: 16 / 9; }
 .grid-thumb-frame { width: 100%; height: 100%; border-radius: 8px; background: #11151d; border: 1px solid #2b3240; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .grid-thumb { width: 100%; height: 100%; object-fit: contain; }
+.grid-icon-wrap { position: relative; width: max-content; margin: 0 auto; display: inline-flex; align-items: center; justify-content: center; }
 .grid-file-icon { width: 58px; height: 70px; }
 .grid-file-icon::before { border-left-width: 16px; border-top-width: 16px; }
 .grid-folder-icon { width: 60px; height: 46px; }
