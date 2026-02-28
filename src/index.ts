@@ -243,7 +243,7 @@ async function main() {
     if (proxyStatus.active) {
       log(
         "proxy",
-        `enabled url=${proxyStatus.proxyUrl} targets=${proxyStatus.targets.join(",")}`
+        `enabled url=${proxyStatus.proxyUrl} targets=${proxyStatus.targets.join(",")} fallbackDirect=${proxyStatus.fallbackDirect} bypassMs=${config.outboundProxyBypassMs}`
       );
     } else {
       log("proxy", "enabled but inactive (OUTBOUND_PROXY_URL is empty)");

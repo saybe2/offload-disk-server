@@ -64,6 +64,8 @@ Fill `deploy/xray/config.json` with your VLESS params.
 ```env
 OUTBOUND_PROXY_ENABLED=true
 OUTBOUND_PROXY_URL=http://xray:10808
+OUTBOUND_PROXY_FALLBACK_DIRECT=true
+OUTBOUND_PROXY_BYPASS_MS=15000
 ```
 
 3) Start:
@@ -126,6 +128,8 @@ Selective outbound proxy (for blocked providers only):
 - `OUTBOUND_PROXY_URL` (local HTTP proxy, e.g. xray/sing-box inbound)
 - `OUTBOUND_PROXY_TARGETS` (comma-separated host suffixes)
 - `OUTBOUND_PROXY_LOG_MATCHES`
+- `OUTBOUND_PROXY_FALLBACK_DIRECT` (if proxy is down, use direct internet)
+- `OUTBOUND_PROXY_BYPASS_MS` (how long to keep direct fallback before retrying proxy)
 
 Bundling:
 - `BUNDLE_SINGLE_FILE_MIB`
