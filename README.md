@@ -48,6 +48,35 @@ One-line update/build/restart:
 git pull && docker build -t offload-smb . && docker restart offload && docker logs -f offload
 ```
 
+## Docker: sidecar Xray (VLESS) for Discord/Telegram only
+This repo includes `docker-compose.proxy.yml` for 2-container setup:
+- `offload` (server)
+- `offload-xray` (local HTTP proxy over VLESS)
+
+Setup:
+1) Create Xray config from template:
+```bash
+cp deploy/xray/config.example.json deploy/xray/config.json
+```
+Fill `deploy/xray/config.json` with your VLESS params.
+
+2) In `.env` set:
+```env
+OUTBOUND_PROXY_ENABLED=true
+OUTBOUND_PROXY_URL=http://xray:10808
+```
+
+3) Start:
+```bash
+docker compose -f docker-compose.proxy.yml up -d --build
+```
+
+4) Check logs:
+```bash
+docker compose -f docker-compose.proxy.yml logs -f offload
+docker compose -f docker-compose.proxy.yml logs -f xray
+```
+
 ## Download + resume behavior
 - HTTP resume (Range) is implemented for `v2` non-bundle files.
 - For bundle extraction routes, byte-range resume is not guaranteed.

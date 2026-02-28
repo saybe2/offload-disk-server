@@ -6,6 +6,7 @@ logs/
 .env.*
 !.env.example
 *.log
+deploy/xray/config.json
 
 tools/test_webhook_*.ps1
 demo.png
