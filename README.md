@@ -92,6 +92,12 @@ Discord/chunking:
 - `UPLOAD_RETRY_BASE_MS`
 - `UPLOAD_RETRY_MAX_MS`
 
+Selective outbound proxy (for blocked providers only):
+- `OUTBOUND_PROXY_ENABLED`
+- `OUTBOUND_PROXY_URL` (local HTTP proxy, e.g. xray/sing-box inbound)
+- `OUTBOUND_PROXY_TARGETS` (comma-separated host suffixes)
+- `OUTBOUND_PROXY_LOG_MATCHES`
+
 Bundling:
 - `BUNDLE_SINGLE_FILE_MIB`
 - `BUNDLE_MAX_MIB`

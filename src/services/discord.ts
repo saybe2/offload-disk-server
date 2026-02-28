@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { pipeline } from "stream/promises";
-import { fetch, FormData, File } from "undici";
+import { FormData, File } from "undici";
 import { config } from "../config.js";
+import { outboundFetch } from "./outbound.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,7 +68,7 @@ export async function uploadToWebhook(filePath: string, webhookUrl: string, cont
     form.append("content", content);
     form.append("file", file);
 
-    const res = await fetch(`${webhookUrl}?wait=true`, {
+    const res = await outboundFetch(`${webhookUrl}?wait=true`, {
       method: "POST",
       body: form
     });
@@ -100,7 +101,7 @@ export async function uploadBufferToWebhook(buffer: Buffer, filename: string, we
     form.append("content", content);
     form.append("file", file);
 
-    const res = await fetch(`${webhookUrl}?wait=true`, {
+    const res = await outboundFetch(`${webhookUrl}?wait=true`, {
       method: "POST",
       body: form
     });
@@ -128,7 +129,7 @@ export async function uploadBufferToWebhook(buffer: Buffer, filename: string, we
 
 export async function downloadToFile(url: string, destPath: string) {
   await withDiscordRetry("download", async () => {
-    const res = await fetch(url);
+    const res = await outboundFetch(url);
     if (!res.ok || !res.body) {
       const text = await res.text();
       if (shouldRetryStatus(res.status)) {
@@ -146,7 +147,7 @@ export async function downloadToFile(url: string, destPath: string) {
 export async function deleteWebhookMessage(webhookUrl: string, messageId: string) {
   await withDiscordRetry("delete", async () => {
     const url = `${webhookUrl}/messages/${messageId}`;
-    const res = await fetch(url, { method: "DELETE" });
+    const res = await outboundFetch(url, { method: "DELETE" });
     if (!res.ok) {
       const text = await res.text();
       if (shouldRetryStatus(res.status)) {
@@ -163,7 +164,7 @@ export async function deleteWebhookMessage(webhookUrl: string, messageId: string
 export async function fetchWebhookMessage(webhookUrl: string, messageId: string) {
   return withDiscordRetry("fetch_message", async () => {
     const url = `${webhookUrl}/messages/${messageId}`;
-    const res = await fetch(url);
+    const res = await outboundFetch(url);
     if (!res.ok) {
       const text = await res.text();
       if (shouldRetryStatus(res.status)) {
