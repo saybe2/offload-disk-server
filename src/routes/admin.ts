@@ -12,6 +12,77 @@ import { config } from "../config.js";
 export const adminRouter = Router();
 
 adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
+  const [archiveStats] = await Archive.aggregate([
+    {
+      $match: {
+        status: "ready",
+        deletedAt: null,
+        trashedAt: null,
+        "parts.mirrorProvider": { $in: ["discord", "telegram"] }
+      }
+    },
+    {
+      $project: {
+        mirrorParts: {
+          $filter: {
+            input: "$parts",
+            as: "p",
+            cond: { $in: ["$$p.mirrorProvider", ["discord", "telegram"]] }
+          }
+        },
+        activeFilesCount: {
+          $size: {
+            $filter: {
+              input: "$files",
+              as: "f",
+              cond: { $eq: [{ $ifNull: ["$$f.deletedAt", null] }, null] }
+            }
+          }
+        }
+      }
+    },
+    {
+      $project: {
+        activeFilesCount: 1,
+        mirrorTotalCount: { $size: "$mirrorParts" },
+        mirrorDoneCount: {
+          $size: {
+            $filter: {
+              input: "$mirrorParts",
+              as: "p",
+              cond: {
+                $and: [
+                  { $ne: [{ $ifNull: ["$$p.mirrorUrl", ""] }, ""] },
+                  { $ne: [{ $ifNull: ["$$p.mirrorMessageId", ""] }, ""] }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      $project: {
+        activeFilesCount: 1,
+        archiveDone: {
+          $and: [
+            { $gt: ["$mirrorTotalCount", 0] },
+            { $eq: ["$mirrorDoneCount", "$mirrorTotalCount"] }
+          ]
+        }
+      }
+    },
+    {
+      $group: {
+        _id: null,
+        archivesTotal: { $sum: 1 },
+        archivesDone: { $sum: { $cond: ["$archiveDone", 1, 0] } },
+        filesTotal: { $sum: "$activeFilesCount" },
+        filesDone: { $sum: { $cond: ["$archiveDone", "$activeFilesCount", 0] } }
+      }
+    }
+  ]);
+
   const [partStats] = await Archive.aggregate([
     {
       $match: {
@@ -63,34 +134,33 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
     }
   ]);
 
-  const archivesWithMirror = await Archive.countDocuments({
-    status: "ready",
-    deletedAt: null,
-    trashedAt: null,
-    "parts.mirrorProvider": { $in: ["discord", "telegram"] }
-  });
-  const archivesPending = await Archive.countDocuments({
-    status: "ready",
-    deletedAt: null,
-    trashedAt: null,
-    "parts.mirrorPending": true
-  });
-
+  const archivesTotal = Number(archiveStats?.archivesTotal || 0);
+  const archivesDone = Number(archiveStats?.archivesDone || 0);
+  const archivesPending = Math.max(0, archivesTotal - archivesDone);
+  const filesTotal = Number(archiveStats?.filesTotal || 0);
+  const filesDone = Number(archiveStats?.filesDone || 0);
+  const filesRemaining = Math.max(0, filesTotal - filesDone);
+  const filesPercent = filesTotal > 0 ? Math.floor((filesDone / filesTotal) * 100) : 100;
   const totalParts = Number(partStats?.totalParts || 0);
   const doneParts = Number(partStats?.doneParts || 0);
   const pendingParts = Number(partStats?.pendingParts || 0);
   const errorParts = Number(partStats?.errorParts || 0);
   const remainingParts = Math.max(0, totalParts - doneParts);
-  const percent = totalParts > 0 ? Math.floor((doneParts / totalParts) * 100) : 100;
+  const partsPercent = totalParts > 0 ? Math.floor((doneParts / totalParts) * 100) : 100;
 
   res.json({
+    filesTotal,
+    filesDone,
+    filesRemaining,
+    filesPercent,
     totalParts,
     doneParts,
     pendingParts,
     remainingParts,
     errorParts,
-    percent,
-    archivesTotal: archivesWithMirror,
+    partsPercent,
+    archivesTotal,
+    archivesDone,
     archivesPending
   });
 });
