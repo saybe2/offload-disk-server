@@ -137,6 +137,11 @@ Telegram mirror storage:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
+Behavior:
+- New parts are uploaded to Discord and Telegram in parallel; first successful provider becomes primary.
+- Second provider is saved as mirror; if it fails immediately, worker syncs it in background (`mirrorPending`).
+- Old ready archives are automatically backfilled to mirror storage in background.
+
 Bundling:
 - `BUNDLE_SINGLE_FILE_MIB`
 - `BUNDLE_MAX_MIB`

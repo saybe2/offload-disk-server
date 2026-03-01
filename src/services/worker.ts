@@ -197,12 +197,21 @@ async function processMirrorSync() {
     return false;
   }
 
+  const telegramReady = isTelegramReady();
   const webhooks = await Webhook.find({ enabled: true }).lean();
-  const webhook = webhooks.length > 0 ? webhooks[Math.floor(Math.random() * webhooks.length)] : null;
-
   const parts = uniqueParts(archive.parts || []);
-  const targetPart = parts.find((p: any) => p?.mirrorPending);
+  const targetPart = parts.find((p: any) => {
+    if (!p?.mirrorPending) return false;
+    if (p.mirrorProvider === "telegram") return telegramReady;
+    if (p.mirrorProvider === "discord") return webhooks.length > 0;
+    return false;
+  });
   if (!targetPart) return false;
+
+  const webhook =
+    targetPart.mirrorProvider === "discord" && webhooks.length > 0
+      ? webhooks[Math.floor(Math.random() * webhooks.length)]
+      : null;
 
   try {
     const encrypted = await loadEncryptedPartBuffer(archive.id, targetPart);
@@ -222,6 +231,68 @@ async function processMirrorSync() {
     log(`mirror sync error ${archive.id} part=${targetPart.index} ${message}`);
     return true;
   }
+}
+
+async function prepareMirrorBackfill() {
+  const telegramReady = isTelegramReady();
+  const hasDiscord = (await Webhook.countDocuments({ enabled: true })) > 0;
+  if (!telegramReady && !hasDiscord) {
+    return false;
+  }
+
+  const archive = await Archive.findOne({
+    status: "ready",
+    deletedAt: null,
+    trashedAt: null,
+    "parts.0": { $exists: true },
+    $or: [
+      { "parts.mirrorProvider": { $exists: false } },
+      { "parts.mirrorProvider": null },
+      { "parts.mirrorProvider": "" }
+    ]
+  }).sort({ updatedAt: 1, createdAt: 1 });
+
+  if (!archive) {
+    return false;
+  }
+
+  let changed = false;
+  let prepared = 0;
+  const parts = (archive.parts || []) as any[];
+  for (const part of parts) {
+    const primary = part?.provider === "telegram" ? "telegram" : "discord";
+    if (!part.provider) {
+      part.provider = primary;
+      changed = true;
+    }
+    if (part?.mirrorProvider) {
+      continue;
+    }
+
+    let target: "discord" | "telegram" | null = null;
+    if (primary === "discord" && telegramReady) {
+      target = "telegram";
+    } else if (primary === "telegram" && hasDiscord) {
+      target = "discord";
+    }
+    if (!target) {
+      continue;
+    }
+
+    part.mirrorProvider = target;
+    part.mirrorPending = true;
+    part.mirrorError = "";
+    prepared += 1;
+    changed = true;
+  }
+
+  if (!changed || prepared === 0) {
+    return false;
+  }
+
+  await archive.save();
+  log(`mirror prepare ${archive.id} parts=${prepared}`);
+  return true;
 }
 
 async function processNextArchive() {
@@ -519,6 +590,10 @@ export function startWorker() {
           } else {
             const mirrored = await processMirrorSync();
             if (mirrored) {
+              return;
+            }
+            const prepared = await prepareMirrorBackfill();
+            if (prepared) {
               return;
             }
           }
