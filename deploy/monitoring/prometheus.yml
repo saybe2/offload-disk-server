@@ -8,7 +8,7 @@ scrape_configs:
       - targets: ["prometheus:9090"]
 
   - job_name: offload
+    scrape_interval: 5s
     metrics_path: /metrics
     static_configs:
       - targets: ["offload:3010"]
-
