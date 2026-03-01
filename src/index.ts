@@ -23,6 +23,7 @@ import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
 import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
+import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -67,6 +68,23 @@ app.get("/api/ui-config", (_req, res) => {
     etaMaxSamples: config.uiEtaMaxSamples
   });
 });
+
+if (config.metricsEnabled) {
+  app.get(config.metricsPath, async (req, res) => {
+    const token = config.metricsToken;
+    if (token) {
+      const auth = String(req.headers.authorization || "");
+      const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const queryToken = String(req.query.token || "");
+      if (bearer !== token && queryToken !== token) {
+        return res.status(403).send("forbidden");
+      }
+    }
+    const metrics = await getPrometheusMetrics();
+    res.setHeader("Content-Type", getPrometheusContentType());
+    return res.send(metrics);
+  });
+}
 
 const publicDir = path.resolve("public");
 app.use(express.static(publicDir));

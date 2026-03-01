@@ -31,6 +31,8 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - apparmor:unconfined
+    networks:
+      - offload_net
 
   xray:
     image: teddysun/xray:latest
@@ -45,3 +47,9 @@ services:
       start_period: 10s
     volumes:
       - ./deploy/xray/config.json:/etc/xray/config.json:ro
+    networks:
+      - offload_net
+
+networks:
+  offload_net:
+    name: offload_net

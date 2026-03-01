@@ -80,6 +80,41 @@ docker compose -f docker-compose.proxy.yml logs -f offload
 docker compose -f docker-compose.proxy.yml logs -f xray
 ```
 
+## Monitoring stack on same server (Prometheus + Grafana + Loki + Promtail)
+Monitoring runs in separate containers (not inside `offload`) via `docker-compose.monitoring.yml`.
+
+### 1) Enable metrics in `.env`
+```env
+METRICS_ENABLED=true
+METRICS_PATH=/metrics
+METRICS_TOKEN=
+```
+If you set `METRICS_TOKEN`, Prometheus must call `/metrics?token=...` (or use `Authorization: Bearer`).
+
+### 2) Start offload/xray (creates shared docker network `offload_net`)
+```bash
+docker compose -f docker-compose.proxy.yml up -d --build
+```
+
+### 3) Start monitoring stack
+```bash
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+### 4) Open UIs
+- Grafana: `http://SERVER_IP:3001` (default: `admin` / `admin`)
+- Prometheus: `http://SERVER_IP:9090`
+- Loki API: `http://SERVER_IP:3100`
+
+### 5) Logs and status
+```bash
+docker compose -f docker-compose.monitoring.yml ps
+docker compose -f docker-compose.monitoring.yml logs -f grafana
+docker compose -f docker-compose.monitoring.yml logs -f prometheus
+docker compose -f docker-compose.monitoring.yml logs -f promtail
+docker compose -f docker-compose.monitoring.yml logs -f loki
+```
+
 ## Download + resume behavior
 - HTTP resume (Range) is implemented for `v2` non-bundle files.
 - For bundle extraction routes, byte-range resume is not guaranteed.
@@ -136,6 +171,15 @@ Telegram mirror storage:
 - `TELEGRAM_ENABLED`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- `MIRROR_SYNC_CONCURRENCY`
+- `MIRROR_SYNC_CONCURRENCY_MIN`
+- `MIRROR_SYNC_CONCURRENCY_MAX`
+- `MIRROR_SYNC_AUTO_TUNE`
+
+Prometheus metrics:
+- `METRICS_ENABLED`
+- `METRICS_PATH`
+- `METRICS_TOKEN`
 
 Behavior:
 - New parts are uploaded to Discord and Telegram in parallel; first successful provider becomes primary.
