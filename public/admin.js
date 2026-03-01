@@ -3,6 +3,44 @@ const webhookList = document.getElementById('webhookList');
 const createUserForm = document.getElementById('createUserForm');
 const createUserStatus = document.getElementById('createUserStatus');
 const addWebhookForm = document.getElementById('addWebhookForm');
+const mirrorSyncProgress = document.getElementById('mirrorSyncProgress');
+const mirrorSyncText = document.getElementById('mirrorSyncText');
+let mirrorSyncTimer = null;
+
+async function loadMirrorSync() {
+  try {
+    const res = await fetch('/api/admin/mirror-sync');
+    if (!res.ok) {
+      throw new Error('sync_stats_failed');
+    }
+    const data = await res.json();
+    const total = Number(data.totalParts || 0);
+    const done = Number(data.doneParts || 0);
+    const pending = Number(data.pendingParts || 0);
+    const remaining = Number(data.remainingParts || 0);
+    const errors = Number(data.errorParts || 0);
+    const archivesTotal = Number(data.archivesTotal || 0);
+    const archivesPending = Number(data.archivesPending || 0);
+
+    if (total > 0) {
+      mirrorSyncProgress.max = total;
+      mirrorSyncProgress.value = Math.min(done, total);
+    } else {
+      mirrorSyncProgress.max = 100;
+      mirrorSyncProgress.value = 100;
+    }
+
+    if (total === 0) {
+      mirrorSyncText.textContent = 'No sync tasks';
+      return;
+    }
+
+    const pct = Math.floor((Math.min(done, total) / total) * 100);
+    mirrorSyncText.textContent = `${pct}% | ${done}/${total} parts | remaining ${remaining} | pending ${pending} | errors ${errors} | archives ${archivesTotal - archivesPending}/${archivesTotal}`;
+  } catch (err) {
+    mirrorSyncText.textContent = 'Failed to load sync stats';
+  }
+}
 
 async function loadUsers() {
   const res = await fetch('/api/admin/users');
@@ -141,6 +179,11 @@ addWebhookForm.addEventListener('submit', async (e) => {
 });
 
 (async () => {
+  await loadMirrorSync();
   await loadUsers();
   await loadWebhooks();
+  if (mirrorSyncTimer) {
+    clearInterval(mirrorSyncTimer);
+  }
+  mirrorSyncTimer = setInterval(loadMirrorSync, 5000);
 })();
