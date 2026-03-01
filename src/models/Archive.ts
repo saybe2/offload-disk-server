@@ -34,6 +34,9 @@ export interface ArchivePart {
   url: string;
   messageId: string;
   webhookId: string;
+  provider?: "discord" | "telegram";
+  telegramFileId?: string;
+  telegramChatId?: string;
   iv?: string;
   authTag?: string;
 }
@@ -109,6 +112,9 @@ const PartSchema = new Schema<ArchivePart>(
     url: { type: String, required: true },
     messageId: { type: String, required: true },
     webhookId: { type: String, required: true },
+    provider: { type: String, enum: ["discord", "telegram"], default: "discord" },
+    telegramFileId: { type: String, default: "" },
+    telegramChatId: { type: String, default: "" },
     iv: { type: String, default: "" },
     authTag: { type: String, default: "" }
   },

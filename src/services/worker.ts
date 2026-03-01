@@ -8,9 +8,10 @@ import { Webhook } from "../models/Webhook.js";
 import { config, computed } from "../config.js";
 import { createZip } from "./archive.js";
 import { deriveKey } from "./crypto.js";
-import { deleteWebhookMessage, uploadBufferToWebhook } from "./discord.js";
+import { deletePartRemote, uploadPartWithFallback } from "./partProvider.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
+import { isTelegramReady } from "./telegram.js";
 
 let running = 0;
 let deleting = false;
@@ -43,12 +44,23 @@ function isTransientError(err: unknown) {
     if (code === 429) return true;
     if (code >= 500 && code <= 599) return true;
   }
+  const tgMatch = message.match(/telegram_(upload|get_file|delete)_failed:(\d{3})/);
+  if (tgMatch) {
+    const code = Number(tgMatch[1]);
+    if (code === 429) return true;
+    if (code >= 500 && code <= 599) return true;
+  }
   return false;
 }
 
-async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
+async function uploadBufferWithRetry(
+  buffer: Buffer,
+  filename: string,
+  content: string,
+  webhook?: { id: string; url: string }
+) {
   return withRetry(
-    () => uploadBufferToWebhook(buffer, filename, webhookUrl, content),
+    () => uploadPartWithFallback(buffer, filename, content, webhook),
     "upload"
   );
 }
@@ -181,8 +193,9 @@ async function processNextArchive() {
       inputPath = archive.files[0].path;
     }
     const webhooks = await Webhook.find({ enabled: true });
-    if (webhooks.length === 0) {
-      throw new Error("no_webhooks_configured");
+    const telegramReady = isTelegramReady();
+    if (webhooks.length === 0 && !telegramReady) {
+      throw new Error("no_storage_provider_configured");
     }
 
     const uploadedParts = uniqueParts(archive.parts || []);
@@ -197,7 +210,8 @@ async function processNextArchive() {
 
     const key = deriveKey(config.masterKey);
     const rs = fs.createReadStream(inputPath, { highWaterMark: computed.chunkSizeBytes });
-    const concurrency = Math.max(1, Math.min(config.uploadPartsConcurrency, webhooks.length));
+    const providerSlots = webhooks.length > 0 ? webhooks.length : 1;
+    const concurrency = Math.max(1, Math.min(config.uploadPartsConcurrency, providerSlots));
     const maxPending = Math.max(10, concurrency * 3);
     let partIndex = 0;
     let totalEncryptedSize = 0;
@@ -238,9 +252,14 @@ async function processNextArchive() {
         activeUploads += 1;
         (async () => {
           try {
-            const webhook = webhooks[part.index % webhooks.length];
+            const webhook = webhooks.length > 0 ? webhooks[part.index % webhooks.length] : null;
             const content = `archive:${archive.id} part:${part.index}`;
-            const result = await uploadBufferWithRetry(part.encrypted, `part_${part.index}`, webhook.url, content);
+            const result = await uploadBufferWithRetry(
+              part.encrypted,
+              `part_${part.index}`,
+              content,
+              webhook ? { id: webhook.id, url: webhook.url } : undefined
+            );
             const partDoc = {
               index: part.index,
               size: part.encrypted.length,
@@ -248,7 +267,10 @@ async function processNextArchive() {
               hash: part.hash,
               url: result.url,
               messageId: result.messageId,
-              webhookId: webhook.id,
+              webhookId: result.webhookId,
+              provider: result.provider,
+              telegramFileId: result.telegramFileId || "",
+              telegramChatId: result.telegramChatId || "",
               iv: part.iv,
               authTag: part.authTag
             };
@@ -383,10 +405,8 @@ async function processDelete() {
       { $set: { deleteTotalParts: total, deletedParts: 0 } }
     );
     for (const part of parts) {
-      const hookUrl = hookById.get(part.webhookId);
-      if (!hookUrl) continue;
       try {
-        await deleteWebhookMessage(hookUrl, part.messageId);
+        await deletePartRemote(part, hookById);
         deletedParts += 1;
         await Archive.updateOne(
           { _id: candidate.id },
