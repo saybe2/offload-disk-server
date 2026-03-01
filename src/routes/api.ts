@@ -29,7 +29,7 @@ import { log } from "../logger.js";
 import { getDescendantFolderIds } from "../services/folders.js";
 import { Webhook } from "../models/Webhook.js";
 import { deriveKey } from "../services/crypto.js";
-import { uploadPartWithFallback, refreshPartUrl } from "../services/partProvider.js";
+import { refreshPartUrl, saveMirrorResult, toPartDocument, uploadPartMirrored } from "../services/partProvider.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
@@ -169,7 +169,7 @@ async function uploadBufferWithRetry(
   let attempt = 0;
   while (true) {
     try {
-      return await uploadPartWithFallback(buffer, filename, content, webhook);
+      return await uploadPartMirrored(buffer, filename, content, webhook);
     } catch (err) {
       attempt += 1;
       if (!isTransientError(err) || attempt > config.uploadRetryMax) {
@@ -696,16 +696,19 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
               size: part.size,
               plainSize: part.plainSize,
               hash: part.hash,
-              url: result.url,
-              messageId: result.messageId,
-              webhookId: result.webhookId,
-              provider: result.provider,
-              telegramFileId: result.telegramFileId || "",
-              telegramChatId: result.telegramChatId || "",
+              ...toPartDocument(result.primary, result.mirrorTarget),
               iv: part.iv,
               authTag: part.authTag
             };
             await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } });
+            if (result.mirrorResultPromise) {
+              void result.mirrorResultPromise
+                .then((mirror) => saveMirrorResult(archive.id, part.index, mirror, result.mirrorTarget))
+                .catch((err) => {
+                  const message = err instanceof Error ? err.message : String(err);
+                  return saveMirrorResult(archive.id, part.index, null, result.mirrorTarget, message);
+                });
+            }
             uploadedPartsCount += 1;
             if (uploadedPartsCount % 10 === 0) {
               log("stream", `upload progress archive=${archive.id} parts=${uploadedPartsCount}`);
@@ -1343,9 +1346,14 @@ apiRouter.get("/archives/:id/parts", requireAuth, async (req, res) => {
     hash: part.hash,
     provider: part.provider || "discord",
     url: part.url,
+    mirrorProvider: part.mirrorProvider || "",
+    mirrorUrl: part.mirrorUrl || "",
+    mirrorPending: !!part.mirrorPending,
+    mirrorError: part.mirrorError || "",
     iv: part.iv || "",
     authTag: part.authTag || "",
-    telegramFileId: part.telegramFileId || ""
+    telegramFileId: part.telegramFileId || "",
+    mirrorTelegramFileId: part.mirrorTelegramFileId || ""
   }));
 
   return res.json({

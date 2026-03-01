@@ -37,6 +37,14 @@ export interface ArchivePart {
   provider?: "discord" | "telegram";
   telegramFileId?: string;
   telegramChatId?: string;
+  mirrorProvider?: "discord" | "telegram";
+  mirrorUrl?: string;
+  mirrorMessageId?: string;
+  mirrorWebhookId?: string;
+  mirrorTelegramFileId?: string;
+  mirrorTelegramChatId?: string;
+  mirrorPending?: boolean;
+  mirrorError?: string;
   iv?: string;
   authTag?: string;
 }
@@ -115,6 +123,14 @@ const PartSchema = new Schema<ArchivePart>(
     provider: { type: String, enum: ["discord", "telegram"], default: "discord" },
     telegramFileId: { type: String, default: "" },
     telegramChatId: { type: String, default: "" },
+    mirrorProvider: { type: String, enum: ["discord", "telegram"], default: null },
+    mirrorUrl: { type: String, default: "" },
+    mirrorMessageId: { type: String, default: "" },
+    mirrorWebhookId: { type: String, default: "" },
+    mirrorTelegramFileId: { type: String, default: "" },
+    mirrorTelegramChatId: { type: String, default: "" },
+    mirrorPending: { type: Boolean, default: false },
+    mirrorError: { type: String, default: "" },
     iv: { type: String, default: "" },
     authTag: { type: String, default: "" }
   },

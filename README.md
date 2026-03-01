@@ -10,7 +10,7 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 ## Features
 - AES-256-GCM encryption.
 - Chunked upload to Discord webhooks (default chunk limit ~9.8 MiB).
-- Optional Telegram bot fallback storage when Discord/webhooks fail.
+- Optional Telegram bot mirror storage (parallel with Discord) with background sync.
 - MongoDB metadata storage (Discord stores file parts only).
 - Folders, nested folders, trash (30 days), share links, priorities.
 - Small-file preview (image/video/audio/text/code/pdf) with syntax highlighting for code, and image/video thumbnails.
@@ -132,7 +132,7 @@ Selective outbound proxy (for blocked providers only):
 - `OUTBOUND_PROXY_FALLBACK_DIRECT` (if proxy is down, use direct internet)
 - `OUTBOUND_PROXY_BYPASS_MS` (how long to keep direct fallback before retrying proxy)
 
-Telegram fallback storage:
+Telegram mirror storage:
 - `TELEGRAM_ENABLED`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`

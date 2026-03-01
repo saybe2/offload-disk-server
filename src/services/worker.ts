@@ -8,10 +8,18 @@ import { Webhook } from "../models/Webhook.js";
 import { config, computed } from "../config.js";
 import { createZip } from "./archive.js";
 import { deriveKey } from "./crypto.js";
-import { deletePartRemote, uploadPartWithFallback } from "./partProvider.js";
+import {
+  deletePartRemote,
+  refreshPartUrl,
+  saveMirrorResult,
+  toPartDocument,
+  uploadMirrorForPart,
+  uploadPartMirrored
+} from "./partProvider.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
 import { isTelegramReady } from "./telegram.js";
+import { outboundFetch } from "./outbound.js";
 
 let running = 0;
 let deleting = false;
@@ -60,7 +68,7 @@ async function uploadBufferWithRetry(
   webhook?: { id: string; url: string }
 ) {
   return withRetry(
-    () => uploadPartWithFallback(buffer, filename, content, webhook),
+    () => uploadPartMirrored(buffer, filename, content, webhook),
     "upload"
   );
 }
@@ -152,6 +160,67 @@ async function generateLocalThumbnails(archive: any) {
   }
   if (generated > 0) {
     log(`thumb ready ${archive.id} generated=${generated}`);
+  }
+}
+
+async function fetchBuffer(url: string) {
+  const res = await outboundFetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`download_failed:${res.status}:${text}`);
+  }
+  const ab = await res.arrayBuffer();
+  return Buffer.from(ab);
+}
+
+async function loadEncryptedPartBuffer(archiveId: string, part: any) {
+  try {
+    return await fetchBuffer(String(part.url || ""));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/download_failed:(401|403|404)/.test(message)) {
+      throw err;
+    }
+    await refreshPartUrl(archiveId, part);
+    return await fetchBuffer(String(part.url || ""));
+  }
+}
+
+async function processMirrorSync() {
+  const archive = await Archive.findOne({
+    status: "ready",
+    deletedAt: null,
+    trashedAt: null,
+    "parts.mirrorPending": true
+  });
+  if (!archive) {
+    return false;
+  }
+
+  const webhooks = await Webhook.find({ enabled: true }).lean();
+  const webhook = webhooks.length > 0 ? webhooks[Math.floor(Math.random() * webhooks.length)] : null;
+
+  const parts = uniqueParts(archive.parts || []);
+  const targetPart = parts.find((p: any) => p?.mirrorPending);
+  if (!targetPart) return false;
+
+  try {
+    const encrypted = await loadEncryptedPartBuffer(archive.id, targetPart);
+    const content = `archive:${archive.id} part:${targetPart.index} mirror_sync`;
+    const mirror = await uploadMirrorForPart(
+      targetPart,
+      encrypted,
+      content,
+      webhook ? { id: String((webhook as any)._id || webhook.id), url: String(webhook.url) } : undefined
+    );
+    await saveMirrorResult(archive.id, targetPart.index, mirror, targetPart.mirrorProvider);
+    log(`mirror synced ${archive.id} part=${targetPart.index} provider=${targetPart.mirrorProvider}`);
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await saveMirrorResult(archive.id, targetPart.index, null, targetPart.mirrorProvider, message);
+    log(`mirror sync error ${archive.id} part=${targetPart.index} ${message}`);
+    return true;
   }
 }
 
@@ -265,12 +334,7 @@ async function processNextArchive() {
               size: part.encrypted.length,
               plainSize: part.plainSize,
               hash: part.hash,
-              url: result.url,
-              messageId: result.messageId,
-              webhookId: result.webhookId,
-              provider: result.provider,
-              telegramFileId: result.telegramFileId || "",
-              telegramChatId: result.telegramChatId || "",
+              ...toPartDocument(result.primary, result.mirrorTarget),
               iv: part.iv,
               authTag: part.authTag
             };
@@ -278,6 +342,14 @@ async function processNextArchive() {
               { _id: archive.id },
               { $push: { parts: partDoc }, $inc: { uploadedBytes: part.encrypted.length, uploadedParts: 1 } }
             );
+            if (result.mirrorResultPromise) {
+              void result.mirrorResultPromise
+                .then((mirror) => saveMirrorResult(archive.id, part.index, mirror, result.mirrorTarget))
+                .catch((err) => {
+                  const message = err instanceof Error ? err.message : String(err);
+                  return saveMirrorResult(archive.id, part.index, null, result.mirrorTarget, message);
+                });
+            }
             uploadedNow += 1;
             if (uploadedNow % 10 === 0) {
               const totalHint = archive.totalParts && archive.totalParts > 0 ? archive.totalParts : estimatedTotalParts;
@@ -444,7 +516,13 @@ export function startWorker() {
           const before = await Archive.countDocuments({ status: "queued", deletedAt: null, trashedAt: null });
           if (before > 0) {
             await processNextArchive();
-          } else if (!deleting) {
+          } else {
+            const mirrored = await processMirrorSync();
+            if (mirrored) {
+              return;
+            }
+          }
+          if (!deleting) {
             deleting = true;
             try {
               await processDelete();
