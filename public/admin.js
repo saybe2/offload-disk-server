@@ -19,7 +19,6 @@ function formatBytes(bytes) {
 
 async function loadMirrorSync() {
   try {
-    mirrorSyncText.textContent = 'Loading...';
     const res = await fetch('/api/admin/mirror-sync');
     if (!res.ok) {
       throw new Error('sync_stats_failed');
