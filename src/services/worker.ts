@@ -20,6 +20,18 @@ import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
 import { isTelegramReady } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
+import {
+  getMirrorSyncState,
+  noteMirrorSyncRateLimited,
+  noteMirrorSyncSuccess
+} from "./mirrorSyncControl.js";
+import {
+  noteMirrorPartDone,
+  noteMirrorPartError,
+  noteUploadArchiveDone,
+  noteUploadArchiveError,
+  noteUploadArchiveStarted
+} from "./analytics.js";
 
 let running = 0;
 let deleting = false;
@@ -231,6 +243,8 @@ async function processMirrorSync() {
     targetPart.mirrorProvider === "discord" && webhooks.length > 0
       ? webhooks[Math.floor(Math.random() * webhooks.length)]
       : null;
+  const startedAt = Date.now();
+  const provider = targetPart.mirrorProvider as "discord" | "telegram";
 
   try {
     const encrypted = await loadEncryptedPartBuffer(archive.id, targetPart);
@@ -242,18 +256,34 @@ async function processMirrorSync() {
       webhook ? { id: String((webhook as any)._id || webhook.id), url: String(webhook.url) } : undefined
     );
     await saveMirrorResult(archive.id, targetPart.index, mirror, targetPart.mirrorProvider);
+    const durationMs = Date.now() - startedAt;
+    noteMirrorPartDone(provider, encrypted.length, durationMs);
+    const before = getMirrorSyncState().concurrency;
+    const tuned = await noteMirrorSyncSuccess();
+    if (tuned.concurrency !== before) {
+      log(`mirror autotune up concurrency=${tuned.concurrency}`);
+    }
     log(`mirror synced ${archive.id} part=${targetPart.index} provider=${targetPart.mirrorProvider}`);
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await saveMirrorResult(archive.id, targetPart.index, null, targetPart.mirrorProvider, message);
+    const rateLimited = /(?:^|:|\D)429(?:\D|$)/.test(message);
+    noteMirrorPartError(provider, rateLimited);
+    if (rateLimited) {
+      const before = getMirrorSyncState().concurrency;
+      const tuned = await noteMirrorSyncRateLimited();
+      if (tuned.concurrency !== before) {
+        log(`mirror autotune down concurrency=${tuned.concurrency}`);
+      }
+    }
     log(`mirror sync error ${archive.id} part=${targetPart.index} ${message}`);
     return true;
   }
 }
 
 async function processMirrorSyncBatch() {
-  const parallel = Math.max(1, config.mirrorSyncConcurrency);
+  const parallel = Math.max(1, getMirrorSyncState().concurrency);
   let processedAny = false;
   const runners = Array.from({ length: parallel }, async () => {
     while (true) {
@@ -356,6 +386,8 @@ async function processNextArchive() {
   }
 
   log(`start ${archive.id} priority=${archive.priority}`);
+  const startedAt = Date.now();
+  noteUploadArchiveStarted();
 
   const workDir = path.join(config.cacheDir, "work", archive.id);
   const zipPath = path.join(workDir, "archive.zip");
@@ -540,6 +572,7 @@ async function processNextArchive() {
     await generateLocalThumbnails(archive);
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     log(`ready ${archive.id}`);
+    noteUploadArchiveDone(archive.originalSize || 0, Date.now() - startedAt);
 
     if (config.cacheDeleteAfterUpload) {
       await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
@@ -562,6 +595,7 @@ async function processNextArchive() {
       await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: message } });
       log(`error ${archive.id} ${message}`);
     }
+    noteUploadArchiveError();
   }
 }
 
@@ -632,6 +666,9 @@ export function startWorker() {
           if (before > 0) {
             await processNextArchive();
           } else {
+            if (getMirrorSyncState().paused) {
+              return;
+            }
             if (!mirrorMaintenanceRunning) {
               mirrorMaintenanceRunning = true;
               try {

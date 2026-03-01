@@ -22,6 +22,7 @@ import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
+import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -232,6 +233,7 @@ async function main() {
   await migrateArchives();
   await migrateParts();
   await migrateFolders();
+  await initMirrorSyncControl();
 
   startWorker();
   startThumbnailWorker();

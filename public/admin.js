@@ -5,7 +5,15 @@ const createUserStatus = document.getElementById('createUserStatus');
 const addWebhookForm = document.getElementById('addWebhookForm');
 const mirrorSyncProgress = document.getElementById('mirrorSyncProgress');
 const mirrorSyncText = document.getElementById('mirrorSyncText');
+const mirrorPauseBtn = document.getElementById('mirrorPauseBtn');
+const mirrorRetryBtn = document.getElementById('mirrorRetryBtn');
+const mirrorConcurrencyInput = document.getElementById('mirrorConcurrencyInput');
+const mirrorConcurrencyBtn = document.getElementById('mirrorConcurrencyBtn');
+const mirrorAutoTuneToggle = document.getElementById('mirrorAutoTuneToggle');
+const mirrorControlStatus = document.getElementById('mirrorControlStatus');
+const analyticsText = document.getElementById('analyticsText');
 let mirrorSyncTimer = null;
+let mirrorSyncState = { paused: false, autoTune: true, concurrency: 1, minConcurrency: 1, maxConcurrency: 6 };
 
 function formatBytes(bytes) {
   const value = Number(bytes || 0);
@@ -15,6 +23,25 @@ function formatBytes(bytes) {
   const num = value / Math.pow(1024, exp);
   const prec = exp >= 3 ? 2 : 1;
   return `${num.toFixed(prec)} ${units[exp]}`;
+}
+
+function formatRate(bps) {
+  return `${formatBytes(Number(bps || 0))}/s`;
+}
+
+function applyMirrorSyncState(data) {
+  mirrorSyncState = {
+    paused: !!data.paused,
+    autoTune: !!data.autoTune,
+    concurrency: Number(data.concurrency || 1),
+    minConcurrency: Number(data.minConcurrency || 1),
+    maxConcurrency: Number(data.maxConcurrency || 6)
+  };
+  mirrorPauseBtn.textContent = mirrorSyncState.paused ? 'Resume sync' : 'Pause sync';
+  mirrorAutoTuneToggle.checked = mirrorSyncState.autoTune;
+  mirrorConcurrencyInput.min = String(mirrorSyncState.minConcurrency);
+  mirrorConcurrencyInput.max = String(mirrorSyncState.maxConcurrency);
+  mirrorConcurrencyInput.value = String(mirrorSyncState.concurrency);
 }
 
 async function loadMirrorSync() {
@@ -38,6 +65,7 @@ async function loadMirrorSync() {
     const bytesPercent = Number(data.bytesPercent || 0);
     const archivesTotal = Number(data.archivesTotal || 0);
     const archivesDone = Number(data.archivesDone || 0);
+    applyMirrorSyncState(data);
 
     if (totalBytes > 0) {
       mirrorSyncProgress.max = totalBytes;
@@ -57,6 +85,95 @@ async function loadMirrorSync() {
     mirrorSyncText.textContent = 'Failed to load sync stats';
   }
 }
+
+async function loadAnalytics() {
+  try {
+    const res = await fetch('/api/admin/analytics');
+    if (!res.ok) {
+      throw new Error('analytics_failed');
+    }
+    const data = await res.json();
+    const upload = data.upload || {};
+    const mirror = data.mirror || {};
+    const download = data.download || {};
+    const discord = mirror.providers?.discord || {};
+    const telegram = mirror.providers?.telegram || {};
+    analyticsText.textContent =
+      `Upload ${upload.archivesDone || 0}/${upload.archivesStarted || 0} done, errors ${upload.archivesError || 0}, rate ${formatRate(upload.rateBps60s || 0)}, avg ${upload.avgArchiveMs || 0} ms | ` +
+      `Mirror parts ${mirror.partsDone || 0}, errors ${mirror.partsError || 0}, 429 ${mirror.rateLimited || 0}, rate ${formatRate(mirror.rateBps60s || 0)}, avg ${mirror.avgPartMs || 0} ms, discord ${discord.done || 0}/${(discord.done || 0) + (discord.error || 0)}, telegram ${telegram.done || 0}/${(telegram.done || 0) + (telegram.error || 0)} | ` +
+      `Download ${download.done || 0}/${download.started || 0} done, errors ${download.error || 0}, rate ${formatRate(download.rateBps60s || 0)}`;
+  } catch (err) {
+    analyticsText.textContent = 'Failed to load analytics';
+  }
+}
+
+mirrorPauseBtn.addEventListener('click', async () => {
+  mirrorControlStatus.textContent = 'Updating...';
+  const res = await fetch('/api/admin/mirror-sync/pause', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paused: !mirrorSyncState.paused })
+  });
+  if (!res.ok) {
+    mirrorControlStatus.textContent = 'Failed to update pause state';
+    return;
+  }
+  const data = await res.json();
+  applyMirrorSyncState(data);
+  mirrorControlStatus.textContent = mirrorSyncState.paused ? 'Mirror sync paused' : 'Mirror sync resumed';
+  await loadMirrorSync();
+});
+
+mirrorRetryBtn.addEventListener('click', async () => {
+  mirrorControlStatus.textContent = 'Retrying failed parts...';
+  const res = await fetch('/api/admin/mirror-sync/retry-failed', { method: 'POST' });
+  if (!res.ok) {
+    mirrorControlStatus.textContent = 'Retry request failed';
+    return;
+  }
+  const data = await res.json();
+  mirrorControlStatus.textContent = `Requeued archives: ${data.modified || 0}`;
+  await loadMirrorSync();
+});
+
+mirrorConcurrencyBtn.addEventListener('click', async () => {
+  const value = Number(mirrorConcurrencyInput.value);
+  if (!Number.isFinite(value) || value < 1) {
+    mirrorControlStatus.textContent = 'Bad concurrency value';
+    return;
+  }
+  mirrorControlStatus.textContent = 'Applying concurrency...';
+  const res = await fetch('/api/admin/mirror-sync/concurrency', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ concurrency: value })
+  });
+  if (!res.ok) {
+    mirrorControlStatus.textContent = 'Failed to set concurrency';
+    return;
+  }
+  const data = await res.json();
+  applyMirrorSyncState(data);
+  mirrorControlStatus.textContent = `Concurrency set to ${mirrorSyncState.concurrency}`;
+  await loadMirrorSync();
+});
+
+mirrorAutoTuneToggle.addEventListener('change', async () => {
+  mirrorControlStatus.textContent = 'Updating auto tune...';
+  const res = await fetch('/api/admin/mirror-sync/auto-tune', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: mirrorAutoTuneToggle.checked })
+  });
+  if (!res.ok) {
+    mirrorControlStatus.textContent = 'Failed to update auto tune';
+    mirrorAutoTuneToggle.checked = !mirrorAutoTuneToggle.checked;
+    return;
+  }
+  const data = await res.json();
+  applyMirrorSyncState(data);
+  mirrorControlStatus.textContent = mirrorSyncState.autoTune ? 'Auto tune enabled' : 'Auto tune disabled';
+});
 
 async function loadUsers() {
   const res = await fetch('/api/admin/users');
@@ -196,10 +313,14 @@ addWebhookForm.addEventListener('submit', async (e) => {
 
 (async () => {
   await loadMirrorSync();
+  await loadAnalytics();
   await loadUsers();
   await loadWebhooks();
   if (mirrorSyncTimer) {
     clearInterval(mirrorSyncTimer);
   }
-  mirrorSyncTimer = setInterval(loadMirrorSync, 5000);
+  mirrorSyncTimer = setInterval(async () => {
+    await loadMirrorSync();
+    await loadAnalytics();
+  }, 5000);
 })();

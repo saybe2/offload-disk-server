@@ -8,6 +8,14 @@ import { Share } from "../models/Share.js";
 import { Webhook } from "../models/Webhook.js";
 import { deleteSmbUser, ensureSmbUser } from "../services/smbUsers.js";
 import { isTelegramReady } from "../services/telegram.js";
+import {
+  getMirrorSyncState,
+  retryMirrorSyncFailures,
+  setMirrorSyncAutoTune,
+  setMirrorSyncConcurrency,
+  setMirrorSyncPaused
+} from "../services/mirrorSyncControl.js";
+import { getAnalyticsSnapshot } from "../services/analytics.js";
 import { config } from "../config.js";
 
 export const adminRouter = Router();
@@ -107,6 +115,7 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
   const partsPercent = totalParts > 0 ? Math.floor((doneParts / totalParts) * 100) : 100;
   const remainingBytes = Math.max(0, totalBytes - doneBytes);
   const bytesPercent = totalBytes > 0 ? Math.floor((doneBytes / totalBytes) * 100) : 100;
+  const mirrorState = getMirrorSyncState();
 
   res.json({
     filesTotal,
@@ -125,8 +134,43 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
     bytesPercent,
     archivesTotal,
     archivesDone,
-    archivesPending
+    archivesPending,
+    paused: mirrorState.paused,
+    autoTune: mirrorState.autoTune,
+    concurrency: mirrorState.concurrency,
+    minConcurrency: mirrorState.minConcurrency,
+    maxConcurrency: mirrorState.maxConcurrency
   });
+});
+
+adminRouter.post("/mirror-sync/pause", requireAdmin, async (req, res) => {
+  const paused = !!(req.body as { paused?: boolean })?.paused;
+  const state = await setMirrorSyncPaused(paused);
+  res.json({ ok: true, ...state });
+});
+
+adminRouter.post("/mirror-sync/auto-tune", requireAdmin, async (req, res) => {
+  const enabled = !!(req.body as { enabled?: boolean })?.enabled;
+  const state = await setMirrorSyncAutoTune(enabled);
+  res.json({ ok: true, ...state });
+});
+
+adminRouter.post("/mirror-sync/concurrency", requireAdmin, async (req, res) => {
+  const raw = Number((req.body as { concurrency?: number })?.concurrency);
+  if (!Number.isFinite(raw) || raw < 1) {
+    return res.status(400).json({ error: "bad_concurrency" });
+  }
+  const state = await setMirrorSyncConcurrency(raw);
+  res.json({ ok: true, ...state });
+});
+
+adminRouter.post("/mirror-sync/retry-failed", requireAdmin, async (_req, res) => {
+  const result = await retryMirrorSyncFailures();
+  res.json({ ok: true, ...result });
+});
+
+adminRouter.get("/analytics", requireAdmin, async (_req, res) => {
+  res.json(getAnalyticsSnapshot());
 });
 
 adminRouter.get("/users", requireAdmin, async (_req, res) => {
