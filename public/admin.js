@@ -14,29 +14,31 @@ async function loadMirrorSync() {
       throw new Error('sync_stats_failed');
     }
     const data = await res.json();
+    const totalFiles = Number(data.filesTotal || 0);
+    const doneFiles = Number(data.filesDone || 0);
+    const remainingFiles = Number(data.filesRemaining || 0);
+    const filesPercent = Number(data.filesPercent || 0);
     const total = Number(data.totalParts || 0);
     const done = Number(data.doneParts || 0);
     const pending = Number(data.pendingParts || 0);
-    const remaining = Number(data.remainingParts || 0);
     const errors = Number(data.errorParts || 0);
     const archivesTotal = Number(data.archivesTotal || 0);
-    const archivesPending = Number(data.archivesPending || 0);
+    const archivesDone = Number(data.archivesDone || 0);
 
-    if (total > 0) {
-      mirrorSyncProgress.max = total;
-      mirrorSyncProgress.value = Math.min(done, total);
+    if (totalFiles > 0) {
+      mirrorSyncProgress.max = totalFiles;
+      mirrorSyncProgress.value = Math.min(doneFiles, totalFiles);
     } else {
       mirrorSyncProgress.max = 100;
       mirrorSyncProgress.value = 100;
     }
 
-    if (total === 0) {
+    if (totalFiles === 0) {
       mirrorSyncText.textContent = 'No sync tasks';
       return;
     }
 
-    const pct = Math.floor((Math.min(done, total) / total) * 100);
-    mirrorSyncText.textContent = `${pct}% | ${done}/${total} parts | remaining ${remaining} | pending ${pending} | errors ${errors} | archives ${archivesTotal - archivesPending}/${archivesTotal}`;
+    mirrorSyncText.textContent = `${filesPercent}% | files ${doneFiles}/${totalFiles} | remaining ${remainingFiles} | archives ${archivesDone}/${archivesTotal} | parts ${done}/${total} | pending ${pending} | part-errors ${errors}`;
   } catch (err) {
     mirrorSyncText.textContent = 'Failed to load sync stats';
   }
