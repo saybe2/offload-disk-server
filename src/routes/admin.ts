@@ -7,146 +7,94 @@ import { Folder } from "../models/Folder.js";
 import { Share } from "../models/Share.js";
 import { Webhook } from "../models/Webhook.js";
 import { deleteSmbUser, ensureSmbUser } from "../services/smbUsers.js";
+import { isTelegramReady } from "../services/telegram.js";
 import { config } from "../config.js";
 
 export const adminRouter = Router();
 
 adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
-  const [archiveStats] = await Archive.aggregate([
-    {
-      $match: {
-        status: "ready",
-        deletedAt: null,
-        trashedAt: null,
-        "parts.mirrorProvider": { $in: ["discord", "telegram"] }
-      }
-    },
-    {
-      $project: {
-        mirrorParts: {
-          $filter: {
-            input: "$parts",
-            as: "p",
-            cond: { $in: ["$$p.mirrorProvider", ["discord", "telegram"]] }
-          }
-        },
-        activeFilesCount: {
-          $size: {
-            $filter: {
-              input: "$files",
-              as: "f",
-              cond: { $eq: [{ $ifNull: ["$$f.deletedAt", null] }, null] }
-            }
-          }
-        }
-      }
-    },
-    {
-      $project: {
-        activeFilesCount: 1,
-        mirrorTotalCount: { $size: "$mirrorParts" },
-        mirrorDoneCount: {
-          $size: {
-            $filter: {
-              input: "$mirrorParts",
-              as: "p",
-              cond: {
-                $and: [
-                  { $ne: [{ $ifNull: ["$$p.mirrorUrl", ""] }, ""] },
-                  { $ne: [{ $ifNull: ["$$p.mirrorMessageId", ""] }, ""] }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      $project: {
-        activeFilesCount: 1,
-        archiveDone: {
-          $and: [
-            { $gt: ["$mirrorTotalCount", 0] },
-            { $eq: ["$mirrorDoneCount", "$mirrorTotalCount"] }
-          ]
-        }
-      }
-    },
-    {
-      $group: {
-        _id: null,
-        archivesTotal: { $sum: 1 },
-        archivesDone: { $sum: { $cond: ["$archiveDone", 1, 0] } },
-        filesTotal: { $sum: "$activeFilesCount" },
-        filesDone: { $sum: { $cond: ["$archiveDone", "$activeFilesCount", 0] } }
-      }
-    }
-  ]);
+  const hasDiscord = (await Webhook.countDocuments({ enabled: true })) > 0;
+  const telegramReady = isTelegramReady();
 
-  const [partStats] = await Archive.aggregate([
-    {
-      $match: {
-        status: "ready",
-        deletedAt: null,
-        trashedAt: null
-      }
-    },
-    {
-      $project: {
-        archiveId: "$_id",
-        mirrorParts: {
-          $filter: {
-            input: "$parts",
-            as: "p",
-            cond: { $in: ["$$p.mirrorProvider", ["discord", "telegram"]] }
-          }
-        }
-      }
-    },
-    { $unwind: { path: "$mirrorParts", preserveNullAndEmptyArrays: false } },
-    {
-      $group: {
-        _id: null,
-        totalParts: { $sum: 1 },
-        doneParts: {
-          $sum: {
-            $cond: [
-              {
-                $and: [
-                  { $ne: [{ $ifNull: ["$mirrorParts.mirrorUrl", ""] }, ""] },
-                  { $ne: [{ $ifNull: ["$mirrorParts.mirrorMessageId", ""] }, ""] }
-                ]
-              },
-              1,
-              0
-            ]
-          }
-        },
-        pendingParts: {
-          $sum: { $cond: [{ $eq: ["$mirrorParts.mirrorPending", true] }, 1, 0] }
-        },
-        errorParts: {
-          $sum: {
-            $cond: [{ $ne: [{ $ifNull: ["$mirrorParts.mirrorError", ""] }, ""] }, 1, 0]
-          }
-        }
-      }
-    }
-  ]);
+  const archives = await Archive.find({
+    status: "ready",
+    deletedAt: null,
+    trashedAt: null,
+    "parts.0": { $exists: true }
+  })
+    .select("parts files.deletedAt")
+    .lean();
 
-  const archivesTotal = Number(archiveStats?.archivesTotal || 0);
-  const archivesDone = Number(archiveStats?.archivesDone || 0);
+  const resolveTarget = (part: any) => {
+    if (part?.mirrorProvider === "discord" || part?.mirrorProvider === "telegram") {
+      return part.mirrorProvider;
+    }
+    const primary = part?.provider === "telegram" ? "telegram" : "discord";
+    if (primary === "discord" && telegramReady) return "telegram";
+    if (primary === "telegram" && hasDiscord) return "discord";
+    return null;
+  };
+
+  let archivesTotal = 0;
+  let archivesDone = 0;
+  let filesTotal = 0;
+  let filesDone = 0;
+  let totalParts = 0;
+  let doneParts = 0;
+  let pendingParts = 0;
+  let errorParts = 0;
+  let totalBytes = 0;
+  let doneBytes = 0;
+
+  for (const archive of archives as any[]) {
+    const activeFilesCount = Array.isArray(archive.files)
+      ? archive.files.filter((f: any) => !f?.deletedAt).length
+      : 0;
+    const parts = Array.isArray(archive.parts) ? archive.parts : [];
+    if (parts.length === 0) continue;
+
+    let archiveTargetParts = 0;
+    let archiveDoneParts = 0;
+
+    for (const part of parts) {
+      const target = resolveTarget(part);
+      if (!target) continue;
+
+      const partBytes = Number(part?.plainSize || part?.size || 0);
+      const done = !!part?.mirrorUrl && !!part?.mirrorMessageId;
+      const pending = !!part?.mirrorPending;
+      const hasError = !!part?.mirrorError;
+
+      archiveTargetParts += 1;
+      totalParts += 1;
+      totalBytes += partBytes;
+
+      if (done) {
+        archiveDoneParts += 1;
+        doneParts += 1;
+        doneBytes += partBytes;
+      }
+      if (pending) pendingParts += 1;
+      if (hasError) errorParts += 1;
+    }
+
+    if (archiveTargetParts === 0) continue;
+
+    archivesTotal += 1;
+    filesTotal += activeFilesCount;
+    if (archiveDoneParts >= archiveTargetParts) {
+      archivesDone += 1;
+      filesDone += activeFilesCount;
+    }
+  }
+
   const archivesPending = Math.max(0, archivesTotal - archivesDone);
-  const filesTotal = Number(archiveStats?.filesTotal || 0);
-  const filesDone = Number(archiveStats?.filesDone || 0);
   const filesRemaining = Math.max(0, filesTotal - filesDone);
   const filesPercent = filesTotal > 0 ? Math.floor((filesDone / filesTotal) * 100) : 100;
-  const totalParts = Number(partStats?.totalParts || 0);
-  const doneParts = Number(partStats?.doneParts || 0);
-  const pendingParts = Number(partStats?.pendingParts || 0);
-  const errorParts = Number(partStats?.errorParts || 0);
   const remainingParts = Math.max(0, totalParts - doneParts);
   const partsPercent = totalParts > 0 ? Math.floor((doneParts / totalParts) * 100) : 100;
+  const remainingBytes = Math.max(0, totalBytes - doneBytes);
+  const bytesPercent = totalBytes > 0 ? Math.floor((doneBytes / totalBytes) * 100) : 100;
 
   res.json({
     filesTotal,
@@ -159,6 +107,10 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
     remainingParts,
     errorParts,
     partsPercent,
+    totalBytes,
+    doneBytes,
+    remainingBytes,
+    bytesPercent,
     archivesTotal,
     archivesDone,
     archivesPending
