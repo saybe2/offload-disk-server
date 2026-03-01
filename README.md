@@ -106,6 +106,18 @@ docker compose -f docker-compose.monitoring.yml up -d
 - Prometheus: `http://SERVER_IP:9090`
 - Loki API: `http://SERVER_IP:3100`
 
+### 4.1) Grafana first clicks (UI)
+1. Open Grafana, login `admin/admin`, set a new password.
+2. Left menu -> **Dashboards** -> **Manage**.
+3. Open folder **Offload**.
+4. Open dashboard **Offload Overview**.
+5. Time range (top-right): set `Last 1 hour` (or your preferred range), refresh `5s`.
+6. For logs: left menu -> **Explore** -> datasource `Loki`, query example:
+   - `{container="offload"}`
+   - `{container="offload-xray"}`
+   - `{container="offload-promtail"}`
+7. Prometheus targets check: `http://SERVER_IP:9090/targets` and ensure `offload` is `UP`.
+
 ### 5) Logs and status
 ```bash
 docker compose -f docker-compose.monitoring.yml ps
