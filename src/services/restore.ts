@@ -13,7 +13,7 @@ import { zipEntryName } from "./archive.js";
 import { startRestore, endRestore } from "./activity.js";
 import { uniqueParts } from "./parts.js";
 import { log } from "../logger.js";
-import { refreshPartUrl } from "./partProvider.js";
+import { refreshMirrorPartUrl, refreshPartUrl } from "./partProvider.js";
 
 function contentDisposition(filename: string) {
   const fallback = filename
@@ -86,7 +86,17 @@ async function extractZipEntryToFile(
 
 async function downloadPartWithRepair(
   archiveId: string,
-  part: { index: number; url: string; messageId: string; webhookId: string },
+  part: {
+    index: number;
+    url: string;
+    messageId: string;
+    webhookId: string;
+    mirrorUrl?: string;
+    mirrorProvider?: "discord" | "telegram";
+    mirrorMessageId?: string;
+    mirrorWebhookId?: string;
+    mirrorTelegramFileId?: string;
+  },
   partPath: string,
   _webhookCache: Map<string, string>
 ) {
@@ -98,8 +108,24 @@ async function downloadPartWithRepair(
     if (!/download_failed:(401|403|404)/.test(message)) {
       throw err;
     }
-    await refreshPartUrl(archiveId, part);
-    await downloadToFile(part.url, partPath);
+    try {
+      await refreshPartUrl(archiveId, part);
+      await downloadToFile(part.url, partPath);
+      return;
+    } catch {
+      // try mirror copy below
+    }
+
+    if (!part.mirrorUrl) {
+      throw err;
+    }
+    try {
+      await downloadToFile(part.mirrorUrl, partPath);
+      return;
+    } catch {
+      await refreshMirrorPartUrl(archiveId, part);
+      await downloadToFile(String(part.mirrorUrl || ""), partPath);
+    }
   }
 }
 
