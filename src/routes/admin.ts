@@ -22,7 +22,7 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
     trashedAt: null,
     "parts.0": { $exists: true }
   })
-    .select("parts files.deletedAt")
+    .select("parts files originalSize")
     .lean();
 
   const resolveTarget = (part: any) => {
@@ -55,6 +55,8 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
 
     let archiveTargetParts = 0;
     let archiveDoneParts = 0;
+    let archivePartBytesTotal = 0;
+    let archivePartBytesDone = 0;
 
     for (const part of parts) {
       const target = resolveTarget(part);
@@ -67,12 +69,12 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
 
       archiveTargetParts += 1;
       totalParts += 1;
-      totalBytes += partBytes;
+      archivePartBytesTotal += partBytes;
 
       if (done) {
         archiveDoneParts += 1;
         doneParts += 1;
-        doneBytes += partBytes;
+        archivePartBytesDone += partBytes;
       }
       if (pending) pendingParts += 1;
       if (hasError) errorParts += 1;
@@ -82,6 +84,16 @@ adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
 
     archivesTotal += 1;
     filesTotal += activeFilesCount;
+
+    const archiveOriginalSize = Number(archive.originalSize || 0);
+    if (archiveOriginalSize > 0) {
+      totalBytes += archiveOriginalSize;
+      doneBytes += archiveOriginalSize * (archiveDoneParts / archiveTargetParts);
+    } else {
+      totalBytes += archivePartBytesTotal;
+      doneBytes += archivePartBytesDone;
+    }
+
     if (archiveDoneParts >= archiveTargetParts) {
       archivesDone += 1;
       filesDone += activeFilesCount;
