@@ -252,6 +252,13 @@ async function main() {
     log("proxy", "disabled");
   }
 
+  log(
+    "telegram",
+    config.telegramEnabled
+      ? (config.telegramBotToken && config.telegramChatId ? "enabled and configured" : "enabled but not configured")
+      : "disabled"
+  );
+
   app.listen(config.port, () => {
     log("server", `listening on ${config.port}`);
   });

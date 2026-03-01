@@ -29,7 +29,7 @@ import { log } from "../logger.js";
 import { getDescendantFolderIds } from "../services/folders.js";
 import { Webhook } from "../models/Webhook.js";
 import { deriveKey } from "../services/crypto.js";
-import { fetchWebhookMessage, uploadBufferToWebhook, uploadToWebhook } from "../services/discord.js";
+import { uploadPartWithFallback, refreshPartUrl } from "../services/partProvider.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
@@ -48,6 +48,7 @@ import {
 } from "../services/preview.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
+import { isTelegramReady } from "../services/telegram.js";
 
 const upload = multer({
   dest: path.join(config.cacheDir, "uploads_tmp"),
@@ -150,53 +151,25 @@ function isTransientError(err: unknown) {
     if (code === 429) return true;
     if (code >= 500 && code <= 599) return true;
   }
+  const tgMatch = message.match(/telegram_(upload|get_file|delete)_failed:(\d{3})/);
+  if (tgMatch) {
+    const code = Number(tgMatch[1]);
+    if (code === 429) return true;
+    if (code >= 500 && code <= 599) return true;
+  }
   return false;
 }
 
-async function refreshPartUrl(archiveId: string, part: any) {
-  const webhookId = part.webhookId ? String(part.webhookId) : null;
-  const messageId = part.messageId;
-  if (!webhookId || !messageId) {
-    throw new Error("missing_webhook_metadata");
-  }
-  const hook = await Webhook.findById(webhookId).lean();
-  if (!hook?.url) {
-    throw new Error("missing_webhook");
-  }
-  const payload = await fetchWebhookMessage(hook.url, messageId);
-  const freshUrl = payload.attachments?.[0]?.url;
-  if (!freshUrl) {
-    throw new Error("missing_attachment_url");
-  }
-  await Archive.updateOne(
-    { _id: archiveId, "parts.messageId": messageId },
-    { $set: { "parts.$.url": freshUrl } }
-  );
-  part.url = freshUrl;
-  return freshUrl;
-}
-
-async function uploadWithRetry(partPath: string, webhookUrl: string, content: string) {
+async function uploadBufferWithRetry(
+  buffer: Buffer,
+  filename: string,
+  content: string,
+  webhook?: { id: string; url: string }
+) {
   let attempt = 0;
   while (true) {
     try {
-      return await uploadToWebhook(partPath, webhookUrl, content);
-    } catch (err) {
-      attempt += 1;
-      if (!isTransientError(err) || attempt > config.uploadRetryMax) {
-        throw err;
-      }
-      const delay = Math.min(config.uploadRetryMaxMs, config.uploadRetryBaseMs * Math.pow(2, attempt - 1));
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-}
-
-async function uploadBufferWithRetry(buffer: Buffer, filename: string, webhookUrl: string, content: string) {
-  let attempt = 0;
-  while (true) {
-    try {
-      return await uploadBufferToWebhook(buffer, filename, webhookUrl, content);
+      return await uploadPartWithFallback(buffer, filename, content, webhook);
     } catch (err) {
       attempt += 1;
       if (!isTransientError(err) || attempt > config.uploadRetryMax) {
@@ -530,8 +503,9 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
   }
 
   const webhooks = await Webhook.find({ enabled: true });
-  if (webhooks.length === 0) {
-    return res.status(400).json({ error: "no_webhooks" });
+  const telegramReady = isTelegramReady();
+  if (webhooks.length === 0 && !telegramReady) {
+    return res.status(400).json({ error: "no_storage_provider" });
   }
 
   let folderId: string | null = typeof req.query.folderId === "string" ? req.query.folderId : null;
@@ -703,13 +677,20 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
 
       const scheduleUploads = () => {
         if (failed) return;
-        while (active < config.uploadPartsConcurrency && pending.length > 0) {
+        const slots = webhooks.length > 0 ? webhooks.length : 1;
+        const concurrency = Math.max(1, Math.min(config.uploadPartsConcurrency, slots));
+        while (active < concurrency && pending.length > 0) {
           const part = pending.shift()!;
           active += 1;
           (async () => {
-            const webhook = webhooks[part.index % webhooks.length];
+            const webhook = webhooks.length > 0 ? webhooks[part.index % webhooks.length] : null;
             const content = `archive:${archive.id} part:${part.index}`;
-            const result = await uploadBufferWithRetry(part.buffer, `part_${part.index}`, webhook.url, content);
+            const result = await uploadBufferWithRetry(
+              part.buffer,
+              `part_${part.index}`,
+              content,
+              webhook ? { id: webhook.id, url: webhook.url } : undefined
+            );
             const partDoc = {
               index: part.index,
               size: part.size,
@@ -717,7 +698,10 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
               hash: part.hash,
               url: result.url,
               messageId: result.messageId,
-              webhookId: webhook.id,
+              webhookId: result.webhookId,
+              provider: result.provider,
+              telegramFileId: result.telegramFileId || "",
+              telegramChatId: result.telegramChatId || "",
               iv: part.iv,
               authTag: part.authTag
             };
@@ -1357,9 +1341,11 @@ apiRouter.get("/archives/:id/parts", requireAuth, async (req, res) => {
     size: part.size,
     plainSize: part.plainSize || part.size,
     hash: part.hash,
+    provider: part.provider || "discord",
     url: part.url,
     iv: part.iv || "",
-    authTag: part.authTag || ""
+    authTag: part.authTag || "",
+    telegramFileId: part.telegramFileId || ""
   }));
 
   return res.json({
@@ -1434,7 +1420,7 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
 
   const fetchWithRetry = async () => {
     let response = await outboundFetch(part.url);
-    if (response.status === 404) {
+    if (response.status === 404 || response.status === 401 || response.status === 403) {
       try {
         await refreshPartUrl(archive.id, part);
         response = await outboundFetch(part.url);

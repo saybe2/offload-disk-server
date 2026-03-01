@@ -7,13 +7,13 @@ import mime from "mime-types";
 import unzipper from "unzipper";
 import { ArchiveDoc } from "../models/Archive.js";
 import { Archive } from "../models/Archive.js";
-import { Webhook } from "../models/Webhook.js";
-import { downloadToFile, fetchWebhookMessage } from "./discord.js";
+import { downloadToFile } from "./discord.js";
 import { deriveKey } from "./crypto.js";
 import { zipEntryName } from "./archive.js";
 import { startRestore, endRestore } from "./activity.js";
 import { uniqueParts } from "./parts.js";
 import { log } from "../logger.js";
+import { refreshPartUrl } from "./partProvider.js";
 
 function contentDisposition(filename: string) {
   const fallback = filename
@@ -88,35 +88,17 @@ async function downloadPartWithRepair(
   archiveId: string,
   part: { index: number; url: string; messageId: string; webhookId: string },
   partPath: string,
-  webhookCache: Map<string, string>
+  _webhookCache: Map<string, string>
 ) {
   try {
     await downloadToFile(part.url, partPath);
     return;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (!/download_failed:404/.test(message)) {
+    if (!/download_failed:(401|403|404)/.test(message)) {
       throw err;
     }
-    let webhookUrl = webhookCache.get(part.webhookId);
-    if (!webhookUrl) {
-      const hook = await Webhook.findById(part.webhookId).lean();
-      webhookUrl = hook?.url || "";
-      webhookCache.set(part.webhookId, webhookUrl);
-    }
-    if (!webhookUrl) {
-      throw err;
-    }
-    const payload = await fetchWebhookMessage(webhookUrl, part.messageId);
-    const freshUrl = payload.attachments?.[0]?.url;
-    if (!freshUrl) {
-      throw err;
-    }
-    await Archive.updateOne(
-      { _id: archiveId, "parts.messageId": part.messageId },
-      { $set: { "parts.$.url": freshUrl } }
-    );
-    part.url = freshUrl;
+    await refreshPartUrl(archiveId, part);
     await downloadToFile(part.url, partPath);
   }
 }
