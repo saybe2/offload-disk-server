@@ -100,6 +100,8 @@ docker compose -f docker-compose.proxy.yml up -d --build
 ```bash
 docker compose -f docker-compose.monitoring.yml up -d
 ```
+Loki storage has a hard size cap of `5GB` (tmpfs-backed `loki_data` volume).
+When this cap is reached, oldest logs are effectively dropped by pressure, and Loki data is not preserved across host reboot.
 
 ### 4) Open UIs
 - Grafana: `http://SERVER_IP:3001` (default: `admin` / `admin`)
