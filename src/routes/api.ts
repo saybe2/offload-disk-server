@@ -1347,6 +1347,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
+  noteDownloadStarted(fileSize);
 
   const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}`);
@@ -1374,8 +1375,10 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodedName}`);
     res.setHeader("Cache-Control", "private, max-age=60");
     void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    noteDownloadDone(body.length || fileSize);
     return res.end(body);
   } catch (err) {
+    noteDownloadError();
     log("preview", `error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     return res.status(500).json({ error: "preview_failed" });
   } finally {

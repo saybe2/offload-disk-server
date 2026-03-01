@@ -363,6 +363,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     return res.status(415).json({ error: "unsupported_preview_type" });
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
+  noteDownloadStarted(fileSize);
 
   const tempDir = path.join(
     config.cacheDir,
@@ -393,8 +394,10 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     res.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     res.setHeader("Cache-Control", "private, max-age=60");
     void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    noteDownloadDone(body.length || fileSize);
     return res.end(body);
   } catch (err) {
+    noteDownloadError();
     log("preview", `public error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     return res.status(500).json({ error: "preview_failed" });
   } finally {

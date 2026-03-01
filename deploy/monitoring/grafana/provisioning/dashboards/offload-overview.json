@@ -193,6 +193,43 @@
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Mirror Health Totals",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "offload_mirror_parts_done_total", "legendFormat": "parts done total" },
+        { "refId": "B", "expr": "offload_mirror_parts_error_total", "legendFormat": "parts error total" },
+        { "refId": "C", "expr": "offload_mirror_rate_limited_total", "legendFormat": "429 total" }
+      ],
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Mirror Provider Done Totals",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "offload_mirror_provider_done_total{provider=\"discord\"}", "legendFormat": "discord done total" },
+        { "refId": "B", "expr": "offload_mirror_provider_done_total{provider=\"telegram\"}", "legendFormat": "telegram done total" }
+      ],
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
     }
   ]
 }
