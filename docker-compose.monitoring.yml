@@ -63,10 +63,14 @@ services:
 volumes:
   prometheus_data:
   loki_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=5g,uid=10001,gid=10001
   grafana_data:
 
 networks:
   offload_net:
     external: true
     name: offload_net
-
