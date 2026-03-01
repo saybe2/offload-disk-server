@@ -130,4 +130,12 @@
   - локальный outbound-прокси (xray sing-box) и проксирование HTTP-клиента приложения только для Discord запросов;
   - fallback-режим: direct -> proxy при таймаутах/ошибках.
 - Важные метрики: средняя скорость upload/download, доля ошибок, загрузка CPU роутера до/после, влияние на latency API.
+- Аналитика/наблюдаемость:
+  - Proxy status в админке (xray up/down, активен ли fallback на direct, последние ошибки);
+  - метрики очереди (queued/processing/ready/error), скорость обработки частей, среднее ETA;
+  - метрики по источникам (Discord/Telegram): скорость, retry rate, error rate.
+- Telegram fallback (бот/API) как резервный провайдер хранения:
+  - провайдерная абстракция хранения (primary Discord, secondary Telegram);
+  - fallback-чтение/запись при недоступности Discord;
+  - селективное проксирование Telegram-трафика через тот же outbound proxy.
 
