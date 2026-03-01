@@ -24,6 +24,7 @@ import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { log } from "../logger.js";
+import { noteDownloadDone, noteDownloadError, noteDownloadStarted } from "../services/analytics.js";
 
 export const publicRouter = Router();
 type ResolveArchiveSuccess = { share: any; archive: any };
@@ -69,6 +70,21 @@ function activeBundleFileIndices(archive: any) {
     }
   }
   return indices;
+}
+
+function estimateArchiveDownloadBytes(archive: any) {
+  if (!archive?.isBundle) {
+    return Number(archive?.originalSize || archive?.files?.[0]?.size || 0);
+  }
+  if (!Array.isArray(archive?.files)) {
+    return Number(archive?.originalSize || 0);
+  }
+  let sum = 0;
+  for (const file of archive.files) {
+    if (isFileDeleted(file)) continue;
+    sum += Number(file?.size || 0);
+  }
+  return sum > 0 ? sum : Number(archive?.originalSize || 0);
 }
 
 async function resolveArchiveByShare(token: string, archiveId?: string): Promise<ResolveArchiveResult> {
@@ -179,6 +195,8 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
   if (archive.status !== "ready") return res.status(409).json({ error: "not_ready" });
 
   try {
+    const estimatedBytes = estimateArchiveDownloadBytes(archive);
+    noteDownloadStarted(estimatedBytes);
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
@@ -187,6 +205,7 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
       }
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
+      noteDownloadDone(Number(file.size || 0));
       return;
     }
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
@@ -202,7 +221,9 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
       targets.push({ archiveId: archive.id, fileIndex: 0 });
     }
     await bumpDownloadCounts(targets);
+    noteDownloadDone(estimatedBytes);
   } catch {
+    noteDownloadError();
     return res.status(500).json({ error: "restore_failed" });
   }
 });
@@ -217,6 +238,8 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
   if (archive.status !== "ready") return res.status(409).json({ error: "not_ready" });
 
   try {
+    const estimatedBytes = estimateArchiveDownloadBytes(archive);
+    noteDownloadStarted(estimatedBytes);
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
@@ -225,6 +248,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
       }
       await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
+      noteDownloadDone(Number(file.size || 0));
       return;
     }
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
@@ -240,7 +264,9 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
       targets.push({ archiveId: archive.id, fileIndex: 0 });
     }
     await bumpDownloadCounts(targets);
+    noteDownloadDone(estimatedBytes);
   } catch {
+    noteDownloadError();
     return res.status(500).json({ error: "restore_failed" });
   }
 });

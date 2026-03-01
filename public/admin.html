@@ -18,6 +18,27 @@
     <h2>Mirror Sync (Total Data)</h2>
     <progress id="mirrorSyncProgress" max="100" value="0"></progress>
     <div id="mirrorSyncText" class="status-meta">Loading...</div>
+    <div class="toolbar" style="margin-top:10px;">
+      <div class="toolbar-item">
+        <button id="mirrorPauseBtn" type="button">Pause sync</button>
+        <button id="mirrorRetryBtn" type="button">Retry failed parts</button>
+      </div>
+      <div class="toolbar-item">
+        <label for="mirrorConcurrencyInput">Concurrency</label>
+        <input id="mirrorConcurrencyInput" type="number" min="1" step="1" style="width:90px;" />
+        <button id="mirrorConcurrencyBtn" type="button">Apply</button>
+        <label class="checkbox-row">
+          <input id="mirrorAutoTuneToggle" type="checkbox" />
+          Auto tune
+        </label>
+      </div>
+    </div>
+    <div id="mirrorControlStatus" class="status-meta"></div>
+  </section>
+
+  <section class="card">
+    <h2>Analytics</h2>
+    <div id="analyticsText" class="status-meta">Loading...</div>
   </section>
 
   <section class="card">

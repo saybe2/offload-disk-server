@@ -49,6 +49,14 @@ import {
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
+import {
+  noteDownloadDone,
+  noteDownloadError,
+  noteDownloadStarted,
+  noteUploadArchiveDone,
+  noteUploadArchiveError,
+  noteUploadArchiveStarted
+} from "../services/analytics.js";
 
 const upload = multer({
   dest: path.join(config.cacheDir, "uploads_tmp"),
@@ -253,6 +261,21 @@ function activeBundleFileIndices(archive: any) {
 function hasActiveFiles(archive: any) {
   if (!Array.isArray(archive?.files) || archive.files.length === 0) return false;
   return archive.files.some((file: any) => !isFileDeleted(file));
+}
+
+function estimateArchiveDownloadBytes(archive: any) {
+  if (!archive?.isBundle) {
+    return Number(archive?.originalSize || archive?.files?.[0]?.size || 0);
+  }
+  if (!Array.isArray(archive?.files)) {
+    return Number(archive?.originalSize || 0);
+  }
+  let sum = 0;
+  for (const file of archive.files) {
+    if (isFileDeleted(file)) continue;
+    sum += Number(file?.size || 0);
+  }
+  return sum > 0 ? sum : Number(archive?.originalSize || 0);
 }
 
 apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
@@ -647,6 +670,8 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
 
       archiveId = archive.id;
       log("stream", `upload start archive=${archive.id} user=${user.id} name=${safeName}`);
+      const streamStartedAt = Date.now();
+      noteUploadArchiveStarted();
 
       const workDir = path.join(config.cacheDir, "work", `stream_${archive.id}`);
       if (useDisk) {
@@ -862,6 +887,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         if (failed) {
           await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: failed?.message || "upload_failed" } });
           log("stream", `upload failed archive=${archive.id} err=${failed?.message || "upload_failed"}`);
+          noteUploadArchiveError();
           return;
         }
         if (useDisk) {
@@ -878,6 +904,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
+        noteUploadArchiveDone(originalSize, Date.now() - streamStartedAt);
         if (config.cacheDeleteAfterUpload) {
           await fs.promises.rm(stagingDir, { recursive: true, force: true });
           if (useDisk) {
@@ -963,6 +990,8 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
   try {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
     const canUseRange = !!rangeHeader && !archive.isBundle;
+    const estimatedBytes = estimateArchiveDownloadBytes(archive);
+    noteDownloadStarted(estimatedBytes);
     log("download", canUseRange ? `start ${archive.id} range=${rangeHeader}` : `start ${archive.id}`);
     if (archive.isBundle) {
       const activeIndices = activeBundleFileIndices(archive);
@@ -975,6 +1004,7 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
         await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
         const countTargets = activeIndices.map((fileIndex) => ({ archiveId: archive.id, fileIndex }));
         await bumpDownloadCounts(countTargets);
+        noteDownloadDone(estimatedBytes);
         return;
       }
 
@@ -1024,6 +1054,7 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
       }
       await zip.finalize();
       await bumpDownloadCounts(countTargets);
+      noteDownloadDone(estimatedBytes);
       return;
     }
 
@@ -1033,11 +1064,14 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
 
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+      noteDownloadDone(estimatedBytes);
       return;
     }
     await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
     await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
+    noteDownloadDone(estimatedBytes);
   } catch (err) {
+    noteDownloadError();
     log("download", `error ${archive.id} ${(err as Error).message}`);
     if (res.headersSent) {
       res.destroy();
@@ -1076,6 +1110,16 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
   const downloadId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const tempDir = path.join(config.cacheDir, "selection", downloadId);
   await fs.promises.mkdir(tempDir, { recursive: true });
+  const estimatedBytes = items.reduce((sum, item) => {
+    const archive = archiveMap.get(item.archiveId);
+    if (!archive) return sum;
+    if (!archive.isBundle) return sum + Number(archive.originalSize || archive.files?.[0]?.size || 0);
+    const index = Number.isInteger(item.fileIndex) ? Number(item.fileIndex) : 0;
+    const file = archive.files?.[index];
+    if (!file || isFileDeleted(file)) return sum;
+    return sum + Number(file.size || 0);
+  }, 0);
+  noteDownloadStarted(estimatedBytes);
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename=\"selection_${Date.now()}.zip\"`);
@@ -1138,6 +1182,10 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
 
     await zip.finalize();
     await bumpDownloadCounts(downloadTargets);
+    noteDownloadDone(estimatedBytes);
+  } catch (err) {
+    noteDownloadError();
+    throw err;
   } finally {
     // cleanup handled on close
   }
@@ -1166,7 +1214,11 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
 
   try {
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-  const canUseRange = !!rangeHeader && !archive.isBundle;
+    const canUseRange = !!rangeHeader && !archive.isBundle;
+    const estimatedBytes = archive.isBundle
+      ? Number(targetFile?.size || 0)
+      : Number(archive.originalSize || archive.files?.[0]?.size || 0);
+    noteDownloadStarted(estimatedBytes);
     log(
       "download",
       canUseRange ? `start ${archive.id} file=${index} range=${rangeHeader}` : `start ${archive.id} file=${index}`
@@ -1174,15 +1226,19 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
     if (!archive.isBundle) {
       if (canUseRange) {
         await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+        noteDownloadDone(estimatedBytes);
         return;
       }
       await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
+      noteDownloadDone(estimatedBytes);
       return;
     }
     await streamArchiveFileToResponse(archive, index, res, config.cacheDir, config.masterKey);
     await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: index }]);
+    noteDownloadDone(estimatedBytes);
   } catch (err) {
+    noteDownloadError();
     log("download", `error ${archive.id} file=${index} ${(err as Error).message}`);
     if (res.headersSent) {
       res.destroy();
