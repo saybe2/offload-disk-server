@@ -7,8 +7,19 @@ const mirrorSyncProgress = document.getElementById('mirrorSyncProgress');
 const mirrorSyncText = document.getElementById('mirrorSyncText');
 let mirrorSyncTimer = null;
 
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const exp = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  const num = value / Math.pow(1024, exp);
+  const prec = exp >= 3 ? 2 : 1;
+  return `${num.toFixed(prec)} ${units[exp]}`;
+}
+
 async function loadMirrorSync() {
   try {
+    mirrorSyncText.textContent = 'Loading...';
     const res = await fetch('/api/admin/mirror-sync');
     if (!res.ok) {
       throw new Error('sync_stats_failed');
@@ -22,23 +33,27 @@ async function loadMirrorSync() {
     const done = Number(data.doneParts || 0);
     const pending = Number(data.pendingParts || 0);
     const errors = Number(data.errorParts || 0);
+    const totalBytes = Number(data.totalBytes || 0);
+    const doneBytes = Number(data.doneBytes || 0);
+    const remainingBytes = Number(data.remainingBytes || 0);
+    const bytesPercent = Number(data.bytesPercent || 0);
     const archivesTotal = Number(data.archivesTotal || 0);
     const archivesDone = Number(data.archivesDone || 0);
 
-    if (totalFiles > 0) {
-      mirrorSyncProgress.max = totalFiles;
-      mirrorSyncProgress.value = Math.min(doneFiles, totalFiles);
+    if (totalBytes > 0) {
+      mirrorSyncProgress.max = totalBytes;
+      mirrorSyncProgress.value = Math.min(doneBytes, totalBytes);
     } else {
       mirrorSyncProgress.max = 100;
       mirrorSyncProgress.value = 100;
     }
 
-    if (totalFiles === 0) {
+    if (totalBytes === 0 && totalFiles === 0 && total === 0) {
       mirrorSyncText.textContent = 'No sync tasks';
       return;
     }
 
-    mirrorSyncText.textContent = `${filesPercent}% | files ${doneFiles}/${totalFiles} | remaining ${remainingFiles} | archives ${archivesDone}/${archivesTotal} | parts ${done}/${total} | pending ${pending} | part-errors ${errors}`;
+    mirrorSyncText.textContent = `${bytesPercent}% | data ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} | remaining ${formatBytes(remainingBytes)} | files ${doneFiles}/${totalFiles} | archives ${archivesDone}/${archivesTotal} | parts ${done}/${total} | pending ${pending} | part-errors ${errors}`;
   } catch (err) {
     mirrorSyncText.textContent = 'Failed to load sync stats';
   }
