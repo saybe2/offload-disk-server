@@ -11,6 +11,90 @@ import { config } from "../config.js";
 
 export const adminRouter = Router();
 
+adminRouter.get("/mirror-sync", requireAdmin, async (_req, res) => {
+  const [partStats] = await Archive.aggregate([
+    {
+      $match: {
+        status: "ready",
+        deletedAt: null,
+        trashedAt: null
+      }
+    },
+    {
+      $project: {
+        archiveId: "$_id",
+        mirrorParts: {
+          $filter: {
+            input: "$parts",
+            as: "p",
+            cond: { $in: ["$$p.mirrorProvider", ["discord", "telegram"]] }
+          }
+        }
+      }
+    },
+    { $unwind: { path: "$mirrorParts", preserveNullAndEmptyArrays: false } },
+    {
+      $group: {
+        _id: null,
+        totalParts: { $sum: 1 },
+        doneParts: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $ne: [{ $ifNull: ["$mirrorParts.mirrorUrl", ""] }, ""] },
+                  { $ne: [{ $ifNull: ["$mirrorParts.mirrorMessageId", ""] }, ""] }
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        },
+        pendingParts: {
+          $sum: { $cond: [{ $eq: ["$mirrorParts.mirrorPending", true] }, 1, 0] }
+        },
+        errorParts: {
+          $sum: {
+            $cond: [{ $ne: [{ $ifNull: ["$mirrorParts.mirrorError", ""] }, ""] }, 1, 0]
+          }
+        }
+      }
+    }
+  ]);
+
+  const archivesWithMirror = await Archive.countDocuments({
+    status: "ready",
+    deletedAt: null,
+    trashedAt: null,
+    "parts.mirrorProvider": { $in: ["discord", "telegram"] }
+  });
+  const archivesPending = await Archive.countDocuments({
+    status: "ready",
+    deletedAt: null,
+    trashedAt: null,
+    "parts.mirrorPending": true
+  });
+
+  const totalParts = Number(partStats?.totalParts || 0);
+  const doneParts = Number(partStats?.doneParts || 0);
+  const pendingParts = Number(partStats?.pendingParts || 0);
+  const errorParts = Number(partStats?.errorParts || 0);
+  const remainingParts = Math.max(0, totalParts - doneParts);
+  const percent = totalParts > 0 ? Math.floor((doneParts / totalParts) * 100) : 100;
+
+  res.json({
+    totalParts,
+    doneParts,
+    pendingParts,
+    remainingParts,
+    errorParts,
+    percent,
+    archivesTotal: archivesWithMirror,
+    archivesPending
+  });
+});
+
 adminRouter.get("/users", requireAdmin, async (_req, res) => {
   const users = await User.find().sort({ createdAt: -1 }).lean();
   res.json({ users });

@@ -23,6 +23,7 @@ import { outboundFetch } from "./outbound.js";
 
 let running = 0;
 let deleting = false;
+let mirrorMaintenanceRunning = false;
 let startupRecoveryPromise: Promise<void> | null = null;
 
 function log(message: string) {
@@ -208,6 +209,24 @@ async function processMirrorSync() {
   });
   if (!targetPart) return false;
 
+  // Claim a specific part atomically so parallel worker loops do not mirror it twice.
+  const claim = await Archive.updateOne(
+    {
+      _id: archive.id,
+      parts: {
+        $elemMatch: {
+          index: targetPart.index,
+          mirrorPending: true,
+          mirrorProvider: targetPart.mirrorProvider
+        }
+      }
+    },
+    { $set: { "parts.$.mirrorPending": false, "parts.$.mirrorError": "" } }
+  );
+  if (!claim.modifiedCount) {
+    return false;
+  }
+
   const webhook =
     targetPart.mirrorProvider === "discord" && webhooks.length > 0
       ? webhooks[Math.floor(Math.random() * webhooks.length)]
@@ -266,6 +285,15 @@ async function prepareMirrorBackfill() {
       changed = true;
     }
     if (part?.mirrorProvider) {
+      const hasMirror = !!part?.mirrorUrl && !!part?.mirrorMessageId;
+      if (hasMirror && part.mirrorPending) {
+        part.mirrorPending = false;
+        changed = true;
+      } else if (!hasMirror && !part.mirrorPending) {
+        part.mirrorPending = true;
+        prepared += 1;
+        changed = true;
+      }
       continue;
     }
 
@@ -588,13 +616,20 @@ export function startWorker() {
           if (before > 0) {
             await processNextArchive();
           } else {
-            const mirrored = await processMirrorSync();
-            if (mirrored) {
-              return;
-            }
-            const prepared = await prepareMirrorBackfill();
-            if (prepared) {
-              return;
+            if (!mirrorMaintenanceRunning) {
+              mirrorMaintenanceRunning = true;
+              try {
+                const mirrored = await processMirrorSync();
+                if (mirrored) {
+                  return;
+                }
+                const prepared = await prepareMirrorBackfill();
+                if (prepared) {
+                  return;
+                }
+              } finally {
+                mirrorMaintenanceRunning = false;
+              }
             }
           }
           if (!deleting) {
