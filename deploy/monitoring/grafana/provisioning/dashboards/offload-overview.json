@@ -89,12 +89,12 @@
       "title": "Mirror Health",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "offload_mirror_parts_done_total", "legendFormat": "parts done total" },
-        { "refId": "B", "expr": "offload_mirror_parts_error_total", "legendFormat": "parts error total" },
-        { "refId": "C", "expr": "offload_mirror_rate_limited_total", "legendFormat": "429 total" }
+        { "refId": "A", "expr": "rate(offload_mirror_parts_done_total[$__rate_interval])", "legendFormat": "parts done/s" },
+        { "refId": "B", "expr": "rate(offload_mirror_parts_error_total[$__rate_interval])", "legendFormat": "parts error/s" },
+        { "refId": "C", "expr": "rate(offload_mirror_rate_limited_total[$__rate_interval])", "legendFormat": "429/s" }
       ],
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
     },
     {
@@ -103,11 +103,11 @@
       "title": "Mirror Provider Done",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "offload_mirror_provider_done_total{provider=\"discord\"}", "legendFormat": "discord done" },
-        { "refId": "B", "expr": "offload_mirror_provider_done_total{provider=\"telegram\"}", "legendFormat": "telegram done" }
+        { "refId": "A", "expr": "rate(offload_mirror_provider_done_total{provider=\"discord\"}[$__rate_interval])", "legendFormat": "discord done/s" },
+        { "refId": "B", "expr": "rate(offload_mirror_provider_done_total{provider=\"telegram\"}[$__rate_interval])", "legendFormat": "telegram done/s" }
       ],
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
     {
@@ -116,13 +116,13 @@
       "title": "Mirror Provider Errors",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "offload_mirror_provider_error_total{provider=\"discord\"}", "legendFormat": "discord errors" },
-        { "refId": "B", "expr": "offload_mirror_provider_error_total{provider=\"telegram\"}", "legendFormat": "telegram errors" },
-        { "refId": "C", "expr": "offload_mirror_provider_rate_limited_total{provider=\"discord\"}", "legendFormat": "discord 429" },
-        { "refId": "D", "expr": "offload_mirror_provider_rate_limited_total{provider=\"telegram\"}", "legendFormat": "telegram 429" }
+        { "refId": "A", "expr": "rate(offload_mirror_provider_error_total{provider=\"discord\"}[$__rate_interval])", "legendFormat": "discord errors/s" },
+        { "refId": "B", "expr": "rate(offload_mirror_provider_error_total{provider=\"telegram\"}[$__rate_interval])", "legendFormat": "telegram errors/s" },
+        { "refId": "C", "expr": "rate(offload_mirror_provider_rate_limited_total{provider=\"discord\"}[$__rate_interval])", "legendFormat": "discord 429/s" },
+        { "refId": "D", "expr": "rate(offload_mirror_provider_rate_limited_total{provider=\"telegram\"}[$__rate_interval])", "legendFormat": "telegram 429/s" }
       ],
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
-      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
     {
@@ -196,4 +196,3 @@
     }
   ]
 }
-
