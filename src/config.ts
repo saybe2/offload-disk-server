@@ -77,6 +77,7 @@ export const config = {
   telegramEnabled: (process.env.TELEGRAM_ENABLED || "false") === "true",
   telegramBotToken: (process.env.TELEGRAM_BOT_TOKEN || "").trim(),
   telegramChatId: (process.env.TELEGRAM_CHAT_ID || "").trim(),
+  mirrorSyncConcurrency: Math.max(1, toNumber(process.env.MIRROR_SYNC_CONCURRENCY, 3)),
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
   smbShareName: process.env.SMB_SHARE_NAME || "offload",

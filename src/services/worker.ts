@@ -252,6 +252,22 @@ async function processMirrorSync() {
   }
 }
 
+async function processMirrorSyncBatch() {
+  const parallel = Math.max(1, config.mirrorSyncConcurrency);
+  let processedAny = false;
+  const runners = Array.from({ length: parallel }, async () => {
+    while (true) {
+      const processed = await processMirrorSync();
+      if (!processed) {
+        return;
+      }
+      processedAny = true;
+    }
+  });
+  await Promise.all(runners);
+  return processedAny;
+}
+
 async function prepareMirrorBackfill() {
   const telegramReady = isTelegramReady();
   const hasDiscord = (await Webhook.countDocuments({ enabled: true })) > 0;
@@ -619,7 +635,7 @@ export function startWorker() {
             if (!mirrorMaintenanceRunning) {
               mirrorMaintenanceRunning = true;
               try {
-                const mirrored = await processMirrorSync();
+                const mirrored = await processMirrorSyncBatch();
                 if (mirrored) {
                   return;
                 }
