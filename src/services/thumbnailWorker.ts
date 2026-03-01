@@ -35,6 +35,19 @@ function archiveNeedsThumbnail(archive: any) {
   return false;
 }
 
+async function markThumbnailPermanentFailure(archiveId: string, fileIndex: number, message: string) {
+  await Archive.updateOne(
+    { _id: archiveId },
+    {
+      $set: {
+        [`files.${fileIndex}.thumbnail.failedAt`]: new Date(),
+        [`files.${fileIndex}.thumbnail.error`]: message.slice(0, 500),
+        [`files.${fileIndex}.thumbnail.updatedAt`]: null
+      }
+    }
+  );
+}
+
 export function queueArchiveThumbnails(archiveId: string) {
   if (!archiveId) return;
   const key = String(archiveId);
@@ -100,6 +113,7 @@ async function processArchive(archiveId: string) {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (isPermanentThumbnailFailureMessage(message)) {
+        await markThumbnailPermanentFailure(archiveId, fileIndex, message);
         continue;
       }
       if (message === "source_missing" && archive.status === "ready") {
@@ -110,6 +124,7 @@ async function processArchive(archiveId: string) {
         } catch (fallbackErr) {
           const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           if (isPermanentThumbnailFailureMessage(fallbackMessage)) {
+            await markThumbnailPermanentFailure(archiveId, fileIndex, fallbackMessage);
             continue;
           }
           log(`error ${archiveId} file=${fileIndex} ${fallbackMessage}`);

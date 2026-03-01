@@ -32,6 +32,11 @@ export function isPermanentThumbnailFailureMessage(message: string) {
   if (message.startsWith(THUMB_PERMANENT_PREFIX)) return true;
   const lower = message.toLowerCase();
   return (
+    lower.includes("part_crypto_missing") ||
+    lower.includes("file_not_found") ||
+    lower.includes("bundle stream parse error") ||
+    lower.includes("zip parse guard invalid signature") ||
+    lower.includes("download_failed:404") ||
     lower.includes("vipsjpeg: invalid sos parameters") ||
     lower.includes("invalid sos parameters") ||
     lower.includes("input file contains unsupported image format") ||
