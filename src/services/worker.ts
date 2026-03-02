@@ -668,6 +668,14 @@ export function startWorker() {
           if (before > 0) {
             await processNextArchive();
           } else {
+            const processing = await Archive.countDocuments({
+              status: "processing",
+              deletedAt: null,
+              trashedAt: null
+            });
+            if (processing > 0) {
+              return;
+            }
             if (getMirrorSyncState().paused) {
               return;
             }
