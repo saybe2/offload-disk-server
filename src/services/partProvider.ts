@@ -21,6 +21,12 @@ export type MirroredUploadResult = {
   mirrorResultPromise?: Promise<ProviderCopy | null>;
 };
 
+const providerInFlight: Record<PartProvider, number> = {
+  discord: 0,
+  telegram: 0
+};
+let lastChosenProvider: PartProvider = "telegram";
+
 function toProviderCopyFromDiscord(result: { url: string; messageId: string }, webhookId: string): ProviderCopy {
   return {
     provider: "discord",
@@ -60,6 +66,44 @@ async function uploadToTelegram(buffer: Buffer, filename: string, content: strin
   return toProviderCopyFromTelegram(uploaded);
 }
 
+function pickPrimaryProvider(available: PartProvider[]) {
+  if (available.length <= 1) {
+    return available[0];
+  }
+  const [a, b] = available;
+  const loadA = providerInFlight[a];
+  const loadB = providerInFlight[b];
+  if (loadA === loadB) {
+    const chosen = lastChosenProvider === a ? b : a;
+    lastChosenProvider = chosen;
+    return chosen;
+  }
+  const chosen = loadA < loadB ? a : b;
+  lastChosenProvider = chosen;
+  return chosen;
+}
+
+async function uploadViaProvider(
+  provider: PartProvider,
+  buffer: Buffer,
+  filename: string,
+  content: string,
+  discordWebhook?: { id: string; url: string }
+) {
+  providerInFlight[provider] += 1;
+  try {
+    if (provider === "telegram") {
+      return await uploadToTelegram(buffer, filename, content);
+    }
+    if (!discordWebhook?.url) {
+      throw new Error("discord_webhook_missing");
+    }
+    return await uploadToDiscord(buffer, filename, content, discordWebhook);
+  } finally {
+    providerInFlight[provider] = Math.max(0, providerInFlight[provider] - 1);
+  }
+}
+
 function toRecordFromCopy(copy: ProviderCopy) {
   return {
     provider: copy.provider,
@@ -90,46 +134,48 @@ export async function uploadPartMirrored(
   content: string,
   discordWebhook?: { id: string; url: string }
 ): Promise<MirroredUploadResult> {
-  const tasks: Array<{ provider: PartProvider; promise: Promise<ProviderCopy> }> = [];
+  const available: PartProvider[] = [];
   if (discordWebhook?.url) {
-    tasks.push({
-      provider: "discord",
-      promise: uploadToDiscord(buffer, filename, content, discordWebhook)
-    });
+    available.push("discord");
   }
   if (isTelegramReady()) {
-    tasks.push({
-      provider: "telegram",
-      promise: uploadToTelegram(buffer, filename, content)
-    });
+    available.push("telegram");
   }
-  if (tasks.length === 0) {
+  if (available.length === 0) {
     throw new Error("no_storage_provider_available");
   }
 
-  if (tasks.length === 1) {
-    const primary = await tasks[0].promise;
+  if (available.length === 1) {
+    const primary = await uploadViaProvider(available[0], buffer, filename, content, discordWebhook);
     return { primary };
   }
 
-  const wrapped = tasks.map((task) => task.promise.then((result) => ({ provider: task.provider, result })));
-  let winner: { provider: PartProvider; result: ProviderCopy };
-  try {
-    winner = await Promise.any(wrapped);
-  } catch (err) {
-    const aggregate = err as AggregateError;
-    if (aggregate?.errors?.length) {
-      throw aggregate.errors[0];
-    }
-    throw err;
+  const primaryProvider = pickPrimaryProvider(available);
+  const mirrorTarget = available.find((provider) => provider !== primaryProvider);
+  if (!mirrorTarget) {
+    const primary = await uploadViaProvider(primaryProvider, buffer, filename, content, discordWebhook);
+    return { primary };
   }
 
-  const mirrorTask = tasks.find((t) => t.provider !== winner.provider)!;
-  const mirrorResultPromise = mirrorTask.promise.then((r) => r).catch(() => null);
+  try {
+    const primary = await uploadViaProvider(primaryProvider, buffer, filename, content, discordWebhook);
+    return {
+      primary,
+      mirrorTarget
+    };
+  } catch (err) {
+    const fallback = await uploadViaProvider(mirrorTarget, buffer, filename, content, discordWebhook);
+    return {
+      primary: fallback,
+      mirrorTarget: primaryProvider
+    };
+  }
+}
+
+export function getProviderInFlightState() {
   return {
-    primary: winner.result,
-    mirrorTarget: mirrorTask.provider,
-    mirrorResultPromise
+    discord: providerInFlight.discord,
+    telegram: providerInFlight.telegram
   };
 }
 
@@ -283,4 +329,3 @@ export function toPartDocument(
     mirrorError: ""
   };
 }
-
