@@ -30,7 +30,8 @@ import {
   noteMirrorPartError,
   noteUploadArchiveDone,
   noteUploadArchiveError,
-  noteUploadArchiveStarted
+  noteUploadArchiveStarted,
+  noteUploadBytes
 } from "./analytics.js";
 
 let running = 0;
@@ -489,6 +490,7 @@ async function processNextArchive() {
               { _id: archive.id },
               { $push: { parts: partDoc }, $inc: { uploadedBytes: part.encrypted.length, uploadedParts: 1 } }
             );
+            noteUploadBytes(part.encrypted.length);
             if (result.mirrorResultPromise) {
               void result.mirrorResultPromise
                 .then((mirror) => saveMirrorResult(archive.id, part.index, mirror, result.mirrorTarget))

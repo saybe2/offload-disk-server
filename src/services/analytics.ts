@@ -72,9 +72,14 @@ export function noteUploadArchiveStarted() {
 
 export function noteUploadArchiveDone(bytes: number, durationMs: number) {
   totals.upload.archivesDone += 1;
-  totals.upload.bytes += Math.max(0, Math.trunc(bytes || 0));
   totals.upload.durationMs += Math.max(0, Math.trunc(durationMs || 0));
-  getCurrentBucket().uploadBytes += Math.max(0, Math.trunc(bytes || 0));
+}
+
+export function noteUploadBytes(bytes: number) {
+  const amount = Math.max(0, Math.trunc(bytes || 0));
+  if (!amount) return;
+  totals.upload.bytes += amount;
+  getCurrentBucket().uploadBytes += amount;
 }
 
 export function noteUploadArchiveError() {
@@ -132,4 +137,3 @@ export function getAnalyticsSnapshot() {
     generatedAt: new Date().toISOString()
   };
 }
-
