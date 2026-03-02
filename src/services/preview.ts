@@ -59,6 +59,7 @@ const CODE_EXTENSIONS = new Set([
   ".json",
   ".yaml",
   ".yml",
+  ".rviz",
   ".xml",
   ".toml",
   ".ini",
