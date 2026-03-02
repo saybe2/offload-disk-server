@@ -55,7 +55,8 @@ import {
   noteDownloadStarted,
   noteUploadArchiveDone,
   noteUploadArchiveError,
-  noteUploadArchiveStarted
+  noteUploadArchiveStarted,
+  noteUploadBytes
 } from "../services/analytics.js";
 
 const upload = multer({
@@ -726,6 +727,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
               authTag: part.authTag
             };
             await Archive.updateOne({ _id: archive.id }, { $push: { parts: partDoc }, $inc: { uploadedBytes: part.size, uploadedParts: 1 } });
+            noteUploadBytes(part.size);
             if (result.mirrorResultPromise) {
               void result.mirrorResultPromise
                 .then((mirror) => saveMirrorResult(archive.id, part.index, mirror, result.mirrorTarget))
