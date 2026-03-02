@@ -24,6 +24,7 @@ import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
 import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
+import { initAnalyticsPersistence } from "./services/analytics.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -251,6 +252,7 @@ async function main() {
   await migrateArchives();
   await migrateParts();
   await migrateFolders();
+  await initAnalyticsPersistence();
   await initMirrorSyncControl();
 
   startWorker();
