@@ -667,6 +667,7 @@ function codeLanguageFromFileName(fileName) {
     '.json': 'json',
     '.yaml': 'yaml',
     '.yml': 'yaml',
+    '.rviz': 'yaml',
     '.md': 'markdown',
     '.toml': 'ini',
     '.ini': 'ini',
