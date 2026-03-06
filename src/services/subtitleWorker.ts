@@ -14,6 +14,16 @@ const retryAt = new Map<string, number>();
 let ticker: NodeJS.Timeout | null = null;
 let tickRunning = false;
 
+export function getSubtitleWorkerState() {
+  return {
+    enabled: config.subtitleWorkerEnabled,
+    queued: queued.size,
+    active: active.size,
+    retryScheduled: retryAt.size,
+    tickRunning
+  };
+}
+
 function log(message: string) {
   console.log(`[subtitle-worker] ${new Date().toISOString()} ${message}`);
 }

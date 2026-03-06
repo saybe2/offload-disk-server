@@ -13,6 +13,16 @@ const retryAt = new Map<string, number>();
 let ticker: NodeJS.Timeout | null = null;
 let tickRunning = false;
 
+export function getThumbnailWorkerState() {
+  return {
+    enabled: config.thumbWorkerEnabled,
+    queued: queued.size,
+    active: active.size,
+    retryScheduled: retryAt.size,
+    tickRunning
+  };
+}
+
 function log(message: string) {
   console.log(`[thumb-worker] ${new Date().toISOString()} ${message}`);
 }

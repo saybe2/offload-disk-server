@@ -41,6 +41,14 @@ let deleting = false;
 let mirrorMaintenanceRunning = false;
 let startupRecoveryPromise: Promise<void> | null = null;
 
+export function getWorkerRuntimeState() {
+  return {
+    runningLoops: running,
+    deleting,
+    mirrorMaintenanceRunning
+  };
+}
+
 function log(message: string) {
   console.log(`[worker] ${new Date().toISOString()} ${message}`);
 }

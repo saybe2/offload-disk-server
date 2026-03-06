@@ -126,6 +126,24 @@ export function getOutboundProxyStatus() {
   return proxyStatus;
 }
 
+export function getOutboundProxyRuntimeStatus() {
+  const now = Date.now();
+  const routes = proxyRoutes.map((route) => ({
+    proxyUrl: sanitizeProxyUrl(route.proxyUrl),
+    targets: [...route.targets],
+    degraded: route.degraded,
+    bypassActive: now < route.bypassUntil,
+    bypassSecondsLeft: Math.max(0, Math.ceil((route.bypassUntil - now) / 1000))
+  }));
+  return {
+    enabled: proxyStatus.enabled,
+    active: proxyRoutes.length > 0,
+    routes,
+    degradedRoutes: routes.filter((route) => route.degraded).length,
+    bypassedRoutes: routes.filter((route) => route.bypassActive).length
+  };
+}
+
 export function shouldUseProxyForUrl(rawUrl: string) {
   return !!pickRoute(rawUrl, proxyRoutes);
 }
@@ -176,4 +194,3 @@ export async function outboundFetch(input: FetchInput, init?: RequestInit) {
     return undiciFetch(input as any, init);
   }
 }
-

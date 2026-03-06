@@ -230,6 +230,57 @@
         "graphMode": "none",
         "textMode": "value_and_name"
       }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Archive Status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "offload_archives_status{status=\"queued\"}", "legendFormat": "queued" },
+        { "refId": "B", "expr": "offload_archives_status{status=\"processing\"}", "legendFormat": "processing" },
+        { "refId": "C", "expr": "offload_archives_status{status=\"error\"}", "legendFormat": "error" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Queues (Worker/Thumb/Subtitles)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "offload_archives_mirror_pending_total", "legendFormat": "archives mirror pending" },
+        { "refId": "B", "expr": "offload_thumb_worker_state{state=\"queued\"}", "legendFormat": "thumb queued" },
+        { "refId": "C", "expr": "offload_subtitle_worker_state{state=\"queued\"}", "legendFormat": "subtitle queued" },
+        { "refId": "D", "expr": "offload_thumb_worker_state{state=\"active\"}", "legendFormat": "thumb active" },
+        { "refId": "E", "expr": "offload_subtitle_worker_state{state=\"active\"}", "legendFormat": "subtitle active" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Runtime State",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "offload_worker_state{state=\"running_loops\"}", "legendFormat": "worker loops" },
+        { "refId": "B", "expr": "offload_provider_inflight{provider=\"discord\"}", "legendFormat": "discord inflight" },
+        { "refId": "C", "expr": "offload_provider_inflight{provider=\"telegram\"}", "legendFormat": "telegram inflight" },
+        { "refId": "D", "expr": "offload_proxy_state{state=\"degraded_routes\"}", "legendFormat": "proxy degraded routes" },
+        { "refId": "E", "expr": "offload_webhooks_enabled_total", "legendFormat": "webhooks enabled" }
+      ],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
     }
   ]
 }
