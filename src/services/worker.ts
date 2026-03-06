@@ -674,6 +674,14 @@ export function startWorker() {
               trashedAt: null
             });
             if (processing > 0) {
+              if (!mirrorMaintenanceRunning) {
+                mirrorMaintenanceRunning = true;
+                try {
+                  await prepareMirrorBackfill();
+                } finally {
+                  mirrorMaintenanceRunning = false;
+                }
+              }
               return;
             }
             if (getMirrorSyncState().paused) {
