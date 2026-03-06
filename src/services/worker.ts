@@ -189,6 +189,7 @@ async function generateLocalThumbnails(archive: any) {
 
 async function generateLocalSubtitles(archive: any) {
   if (!archive?.files?.length) return;
+  log(`subtitle start ${archive.id} files=${archive.files.length}`);
   let generated = 0;
   for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
     const file = archive.files[fileIndex];
@@ -196,7 +197,9 @@ async function generateLocalSubtitles(archive: any) {
     const fileName = file?.originalName || file?.name || "";
     if (!supportsSubtitle(fileName, file?.detectedKind)) continue;
     try {
+      log(`subtitle file start ${archive.id} file=${fileIndex}`);
       await ensureArchiveSubtitleFromSource(archive, fileIndex);
+      log(`subtitle file ready ${archive.id} file=${fileIndex}`);
       generated += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
