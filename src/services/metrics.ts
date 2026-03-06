@@ -1,6 +1,14 @@
 import client from "prom-client";
 import { getAnalyticsSnapshot } from "./analytics.js";
 import { getMirrorSyncState } from "./mirrorSyncControl.js";
+import { Archive } from "../models/Archive.js";
+import { User } from "../models/User.js";
+import { Webhook } from "../models/Webhook.js";
+import { getProviderInFlightState } from "./partProvider.js";
+import { getWorkerRuntimeState } from "./worker.js";
+import { getThumbnailWorkerState } from "./thumbnailWorker.js";
+import { getSubtitleWorkerState } from "./subtitleWorker.js";
+import { getOutboundProxyRuntimeStatus } from "./outbound.js";
 
 const registry = new client.Registry();
 client.collectDefaultMetrics({ register: registry, prefix: "offload_node_" });
@@ -108,10 +116,76 @@ const gauges = {
     name: "offload_download_rate_bytes_per_second",
     help: "Download throughput over last 60s in bytes/s",
     registers: [registry]
+  }),
+  archivesTotal: new client.Gauge({
+    name: "offload_archives_total",
+    help: "Total non-deleted archives",
+    registers: [registry]
+  }),
+  archivesByStatus: new client.Gauge({
+    name: "offload_archives_status",
+    help: "Archive count by status (non-deleted)",
+    labelNames: ["status"] as const,
+    registers: [registry]
+  }),
+  archivesDeleteRequested: new client.Gauge({
+    name: "offload_archives_delete_requested_total",
+    help: "Archives marked for purge (non-deleted)",
+    registers: [registry]
+  }),
+  archivesTrashed: new client.Gauge({
+    name: "offload_archives_trashed_total",
+    help: "Archives currently in trash (non-deleted)",
+    registers: [registry]
+  }),
+  archivesMirrorPending: new client.Gauge({
+    name: "offload_archives_mirror_pending_total",
+    help: "Archives with pending mirror parts",
+    registers: [registry]
+  }),
+  usersTotal: new client.Gauge({
+    name: "offload_users_total",
+    help: "Total users",
+    registers: [registry]
+  }),
+  webhooksEnabled: new client.Gauge({
+    name: "offload_webhooks_enabled_total",
+    help: "Enabled Discord webhooks",
+    registers: [registry]
+  }),
+  providerInFlight: new client.Gauge({
+    name: "offload_provider_inflight",
+    help: "Current in-flight uploads per provider",
+    labelNames: ["provider"] as const,
+    registers: [registry]
+  }),
+  workerState: new client.Gauge({
+    name: "offload_worker_state",
+    help: "Worker runtime state values",
+    labelNames: ["state"] as const,
+    registers: [registry]
+  }),
+  thumbWorkerState: new client.Gauge({
+    name: "offload_thumb_worker_state",
+    help: "Thumbnail worker state values",
+    labelNames: ["state"] as const,
+    registers: [registry]
+  }),
+  subtitleWorkerState: new client.Gauge({
+    name: "offload_subtitle_worker_state",
+    help: "Subtitle worker state values",
+    labelNames: ["state"] as const,
+    registers: [registry]
+  }),
+  proxyState: new client.Gauge({
+    name: "offload_proxy_state",
+    help: "Outbound proxy runtime status",
+    labelNames: ["state"] as const,
+    registers: [registry]
   })
 };
 
-function refreshMetrics() {
+async function refreshMetrics() {
   const analytics = getAnalyticsSnapshot();
   const mirrorState = getMirrorSyncState();
   const upload = analytics.upload;
@@ -143,14 +217,85 @@ function refreshMetrics() {
   gauges.downloadDone.set(download.done || 0);
   gauges.downloadError.set(download.error || 0);
   gauges.downloadRate.set(download.rateBps60s || 0);
+
+  const providerInFlight = getProviderInFlightState();
+  gauges.providerInFlight.labels("discord").set(providerInFlight.discord || 0);
+  gauges.providerInFlight.labels("telegram").set(providerInFlight.telegram || 0);
+
+  const workerState = getWorkerRuntimeState();
+  gauges.workerState.labels("running_loops").set(workerState.runningLoops || 0);
+  gauges.workerState.labels("deleting").set(workerState.deleting ? 1 : 0);
+  gauges.workerState.labels("mirror_maintenance").set(workerState.mirrorMaintenanceRunning ? 1 : 0);
+
+  const thumbState = getThumbnailWorkerState();
+  gauges.thumbWorkerState.labels("enabled").set(thumbState.enabled ? 1 : 0);
+  gauges.thumbWorkerState.labels("queued").set(thumbState.queued || 0);
+  gauges.thumbWorkerState.labels("active").set(thumbState.active || 0);
+  gauges.thumbWorkerState.labels("retry_scheduled").set(thumbState.retryScheduled || 0);
+  gauges.thumbWorkerState.labels("tick_running").set(thumbState.tickRunning ? 1 : 0);
+
+  const subtitleState = getSubtitleWorkerState();
+  gauges.subtitleWorkerState.labels("enabled").set(subtitleState.enabled ? 1 : 0);
+  gauges.subtitleWorkerState.labels("queued").set(subtitleState.queued || 0);
+  gauges.subtitleWorkerState.labels("active").set(subtitleState.active || 0);
+  gauges.subtitleWorkerState.labels("retry_scheduled").set(subtitleState.retryScheduled || 0);
+  gauges.subtitleWorkerState.labels("tick_running").set(subtitleState.tickRunning ? 1 : 0);
+
+  const proxyState = getOutboundProxyRuntimeStatus();
+  gauges.proxyState.labels("enabled").set(proxyState.enabled ? 1 : 0);
+  gauges.proxyState.labels("active").set(proxyState.active ? 1 : 0);
+  gauges.proxyState.labels("degraded_routes").set(proxyState.degradedRoutes || 0);
+  gauges.proxyState.labels("bypassed_routes").set(proxyState.bypassedRoutes || 0);
+
+  try {
+    const [
+      statusBuckets,
+      archivesTotal,
+      archivesDeleteRequested,
+      archivesTrashed,
+      archivesMirrorPending,
+      usersTotal,
+      webhooksEnabled
+    ] = await Promise.all([
+      Archive.aggregate([
+        { $match: { deletedAt: null } },
+        { $group: { _id: "$status", count: { $sum: 1 } } }
+      ]),
+      Archive.countDocuments({ deletedAt: null }),
+      Archive.countDocuments({ deletedAt: null, deleteRequestedAt: { $ne: null } }),
+      Archive.countDocuments({ deletedAt: null, trashedAt: { $ne: null } }),
+      Archive.countDocuments({ deletedAt: null, "parts.mirrorPending": true }),
+      User.countDocuments({}),
+      Webhook.countDocuments({ enabled: true })
+    ]);
+
+    gauges.archivesTotal.set(archivesTotal || 0);
+    gauges.archivesDeleteRequested.set(archivesDeleteRequested || 0);
+    gauges.archivesTrashed.set(archivesTrashed || 0);
+    gauges.archivesMirrorPending.set(archivesMirrorPending || 0);
+    gauges.usersTotal.set(usersTotal || 0);
+    gauges.webhooksEnabled.set(webhooksEnabled || 0);
+
+    const statusMap = new Map<string, number>();
+    for (const bucket of statusBuckets as Array<{ _id: string; count: number }>) {
+      const key = String(bucket?._id || "");
+      if (!key) continue;
+      statusMap.set(key, Number(bucket?.count || 0));
+    }
+
+    for (const status of ["queued", "processing", "ready", "error"]) {
+      gauges.archivesByStatus.labels(status).set(statusMap.get(status) || 0);
+    }
+  } catch {
+    // Keep last known values when DB stats query fails.
+  }
 }
 
 export async function getPrometheusMetrics() {
-  refreshMetrics();
+  await refreshMetrics();
   return registry.metrics();
 }
 
 export function getPrometheusContentType() {
   return registry.contentType;
 }
-
