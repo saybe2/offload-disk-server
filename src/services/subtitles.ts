@@ -342,9 +342,32 @@ async function transcribeViaLocalCommand(inputPath: string, outputPath: string) 
 }
 
 async function generateSubtitleVtt(sourcePath: string, fileName: string, outputPath: string) {
-  const raw = config.subtitleLocalCommand
-    ? await transcribeViaLocalCommand(sourcePath, outputPath)
-    : await transcribeViaOpenAi(sourcePath, fileName);
+  let raw = "";
+  const failures: string[] = [];
+
+  if (config.subtitleAsrEnabled) {
+    try {
+      raw = await transcribeViaOpenAi(sourcePath, fileName);
+    } catch (err) {
+      failures.push(`asr:${toMessage(err)}`);
+    }
+  }
+
+  if (!raw && config.subtitleLocalCommand) {
+    try {
+      raw = await transcribeViaLocalCommand(sourcePath, outputPath);
+    } catch (err) {
+      failures.push(`local:${toMessage(err)}`);
+    }
+  }
+
+  if (!raw) {
+    if (!config.subtitleAsrEnabled && !config.subtitleLocalCommand) {
+      throw new Error("subtitle_provider_not_configured");
+    }
+    throw new Error(`subtitle_all_providers_failed:${failures.join(" | ").slice(0, 800)}`);
+  }
+
   const normalized = normalizeVtt(raw);
   await fs.promises.writeFile(outputPath, normalized, "utf8");
   return normalized;
