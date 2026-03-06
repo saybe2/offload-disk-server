@@ -10,6 +10,7 @@ import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { uploadPartMirrored, type PartProvider, type ProviderCopy } from "./partProvider.js";
 import { buildTelegramFileUrl, isTelegramReady, uploadBufferToTelegram } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
+import { log } from "../logger.js";
 
 const subtitleVideoExt = new Set([
   ".mp4",
@@ -279,6 +280,7 @@ async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
     throw new Error("subtitle_provider_not_configured");
   }
   const stat = await fs.promises.stat(inputPath);
+  log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} size=${stat.size}`);
   if (stat.size > config.subtitleAsrMaxBytes && !config.subtitleLocalCommand) {
     throw new Error("subtitle_source_too_large_for_asr");
   }
@@ -306,6 +308,7 @@ async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
   if (!response.ok) {
     throw new Error(`subtitle_asr_failed:${response.status}:${bodyText.slice(0, 500)}`);
   }
+  log("subtitle", `asr done file=${path.basename(sourceName || inputPath)} size=${stat.size}`);
 
   if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
     return bodyText;
@@ -330,12 +333,15 @@ async function transcribeViaLocalCommand(inputPath: string, outputPath: string) 
     .replaceAll("{input}", shellEscape(inputPath))
     .replaceAll("{output}", shellEscape(outputPath))
     .replaceAll("{lang}", shellEscape(config.subtitleLanguage || "auto"));
+  log("subtitle", `local start file=${path.basename(inputPath)}`);
   const { stdout } = await runCommand(command);
 
   if (fs.existsSync(outputPath)) {
+    log("subtitle", `local done file=${path.basename(inputPath)}`);
     return fs.promises.readFile(outputPath, "utf8");
   }
   if (stdout.trim()) {
+    log("subtitle", `local done(stdout) file=${path.basename(inputPath)}`);
     return stdout;
   }
   throw new Error("subtitle_local_empty");
@@ -349,7 +355,9 @@ async function generateSubtitleVtt(sourcePath: string, fileName: string, outputP
     try {
       raw = await transcribeViaOpenAi(sourcePath, fileName);
     } catch (err) {
-      failures.push(`asr:${toMessage(err)}`);
+      const message = toMessage(err);
+      failures.push(`asr:${message}`);
+      log("subtitle", `asr failed file=${path.basename(fileName || sourcePath)} err=${message.slice(0, 200)}`);
     }
   }
 
@@ -357,7 +365,9 @@ async function generateSubtitleVtt(sourcePath: string, fileName: string, outputP
     try {
       raw = await transcribeViaLocalCommand(sourcePath, outputPath);
     } catch (err) {
-      failures.push(`local:${toMessage(err)}`);
+      const message = toMessage(err);
+      failures.push(`local:${message}`);
+      log("subtitle", `local failed file=${path.basename(fileName || sourcePath)} err=${message.slice(0, 200)}`);
     }
   }
 

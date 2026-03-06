@@ -100,6 +100,7 @@ async function refillQueue() {
 }
 
 async function processArchive(archiveId: string) {
+  log(`start ${archiveId}`);
   const archive = await Archive.findById(archiveId);
   if (!archive) return;
   if (archive.deletedAt || archive.trashedAt) return;
