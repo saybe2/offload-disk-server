@@ -55,6 +55,7 @@ def main() -> int:
 
     model_name = os.getenv("SUBTITLE_LOCAL_MODEL", "small")
     model_dir = os.getenv("SUBTITLE_LOCAL_MODEL_DIR", "/home/container/data/asr_models")
+    Path(model_dir).mkdir(parents=True, exist_ok=True)
     device = os.getenv("SUBTITLE_LOCAL_DEVICE", "cpu")
     compute_type = os.getenv("SUBTITLE_LOCAL_COMPUTE_TYPE", "int8")
     beam_size = int(os.getenv("SUBTITLE_LOCAL_BEAM_SIZE", "3"))

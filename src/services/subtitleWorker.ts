@@ -126,6 +126,22 @@ async function processArchive(archiveId: string) {
         if (isPermanentSubtitleFailureMessage(message)) {
           continue;
         }
+        if (message === "source_missing" && archive.status === "ready") {
+          try {
+            await ensureArchiveSubtitle(archive, fileIndex);
+            generated += 1;
+            continue;
+          } catch (fallbackErr) {
+            const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            if (isPermanentSubtitleFailureMessage(fallbackMessage)) {
+              continue;
+            }
+            log(`error ${archiveId} file=${fileIndex} ${fallbackMessage}`);
+            retryAt.set(archiveId, Date.now() + nextRetryDelayMs(fallbackMessage));
+            queued.add(archiveId);
+            return;
+          }
+        }
         if (message === "source_missing" && archive.status !== "ready") {
           waitingForReady = true;
           continue;
