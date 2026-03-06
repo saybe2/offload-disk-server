@@ -33,6 +33,13 @@ interface AnalyticsTotalsDoc {
     error: number;
     bytesPlanned: number;
   };
+  restore: {
+    jobsStarted: number;
+    jobsDone: number;
+    jobsError: number;
+    bytes: number;
+    durationMs: number;
+  };
 }
 
 const ProviderTotalsSchema = new Schema<ProviderTotals>(
@@ -71,6 +78,13 @@ const AnalyticsTotalsSchema = new Schema<AnalyticsTotalsDoc>(
       done: { type: Number, default: 0 },
       error: { type: Number, default: 0 },
       bytesPlanned: { type: Number, default: 0 }
+    },
+    restore: {
+      jobsStarted: { type: Number, default: 0 },
+      jobsDone: { type: Number, default: 0 },
+      jobsError: { type: Number, default: 0 },
+      bytes: { type: Number, default: 0 },
+      durationMs: { type: Number, default: 0 }
     }
   },
   { timestamps: true, versionKey: false }

@@ -117,6 +117,31 @@ const gauges = {
     help: "Download throughput over last 60s in bytes/s",
     registers: [registry]
   }),
+  restoreJobsStarted: new client.Gauge({
+    name: "offload_restore_jobs_started_total",
+    help: "Total restore jobs started since process start",
+    registers: [registry]
+  }),
+  restoreJobsDone: new client.Gauge({
+    name: "offload_restore_jobs_done_total",
+    help: "Total restore jobs done since process start",
+    registers: [registry]
+  }),
+  restoreJobsError: new client.Gauge({
+    name: "offload_restore_jobs_error_total",
+    help: "Total restore jobs failed since process start",
+    registers: [registry]
+  }),
+  restoreRate: new client.Gauge({
+    name: "offload_restore_rate_bytes_per_second",
+    help: "Restore throughput over last 60s in bytes/s",
+    registers: [registry]
+  }),
+  restoreAvgMs: new client.Gauge({
+    name: "offload_restore_job_avg_ms",
+    help: "Average restore job duration in ms",
+    registers: [registry]
+  }),
   archivesTotal: new client.Gauge({
     name: "offload_archives_total",
     help: "Total non-deleted archives",
@@ -191,6 +216,7 @@ async function refreshMetrics() {
   const upload = analytics.upload;
   const mirror = analytics.mirror;
   const download = analytics.download;
+  const restore = (analytics as any).restore || {};
 
   gauges.uploadArchivesStarted.set(upload.archivesStarted || 0);
   gauges.uploadArchivesDone.set(upload.archivesDone || 0);
@@ -217,6 +243,11 @@ async function refreshMetrics() {
   gauges.downloadDone.set(download.done || 0);
   gauges.downloadError.set(download.error || 0);
   gauges.downloadRate.set(download.rateBps60s || 0);
+  gauges.restoreJobsStarted.set(restore.jobsStarted || 0);
+  gauges.restoreJobsDone.set(restore.jobsDone || 0);
+  gauges.restoreJobsError.set(restore.jobsError || 0);
+  gauges.restoreRate.set(restore.rateBps60s || 0);
+  gauges.restoreAvgMs.set(restore.avgJobMs || 0);
 
   const providerInFlight = getProviderInFlightState();
   gauges.providerInFlight.labels("discord").set(providerInFlight.discord || 0);
