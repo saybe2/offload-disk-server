@@ -11,6 +11,7 @@ import { downloadToFile } from "./discord.js";
 import { deriveKey } from "./crypto.js";
 import { zipEntryName } from "./archive.js";
 import { startRestore, endRestore } from "./activity.js";
+import { noteRestoreBytes, noteRestoreJobDone, noteRestoreJobError, noteRestoreJobStarted } from "./analytics.js";
 import { uniqueParts } from "./parts.js";
 import { log } from "../logger.js";
 import { refreshMirrorPartUrl, refreshPartUrl } from "./partProvider.js";
@@ -279,6 +280,9 @@ export async function streamArchiveRangeToResponse(
     return;
   }
 
+  const startedAt = Date.now();
+  let failed = false;
+  noteRestoreJobStarted();
   startRestore();
   const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_range`);
   await fs.promises.mkdir(workDir, { recursive: true });
@@ -319,6 +323,7 @@ export async function streamArchiveRangeToResponse(
       const from = Math.max(range.start, partStart) - partStart;
       const to = Math.min(range.end, partEnd) - partStart + 1;
       const slice = plain.subarray(from, to);
+      noteRestoreBytes(slice.length);
       if (!res.write(slice)) {
         await waitDrainOrError(res as unknown as Writable);
       }
@@ -327,10 +332,16 @@ export async function streamArchiveRangeToResponse(
       res.end();
     }
   } catch (err) {
+    failed = true;
     log("restore", `range stream failed ${archive.id} ${(err as Error).message}`);
     res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
+    if (failed) {
+      noteRestoreJobError();
+    } else {
+      noteRestoreJobDone(Date.now() - startedAt);
+    }
     endRestore();
   }
 }
@@ -341,9 +352,15 @@ export async function restoreArchiveToFile(
   tempBaseDir: string,
   masterKey: string
 ) {
+  const startedAt = Date.now();
+  noteRestoreJobStarted();
   startRestore();
   try {
     await restoreArchiveToFileInternal(archive, outputPath, tempBaseDir, masterKey);
+    noteRestoreJobDone(Date.now() - startedAt);
+  } catch (err) {
+    noteRestoreJobError();
+    throw err;
   } finally {
     endRestore();
   }
@@ -373,6 +390,7 @@ async function restoreArchiveToFileInternal(
 
       const plain = await decryptPartToBuffer(partPath, part as any, key);
       await fs.promises.unlink(partPath).catch(() => undefined);
+      noteRestoreBytes(plain.length);
       if (!output.write(plain)) {
         await waitDrainOrError(output);
       }
@@ -398,9 +416,12 @@ export async function restoreArchiveFileToFile(
   tempBaseDir: string,
   masterKey: string
 ) {
+  const startedAt = Date.now();
+  noteRestoreJobStarted();
   startRestore();
   const file = archive.files?.[fileIndex];
   if (!file) {
+    noteRestoreJobError();
     endRestore();
     throw new Error("file_not_found");
   }
@@ -411,7 +432,9 @@ export async function restoreArchiveFileToFile(
   try {
     await restoreArchiveToFileInternal(archive, zipPath, tempBaseDir, masterKey);
     await extractZipEntryToFile(zipPath, zipEntryName(file), fileIndex, outputPath);
+    noteRestoreJobDone(Date.now() - startedAt);
   } catch (err) {
+    noteRestoreJobError();
     log("restore", `bundle extract failed ${archive.id} ${(err as Error).message}`);
     throw err;
   } finally {
@@ -428,9 +451,13 @@ export async function streamArchiveFileToResponse(
   masterKey: string,
   options?: StreamResponseOptions
 ) {
+  const startedAt = Date.now();
+  let failed = false;
+  noteRestoreJobStarted();
   startRestore();
   const file = archive.files?.[fileIndex];
   if (!file) {
+    noteRestoreJobError();
     endRestore();
     throw new Error("file_not_found");
   }
@@ -470,6 +497,7 @@ export async function streamArchiveFileToResponse(
       rs.pipe(res);
     });
   } catch (err) {
+    failed = true;
     const message = err instanceof Error ? err.message : String(err);
     if (message === "file_not_found" && !res.headersSent) {
       res.status(404).json({ error: "file_not_found" });
@@ -483,6 +511,11 @@ export async function streamArchiveFileToResponse(
     res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
+    if (failed) {
+      noteRestoreJobError();
+    } else {
+      noteRestoreJobDone(Date.now() - startedAt);
+    }
     endRestore();
   }
 }
@@ -494,6 +527,9 @@ export async function streamArchiveToResponse(
   masterKey: string,
   options?: StreamResponseOptions
 ) {
+  const startedAt = Date.now();
+  let failed = false;
+  noteRestoreJobStarted();
   startRestore();
   const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_v2`);
   await fs.promises.mkdir(workDir, { recursive: true });
@@ -537,6 +573,7 @@ export async function streamArchiveToResponse(
 
       const plain = await decryptPartToBuffer(partPath, part as any, key);
       await fs.promises.unlink(partPath).catch(() => undefined);
+      noteRestoreBytes(plain.length);
       if (!res.write(plain)) {
         await waitDrainOrError(res as unknown as Writable);
       }
@@ -546,10 +583,16 @@ export async function streamArchiveToResponse(
       res.end();
     }
   } catch (err) {
+    failed = true;
     log("restore", `stream failed ${archive.id} ${(err as Error).message}`);
     res.destroy();
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true });
+    if (failed) {
+      noteRestoreJobError();
+    } else {
+      noteRestoreJobDone(Date.now() - startedAt);
+    }
     endRestore();
   }
 }

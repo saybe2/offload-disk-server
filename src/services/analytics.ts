@@ -5,6 +5,7 @@ type CounterBucket = {
   uploadBytes: number;
   mirrorBytes: number;
   downloadBytes: number;
+  restoreBytes: number;
 };
 
 const WINDOW_MS = 5 * 60 * 1000;
@@ -25,7 +26,8 @@ const totals = {
       telegram: { done: 0, error: 0, rateLimited: 0, bytes: 0 }
     }
   },
-  download: { started: 0, done: 0, error: 0, bytesPlanned: 0 }
+  download: { started: 0, done: 0, error: 0, bytesPlanned: 0 },
+  restore: { jobsStarted: 0, jobsDone: 0, jobsError: 0, bytes: 0, durationMs: 0 }
 };
 
 const buckets: CounterBucket[] = [];
@@ -51,7 +53,7 @@ function getCurrentBucket() {
   if (last && ts - last.ts < 1000) {
     return last;
   }
-  const next: CounterBucket = { ts, uploadBytes: 0, mirrorBytes: 0, downloadBytes: 0 };
+  const next: CounterBucket = { ts, uploadBytes: 0, mirrorBytes: 0, downloadBytes: 0, restoreBytes: 0 };
   buckets.push(next);
   return next;
 }
@@ -155,6 +157,12 @@ export async function initAnalyticsPersistence() {
   totals.download.done = Number(doc.download?.done || 0);
   totals.download.error = Number(doc.download?.error || 0);
   totals.download.bytesPlanned = Number(doc.download?.bytesPlanned || 0);
+
+  totals.restore.jobsStarted = Number((doc as any).restore?.jobsStarted || 0);
+  totals.restore.jobsDone = Number((doc as any).restore?.jobsDone || 0);
+  totals.restore.jobsError = Number((doc as any).restore?.jobsError || 0);
+  totals.restore.bytes = Number((doc as any).restore?.bytes || 0);
+  totals.restore.durationMs = Number((doc as any).restore?.durationMs || 0);
 }
 
 export function noteUploadArchiveStarted() {
@@ -241,6 +249,34 @@ export function noteDownloadError() {
   addPendingInc({ "download.error": 1 });
 }
 
+export function noteRestoreJobStarted() {
+  totals.restore.jobsStarted += 1;
+  addPendingInc({ "restore.jobsStarted": 1 });
+}
+
+export function noteRestoreBytes(bytes: number) {
+  const amount = Math.max(0, Math.trunc(bytes || 0));
+  if (!amount) return;
+  totals.restore.bytes += amount;
+  getCurrentBucket().restoreBytes += amount;
+  addPendingInc({ "restore.bytes": amount });
+}
+
+export function noteRestoreJobDone(durationMs: number) {
+  const duration = Math.max(0, Math.trunc(durationMs || 0));
+  totals.restore.jobsDone += 1;
+  totals.restore.durationMs += duration;
+  addPendingInc({
+    "restore.jobsDone": 1,
+    "restore.durationMs": duration
+  });
+}
+
+export function noteRestoreJobError() {
+  totals.restore.jobsError += 1;
+  addPendingInc({ "restore.jobsError": 1 });
+}
+
 export function getAnalyticsSnapshot() {
   return {
     upload: {
@@ -256,6 +292,11 @@ export function getAnalyticsSnapshot() {
     download: {
       ...totals.download,
       rateBps60s: Math.round(sumRate("downloadBytes"))
+    },
+    restore: {
+      ...totals.restore,
+      avgJobMs: avg(totals.restore.durationMs, totals.restore.jobsDone),
+      rateBps60s: Math.round(sumRate("restoreBytes"))
     },
     generatedAt: new Date().toISOString()
   };

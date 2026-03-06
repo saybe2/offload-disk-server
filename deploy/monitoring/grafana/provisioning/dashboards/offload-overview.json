@@ -77,7 +77,8 @@
       "targets": [
         { "refId": "A", "expr": "offload_upload_rate_bytes_per_second", "legendFormat": "upload" },
         { "refId": "B", "expr": "offload_mirror_rate_bytes_per_second", "legendFormat": "mirror" },
-        { "refId": "C", "expr": "offload_download_rate_bytes_per_second", "legendFormat": "download" }
+        { "refId": "C", "expr": "offload_download_rate_bytes_per_second", "legendFormat": "download" },
+        { "refId": "D", "expr": "offload_restore_rate_bytes_per_second", "legendFormat": "restore" }
       ],
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
       "fieldConfig": { "defaults": { "unit": "Bps", "decimals": 2 }, "overrides": [] },
