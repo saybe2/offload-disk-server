@@ -15,6 +15,8 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 - Folders, nested folders, trash (30 days), share links, priorities.
 - Small-file preview (image/video/audio/text/code/pdf) with syntax highlighting for code, and image/video thumbnails.
 - Automatic thumbnail generation from local upload cache during upload processing + background backfill for existing files.
+- Streaming media preview endpoint (`Range`) for large audio/video files (no full browser download required for seek on non-bundle files).
+- Automatic subtitles for audio/video preview (new uploads + background backfill), stored locally and mirrored to Discord/Telegram.
 - Background workers for upload/delete jobs.
 - Optional SMB 2/3 access via FUSE view.
 
@@ -177,6 +179,7 @@ Selective outbound proxy (for blocked providers only):
 - `OUTBOUND_PROXY_ENABLED`
 - `OUTBOUND_PROXY_URL` (local HTTP proxy, e.g. xray/sing-box inbound)
 - `OUTBOUND_PROXY_TARGETS` (comma-separated host suffixes)
+- `OUTBOUND_PROXY_ROUTES` (advanced mapping `targets=url;targets=url`)
 - `OUTBOUND_PROXY_LOG_MATCHES`
 - `OUTBOUND_PROXY_FALLBACK_DIRECT` (if proxy is down, use direct internet)
 - `OUTBOUND_PROXY_BYPASS_MS` (how long to keep direct fallback before retrying proxy)
@@ -218,6 +221,22 @@ Cache/disk:
 - `THUMB_WORKER_POLL_MS`
 - `THUMB_BACKFILL_SCAN_LIMIT`
 - `THUMB_RETRY_MS`
+
+Subtitles:
+- `SUBTITLE_WORKER_ENABLED`
+- `SUBTITLE_WORKER_CONCURRENCY`
+- `SUBTITLE_WORKER_POLL_MS`
+- `SUBTITLE_BACKFILL_SCAN_LIMIT`
+- `SUBTITLE_RETRY_MS`
+- `SUBTITLE_LANGUAGE`
+- `SUBTITLE_ASR_ENABLED`
+- `SUBTITLE_ASR_URL`
+- `SUBTITLE_ASR_MODEL`
+- `SUBTITLE_ASR_API_KEY`
+- `SUBTITLE_ASR_MAX_BYTES`
+- `SUBTITLE_ASR_PROMPT`
+- `SUBTITLE_LOCAL_COMMAND` (fallback local command with `{input}` `{output}` `{lang}`)
+- `SUBTITLE_PREFER_SOURCE`
 
 Worker:
 - `WORKER_CONCURRENCY`

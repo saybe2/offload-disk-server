@@ -21,6 +21,7 @@ import { uniqueParts } from "./services/parts.js";
 import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
+import { startSubtitleWorker } from "./services/subtitleWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
 import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
@@ -234,6 +235,8 @@ async function ensureCacheDirs() {
     path.join(config.cacheDir, "selection"),
     path.join(config.cacheDir, "thumbs"),
     path.join(config.cacheDir, "thumb_work"),
+    path.join(config.cacheDir, "subtitles"),
+    path.join(config.cacheDir, "subtitle_work"),
     path.join(config.cacheDir, "preview_public"),
     path.join(config.cacheDir, "smb_read"),
     path.join(config.cacheDir, "smb_write")
@@ -257,15 +260,21 @@ async function main() {
 
   startWorker();
   startThumbnailWorker();
+  startSubtitleWorker();
   startFuse();
   startCacheCleanup();
 
   const proxyStatus = getOutboundProxyStatus();
   if (proxyStatus.enabled) {
     if (proxyStatus.active) {
+      const routeInfo = Array.isArray((proxyStatus as any).routes) && (proxyStatus as any).routes.length > 0
+        ? (proxyStatus as any).routes
+            .map((route: any) => `${route.proxyUrl}=>${(route.targets || []).join(",")}`)
+            .join(";")
+        : "";
       log(
         "proxy",
-        `enabled url=${proxyStatus.proxyUrl} targets=${proxyStatus.targets.join(",")} fallbackDirect=${proxyStatus.fallbackDirect} bypassMs=${config.outboundProxyBypassMs}`
+        `enabled ${routeInfo ? `routes=${routeInfo} ` : `url=${proxyStatus.proxyUrl} targets=${proxyStatus.targets.join(",")} `}fallbackDirect=${proxyStatus.fallbackDirect} bypassMs=${config.outboundProxyBypassMs}`
       );
     } else {
       log("proxy", "enabled but inactive (OUTBOUND_PROXY_URL is empty)");

@@ -17,6 +17,8 @@ const sharePreviewClose = document.getElementById('sharePreviewClose');
 
 const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.avif', '.heic', '.heif']);
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
+const mediaVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
+const mediaAudioExt = new Set(['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.oga', '.opus', '.wma', '.aiff']);
 const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 let shareToken = '';
@@ -45,6 +47,17 @@ function fileExtension(name) {
   const lower = String(name).toLowerCase();
   const dot = lower.lastIndexOf('.');
   return dot >= 0 ? lower.slice(dot) : '';
+}
+
+function getMediaKind(fileName, detectedKind) {
+  const kind = String(detectedKind || '').toLowerCase();
+  if (kind === 'video') return 'video';
+  if (kind === 'audio') return 'audio';
+  if (kind && kind !== 'video' && kind !== 'audio') return null;
+  const ext = fileExtension(fileName);
+  if (mediaVideoExt.has(ext)) return 'video';
+  if (mediaAudioExt.has(ext)) return 'audio';
+  return null;
 }
 
 function supportsThumb(name) {
@@ -124,6 +137,7 @@ function resetPreviewContent(message) {
   sharePreviewImage.removeAttribute('src');
   sharePreviewVideo.pause();
   sharePreviewVideo.removeAttribute('src');
+  sharePreviewVideo.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   sharePreviewAudio.pause();
   sharePreviewAudio.removeAttribute('src');
   sharePreviewFrame.removeAttribute('src');
@@ -208,10 +222,45 @@ function closePreviewModal() {
   resetPreviewContent('');
 }
 
+function attachSubtitleTrack(videoEl, trackUrl) {
+  videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
+  if (!trackUrl) return;
+  const track = document.createElement('track');
+  track.kind = 'subtitles';
+  track.label = 'Auto';
+  track.srclang = 'en';
+  track.src = trackUrl;
+  track.default = true;
+  track.dataset.autoSubtitle = '1';
+  videoEl.appendChild(track);
+}
+
 async function openPreviewModal(item) {
   sharePreviewTitle.textContent = `Preview: ${item.name}`;
   resetPreviewContent('Loading preview...');
   sharePreviewModal.classList.remove('hidden');
+
+  const mediaKind = getMediaKind(item.name, item.detectedKind);
+  if (mediaKind && item.mediaUrl) {
+    sharePreviewState.classList.add('hidden');
+    if (mediaKind === 'video') {
+      sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
+      sharePreviewVideo.src = item.mediaUrl;
+      attachSubtitleTrack(sharePreviewVideo, item.subtitleUrl || '');
+      sharePreviewVideo.classList.remove('hidden');
+      sharePreviewVideo.load();
+      return;
+    }
+    sharePreviewAudio.onerror = () => resetPreviewContent('Failed to load media preview');
+    sharePreviewAudio.src = item.mediaUrl;
+    sharePreviewAudio.classList.remove('hidden');
+    sharePreviewAudio.load();
+    return;
+  }
+  if (!item.previewUrl) {
+    resetPreviewContent('Preview is not supported for this file type');
+    return;
+  }
 
   try {
     const res = await fetch(item.previewUrl);
@@ -324,7 +373,7 @@ function addRow(item) {
     actionTd.textContent = item.status;
   }
 
-  if (item.previewUrl) {
+  if (item.previewUrl || item.mediaUrl) {
     const previewBtn = document.createElement('button');
     previewBtn.textContent = 'Preview';
     previewBtn.addEventListener('click', async () => openPreviewModal(item));
@@ -366,34 +415,42 @@ async function loadShare() {
         const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
         const isReady = archive.status === 'ready';
         const canPreview = !!file.previewSupported;
+        const mediaKind = getMediaKind(file.originalName || file.name, file.detectedKind);
         addRow({
           archiveId: String(archive.id),
           fileIndex,
           isBundle: true,
           name: file.originalName || file.name,
+          detectedKind: file.detectedKind || '',
           size: file.size,
           date: archive.createdAt,
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
-          previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
+          mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media` : null,
+          subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt` : null,
+          previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
         });
       });
     } else if (archive) {
       const isReady = archive.status === 'ready';
       const file = archive.files?.[0] || {};
       const canPreview = !!file.previewSupported;
+      const mediaKind = getMediaKind(file.originalName || file.name || archive.name, file.detectedKind);
       addRow({
         archiveId: String(archive.id),
         fileIndex: 0,
         isBundle: false,
         name: archive.name || data.name,
+        detectedKind: file.detectedKind || '',
         size: archive.originalSize,
         date: archive.createdAt,
         status: archive.status,
         downloadUrl: isReady ? downloadUrl : null,
         thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
-        previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
+        mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
+        subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
+        previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
         fileName: file.originalName || file.name
       });
     }
@@ -408,11 +465,13 @@ async function loadShare() {
           const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
           const isReady = archive.status === 'ready';
           const canPreview = !!file.previewSupported;
+          const mediaKind = getMediaKind(file.originalName || file.name, file.detectedKind);
           addRow({
             archiveId: String(archive.id),
             fileIndex,
             isBundle: true,
             name: file.originalName || file.name,
+            detectedKind: file.detectedKind || '',
             size: file.size,
             date: archive.createdAt,
             status: archive.status,
@@ -422,7 +481,13 @@ async function loadShare() {
             thumbUrl: isReady
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
               : null,
-            previewUrl: (isReady && canPreview)
+            mediaUrl: (isReady && canPreview && mediaKind)
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media`
+              : null,
+            subtitleUrl: (isReady && canPreview && mediaKind === 'video')
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt`
+              : null,
+            previewUrl: (isReady && canPreview && !mediaKind)
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
               : null
           });
@@ -431,17 +496,21 @@ async function loadShare() {
         const isReady = archive.status === 'ready';
         const file = archive.files?.[0] || {};
         const canPreview = !!file.previewSupported;
+        const mediaKind = getMediaKind(file.originalName || file.name || archive.name, file.detectedKind);
         addRow({
           archiveId: String(archive.id),
           fileIndex: 0,
           isBundle: false,
           name: archive.name,
+          detectedKind: file.detectedKind || '',
           size: archive.originalSize,
           date: archive.createdAt,
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
-          previewUrl: (isReady && canPreview) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
+          mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
+          subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
+          previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
         });
       }
     }

@@ -40,6 +40,14 @@ import {
   supportsThumbnail
 } from "../services/thumbnails.js";
 import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
+import {
+  ensureArchiveSubtitle,
+  ensureArchiveSubtitleFromSource,
+  getMediaKind,
+  isPermanentSubtitleFailureMessage,
+  supportsSubtitle
+} from "../services/subtitles.js";
+import { queueArchiveSubtitles } from "../services/subtitleWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
   isPreviewAllowedForFile,
@@ -230,10 +238,13 @@ function isFileDeleted(file: any) {
 
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
+  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
+  if (getMediaKind(fileName, file.detectedKind)) {
+    return true;
+  }
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
   if (fileSize > previewMaxBytes) return false;
-  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
   const contentType = (mime.lookup(fileName) as string) || "";
   return isPreviewAllowedForFile(fileName, contentType);
 }
@@ -509,6 +520,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       parts: []
     });
     queueArchiveThumbnails(archive.id);
+    queueArchiveSubtitles(archive.id);
     archiveIds.push(archive.id);
     stagingDir = null;
   }
@@ -882,6 +894,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
       if (useDisk) {
         queueArchiveThumbnails(archive.id);
       }
+      queueArchiveSubtitles(archive.id);
 
       await User.updateOne({ _id: user.id }, { $inc: { usedBytes: originalSize } });
 
@@ -901,6 +914,15 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               log("stream", `thumbnail skip archive=${archive.id} err=${message}`);
+            }
+          }
+          if (supportsSubtitle(sourceName, detectedType.kind)) {
+            try {
+              await ensureArchiveSubtitleFromSource(archive, 0);
+              log("stream", `subtitle ready archive=${archive.id}`);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              log("stream", `subtitle skip archive=${archive.id} err=${message}`);
             }
           }
         }
@@ -1247,6 +1269,125 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
       return;
     }
     return res.status(500).json({ error: "restore_failed" });
+  }
+});
+
+apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) {
+    return res.status(404).json({ error: "not_found" });
+  }
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  const targetIndex = archive.isBundle ? index : 0;
+  const file = archive.files?.[targetIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
+  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  if (!mediaKind) {
+    return res.status(415).json({ error: "unsupported_media_type" });
+  }
+
+  const ext = path.extname(fileName).toLowerCase();
+  const fallbackType = mediaKind === "video" ? "video/mp4" : "audio/mpeg";
+  const contentType = (mime.lookup(fileName) as string) || fallbackType;
+  const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+  const estimatedBytes = Number(file.size || archive.originalSize || 0);
+  noteDownloadStarted(estimatedBytes);
+  log(
+    "preview",
+    rangeHeader
+      ? `media start ${archive.id} file=${targetIndex} range=${rangeHeader}`
+      : `media start ${archive.id} file=${targetIndex}`
+  );
+
+  try {
+    void bumpPreviewCount(archive.id, targetIndex).catch(() => undefined);
+    if (archive.isBundle) {
+      await streamArchiveFileToResponse(archive, targetIndex, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    } else if (rangeHeader) {
+      await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    } else {
+      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    }
+    noteDownloadDone(estimatedBytes);
+  } catch (err) {
+    noteDownloadError();
+    log("preview", `media error ${archive.id} file=${targetIndex} ${(err as Error).message}`);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    return res.status(500).json({ error: "media_failed" });
+  }
+});
+
+apiRouter.get("/archives/:id/files/:index/subtitle.vtt", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) {
+    return res.status(404).json({ error: "not_found" });
+  }
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  const targetIndex = archive.isBundle ? index : 0;
+  const file = archive.files?.[targetIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = file.originalName || file.name || archive.displayName || archive.name;
+  if (!supportsSubtitle(fileName, file.detectedKind)) {
+    return res.status(415).json({ error: "unsupported_subtitle_type" });
+  }
+
+  try {
+    const subtitle = await ensureArchiveSubtitle(archive, targetIndex);
+    res.setHeader("Content-Type", subtitle.contentType);
+    res.setHeader("Content-Length", subtitle.size);
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(fileName)}.vtt`);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    return fs.createReadStream(subtitle.filePath).pipe(res);
+  } catch (err) {
+    const message = (err as Error).message || "subtitle_failed";
+    if (isPermanentSubtitleFailureMessage(message)) {
+      return res.status(404).json({ error: "subtitle_unavailable" });
+    }
+    log("subtitle", `error ${archive.id} file=${targetIndex} ${message}`);
+    if (message === "source_missing" || message === "subtitle_provider_not_configured") {
+      return res.status(404).json({ error: "subtitle_unavailable" });
+    }
+    return res.status(500).json({ error: "subtitle_failed" });
   }
 });
 
