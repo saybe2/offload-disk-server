@@ -16,6 +16,32 @@ const toList = (value: string | undefined, fallback: string[]) => {
     .filter(Boolean);
 };
 
+type ProxyRouteConfig = {
+  targets: string[];
+  proxyUrl: string;
+};
+
+const parseProxyRoutes = (value: string | undefined): ProxyRouteConfig[] => {
+  if (!value || !value.trim()) return [];
+  const routes: ProxyRouteConfig[] = [];
+  for (const chunk of value.split(";")) {
+    const trimmed = chunk.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0 || eq >= trimmed.length - 1) continue;
+    const targetsRaw = trimmed.slice(0, eq).trim();
+    const proxyUrl = trimmed.slice(eq + 1).trim();
+    if (!targetsRaw || !proxyUrl) continue;
+    const targets = targetsRaw
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    if (targets.length === 0) continue;
+    routes.push({ targets, proxyUrl });
+  }
+  return routes;
+};
+
 const defaultProxyTargets = [
   "discord.com",
   "discordapp.com",
@@ -26,6 +52,8 @@ const defaultProxyTargets = [
   "telegra.ph",
   "telegram-cdn.org"
 ];
+
+const defaultSubtitleVideoCodecs = ["h264", "hevc", "vp9", "av1", "mpeg4", "mjpeg", "vp8", "theora", "prores"];
 
 export const config = {
   port: toNumber(process.env.PORT, 3000),
@@ -71,6 +99,7 @@ export const config = {
   outboundProxyEnabled: (process.env.OUTBOUND_PROXY_ENABLED || "false") === "true",
   outboundProxyUrl: (process.env.OUTBOUND_PROXY_URL || "").trim(),
   outboundProxyTargets: toList(process.env.OUTBOUND_PROXY_TARGETS, defaultProxyTargets),
+  outboundProxyRoutes: parseProxyRoutes(process.env.OUTBOUND_PROXY_ROUTES),
   outboundProxyLogMatches: (process.env.OUTBOUND_PROXY_LOG_MATCHES || "false") === "true",
   outboundProxyFallbackDirect: (process.env.OUTBOUND_PROXY_FALLBACK_DIRECT || "true") === "true",
   outboundProxyBypassMs: Math.max(1000, toNumber(process.env.OUTBOUND_PROXY_BYPASS_MS, 15000)),
@@ -84,6 +113,21 @@ export const config = {
   metricsEnabled: (process.env.METRICS_ENABLED || "true") === "true",
   metricsPath: (process.env.METRICS_PATH || "/metrics").trim() || "/metrics",
   metricsToken: (process.env.METRICS_TOKEN || "").trim(),
+  subtitleWorkerEnabled: (process.env.SUBTITLE_WORKER_ENABLED || "true") === "true",
+  subtitleWorkerConcurrency: Math.max(1, toNumber(process.env.SUBTITLE_WORKER_CONCURRENCY, 1)),
+  subtitleWorkerPollMs: Math.max(1000, toNumber(process.env.SUBTITLE_WORKER_POLL_MS, 7000)),
+  subtitleBackfillScanLimit: Math.max(20, toNumber(process.env.SUBTITLE_BACKFILL_SCAN_LIMIT, 200)),
+  subtitleRetryMs: Math.max(5000, toNumber(process.env.SUBTITLE_RETRY_MS, 120000)),
+  subtitleLanguage: (process.env.SUBTITLE_LANGUAGE || "auto").trim() || "auto",
+  subtitleAsrEnabled: (process.env.SUBTITLE_ASR_ENABLED || "false") === "true",
+  subtitleAsrUrl: (process.env.SUBTITLE_ASR_URL || "https://api.openai.com/v1/audio/transcriptions").trim(),
+  subtitleAsrModel: (process.env.SUBTITLE_ASR_MODEL || "whisper-1").trim(),
+  subtitleAsrApiKey: (process.env.SUBTITLE_ASR_API_KEY || "").trim(),
+  subtitleAsrMaxBytes: Math.max(1024 * 1024, toNumber(process.env.SUBTITLE_ASR_MAX_BYTES, 24 * 1024 * 1024)),
+  subtitleAsrPrompt: (process.env.SUBTITLE_ASR_PROMPT || "").trim(),
+  subtitleLocalCommand: (process.env.SUBTITLE_LOCAL_COMMAND || "").trim(),
+  subtitlePreferSource: (process.env.SUBTITLE_PREFER_SOURCE || "true") === "true",
+  mediaPreviewVideoCodecs: toList(process.env.MEDIA_PREVIEW_VIDEO_CODECS, defaultSubtitleVideoCodecs),
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
   smbShareName: process.env.SMB_SHARE_NAME || "offload",

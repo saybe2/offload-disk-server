@@ -12,6 +12,8 @@ const mirrorConcurrencyBtn = document.getElementById('mirrorConcurrencyBtn');
 const mirrorAutoTuneToggle = document.getElementById('mirrorAutoTuneToggle');
 const mirrorControlStatus = document.getElementById('mirrorControlStatus');
 const analyticsText = document.getElementById('analyticsText');
+const subtitleSyncProgress = document.getElementById('subtitleSyncProgress');
+const subtitleSyncText = document.getElementById('subtitleSyncText');
 let mirrorSyncTimer = null;
 let mirrorSyncState = { paused: false, autoTune: true, concurrency: 1, minConcurrency: 1, maxConcurrency: 6 };
 
@@ -104,6 +106,39 @@ async function loadAnalytics() {
       `Download ${download.done || 0}/${download.started || 0} done, errors ${download.error || 0}, rate ${formatRate(download.rateBps60s || 0)}`;
   } catch (err) {
     analyticsText.textContent = 'Failed to load analytics';
+  }
+}
+
+async function loadSubtitleSync() {
+  try {
+    const res = await fetch('/api/admin/subtitle-sync');
+    if (!res.ok) {
+      throw new Error('subtitle_sync_failed');
+    }
+    const data = await res.json();
+    const filesTotal = Number(data.filesTotal || 0);
+    const filesDone = Number(data.filesDone || 0);
+    const filesPending = Number(data.filesPending || 0);
+    const filesFailed = Number(data.filesFailed || 0);
+    const mirrorPending = Number(data.mirrorPending || 0);
+    const totalBytes = Number(data.totalBytes || 0);
+    const doneBytes = Number(data.doneBytes || 0);
+    const remainingBytes = Number(data.remainingBytes || 0);
+    const bytesPercent = Number(data.bytesPercent || 0);
+    if (totalBytes > 0) {
+      subtitleSyncProgress.max = totalBytes;
+      subtitleSyncProgress.value = Math.min(doneBytes, totalBytes);
+    } else {
+      subtitleSyncProgress.max = 100;
+      subtitleSyncProgress.value = 100;
+    }
+    if (filesTotal === 0) {
+      subtitleSyncText.textContent = 'No subtitle tasks';
+      return;
+    }
+    subtitleSyncText.textContent = `${bytesPercent}% | data ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} | remaining ${formatBytes(remainingBytes)} | files ${filesDone}/${filesTotal} | pending ${filesPending} | failed ${filesFailed} | mirror-pending ${mirrorPending}`;
+  } catch (err) {
+    subtitleSyncText.textContent = 'Failed to load subtitle sync stats';
   }
 }
 
@@ -314,6 +349,7 @@ addWebhookForm.addEventListener('submit', async (e) => {
 (async () => {
   await loadMirrorSync();
   await loadAnalytics();
+  await loadSubtitleSync();
   await loadUsers();
   await loadWebhooks();
   if (mirrorSyncTimer) {
@@ -322,5 +358,6 @@ addWebhookForm.addEventListener('submit', async (e) => {
   mirrorSyncTimer = setInterval(async () => {
     await loadMirrorSync();
     await loadAnalytics();
+    await loadSubtitleSync();
   }, 5000);
 })();

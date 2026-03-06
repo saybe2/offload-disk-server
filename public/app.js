@@ -98,6 +98,8 @@ const archiveProgress = new Map();
 let previewObjectUrl = null;
 const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.avif', '.heic', '.heif']);
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob']);
+const mediaVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob', '.ts']);
+const mediaAudioExt = new Set(['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.oga', '.opus', '.wma', '.aiff']);
 const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 const VIEW_MODES = new Set(['list', 'tile', 'large']);
@@ -294,6 +296,17 @@ function fileExtension(name) {
   return dot >= 0 ? lower.slice(dot) : '';
 }
 
+function getMediaKind(fileName, detectedKind) {
+  const kind = String(detectedKind || '').toLowerCase();
+  if (kind === 'video') return 'video';
+  if (kind === 'audio') return 'audio';
+  if (kind && kind !== 'video' && kind !== 'audio') return null;
+  const ext = fileExtension(fileName);
+  if (mediaVideoExt.has(ext)) return 'video';
+  if (mediaAudioExt.has(ext)) return 'audio';
+  return null;
+}
+
 function supportsThumb(name, detectedKind) {
   if (detectedKind === 'image' || detectedKind === 'video') return true;
   if (detectedKind && detectedKind !== 'image' && detectedKind !== 'video') return false;
@@ -481,6 +494,7 @@ function resetPreviewContent(message) {
   previewImage.removeAttribute('src');
   previewVideo.pause();
   previewVideo.removeAttribute('src');
+  previewVideo.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   previewAudio.pause();
   previewAudio.removeAttribute('src');
   previewFrame.removeAttribute('src');
@@ -689,6 +703,9 @@ function canPreviewItem(item) {
   }
   const fileName = file?.originalName || file?.name || archive.displayName || archive.name || '';
   if (!fileName) return false;
+  if (getMediaKind(fileName, file?.detectedKind)) {
+    return true;
+  }
   const size = Number(file?.size ?? archive.originalSize ?? 0);
   const maxBytes = Math.max(1, Math.floor(PREVIEW_MAX_MIB * 1024 * 1024));
   if (size > maxBytes) return false;
@@ -732,6 +749,19 @@ function closePreviewModal() {
   resetPreviewContent('');
 }
 
+function attachSubtitleTrack(videoEl, trackUrl) {
+  videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
+  if (!trackUrl) return;
+  const track = document.createElement('track');
+  track.kind = 'subtitles';
+  track.label = 'Auto';
+  track.srclang = 'en';
+  track.src = trackUrl;
+  track.default = true;
+  track.dataset.autoSubtitle = '1';
+  videoEl.appendChild(track);
+}
+
 async function openPreviewModal(item) {
   const archive = item.archive;
   const fileName = item.file?.originalName || item.file?.name || archive.displayName || archive.name;
@@ -739,9 +769,33 @@ async function openPreviewModal(item) {
   resetPreviewContent('Loading preview...');
   previewModal.classList.remove('hidden');
 
+  const targetIndex = item.isBundle ? Number(item.fileIndex || 0) : 0;
+  const mediaKind = getMediaKind(fileName, item.file?.detectedKind);
+  if (mediaKind) {
+    const mediaUrl = `/api/archives/${archive._id}/files/${targetIndex}/media`;
+    const subtitleUrl = `/api/archives/${archive._id}/files/${targetIndex}/subtitle.vtt`;
+    if (item.file) {
+      item.file.previewCount = (Number(item.file.previewCount || 0) + 1);
+    }
+    previewState.classList.add('hidden');
+    if (mediaKind === 'video') {
+      previewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
+      previewVideo.src = mediaUrl;
+      attachSubtitleTrack(previewVideo, subtitleUrl);
+      previewVideo.classList.remove('hidden');
+      previewVideo.load();
+      return;
+    }
+    previewAudio.onerror = () => resetPreviewContent('Failed to load media preview');
+    previewAudio.src = mediaUrl;
+    previewAudio.classList.remove('hidden');
+    previewAudio.load();
+    return;
+  }
+
   let url = `/api/archives/${archive._id}/preview`;
   if (item.isBundle) {
-    url += `?fileIndex=${item.fileIndex}`;
+    url += `?fileIndex=${targetIndex}`;
   }
 
   try {

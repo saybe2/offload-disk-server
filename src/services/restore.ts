@@ -15,13 +15,21 @@ import { uniqueParts } from "./parts.js";
 import { log } from "../logger.js";
 import { refreshMirrorPartUrl, refreshPartUrl } from "./partProvider.js";
 
-function contentDisposition(filename: string) {
+export type StreamDisposition = "attachment" | "inline";
+
+type StreamResponseOptions = {
+  disposition?: StreamDisposition;
+  fileName?: string;
+  contentType?: string;
+};
+
+function contentDisposition(filename: string, disposition: StreamDisposition = "attachment") {
   const fallback = filename
     .split("")
     .map((ch) => (/[a-zA-Z0-9._ -]/.test(ch) ? ch : "_"))
     .join("");
   const encoded = encodeURIComponent(filename).replace(/['()]/g, escape).replace(/\*/g, "%2A");
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 async function hashFile(filePath: string) {
@@ -241,7 +249,8 @@ export async function streamArchiveRangeToResponse(
   rangeHeader: string,
   res: Response,
   tempBaseDir: string,
-  masterKey: string
+  masterKey: string,
+  options?: StreamResponseOptions
 ) {
   if (archive.isBundle) {
     throw new Error("range_not_supported");
@@ -255,11 +264,13 @@ export async function streamArchiveRangeToResponse(
   const inferredTotalSize = partRanges.reduce((sum, item) => sum + item.plainSize, 0);
   const fileSize = resolveSingleFileSize(archive) || inferredTotalSize;
   const range = parseByteRange(rangeHeader, fileSize);
-  const downloadName = archive.downloadName || archive.name;
-  const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
+  const downloadName = options?.fileName || archive.downloadName || archive.name;
+  const contentType =
+    options?.contentType || (mime.lookup(downloadName) as string) || "application/octet-stream";
+  const disposition = options?.disposition || "attachment";
 
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", contentDisposition(downloadName));
+  res.setHeader("Content-Disposition", contentDisposition(downloadName, disposition));
   res.setHeader("Accept-Ranges", "bytes");
   setResumeIdentityHeaders(archive, res, fileSize);
 
@@ -414,7 +425,8 @@ export async function streamArchiveFileToResponse(
   fileIndex: number,
   res: Response,
   tempBaseDir: string,
-  masterKey: string
+  masterKey: string,
+  options?: StreamResponseOptions
 ) {
   startRestore();
   const file = archive.files?.[fileIndex];
@@ -426,8 +438,10 @@ export async function streamArchiveFileToResponse(
   await fs.promises.mkdir(workDir, { recursive: true });
   const zipPath = path.join(workDir, "bundle.zip");
   const restoredPath = path.join(workDir, "file");
-  const downloadName = (file.originalName || file.name || "file").replace(/[\\/]/g, "_");
-  const contentType = (mime.lookup(downloadName) as string) || "application/octet-stream";
+  const downloadName = (options?.fileName || file.originalName || file.name || "file").replace(/[\\/]/g, "_");
+  const contentType =
+    options?.contentType || (mime.lookup(downloadName) as string) || "application/octet-stream";
+  const disposition = options?.disposition || "attachment";
 
   let aborted = false;
   res.on("close", () => {
@@ -444,7 +458,7 @@ export async function streamArchiveFileToResponse(
 
     if (!res.headersSent) {
       res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Disposition", contentDisposition(downloadName));
+      res.setHeader("Content-Disposition", contentDisposition(downloadName, disposition));
       res.setHeader("Content-Length", stat.size);
     }
 
@@ -477,19 +491,23 @@ export async function streamArchiveToResponse(
   archive: ArchiveDoc,
   res: Response,
   tempBaseDir: string,
-  masterKey: string
+  masterKey: string,
+  options?: StreamResponseOptions
 ) {
   startRestore();
   const workDir = makeRestoreWorkDir(tempBaseDir, `${archive.id}_v2`);
   await fs.promises.mkdir(workDir, { recursive: true });
   const key = deriveKey(masterKey);
-  const downloadName = archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
-  const contentType = archive.isBundle
-    ? "application/zip"
-    : (mime.lookup(downloadName) as string) || "application/octet-stream";
+  const downloadName =
+    options?.fileName || archive.downloadName || (archive.isBundle ? `${archive.name}.zip` : archive.name);
+  const contentType = options?.contentType
+    || (archive.isBundle
+      ? "application/zip"
+      : (mime.lookup(downloadName) as string) || "application/octet-stream");
+  const disposition = options?.disposition || "attachment";
 
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", contentDisposition(downloadName));
+  res.setHeader("Content-Disposition", contentDisposition(downloadName, disposition));
   res.setHeader("Accept-Ranges", "bytes");
   if (!archive.isBundle) {
     const size = resolveSingleFileSize(archive);

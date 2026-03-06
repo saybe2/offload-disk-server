@@ -11,6 +11,7 @@ import {
   restoreArchiveFileToFile,
   restoreArchiveToFile,
   streamArchiveFileToResponse,
+  streamArchiveRangeToResponse,
   streamArchiveToResponse
 } from "../services/restore.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
@@ -20,6 +21,12 @@ import {
   isPermanentThumbnailFailureMessage,
   supportsThumbnail
 } from "../services/thumbnails.js";
+import {
+  ensureArchiveSubtitle,
+  getMediaKind,
+  isPermanentSubtitleFailureMessage,
+  supportsSubtitle
+} from "../services/subtitles.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
@@ -53,10 +60,11 @@ function isFileDeleted(file: any) {
 
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
+  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
+  if (getMediaKind(fileName, file.detectedKind)) return true;
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
   if (fileSize > previewMaxBytes) return false;
-  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
   const contentType = (mime.lookup(fileName) as string) || "";
   return isPreviewAllowedForFile(fileName, contentType);
 }
@@ -197,6 +205,8 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
   try {
     const estimatedBytes = estimateArchiveDownloadBytes(archive);
     noteDownloadStarted(estimatedBytes);
+    const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+    const canUseRange = !!rangeHeader && !archive.isBundle;
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
@@ -211,7 +221,11 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
       return res.status(404).json({ error: "file_not_found" });
     }
-    await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    if (canUseRange) {
+      await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+    } else {
+      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    }
     const targets: { archiveId: string; fileIndex: number }[] = [];
     if (archive.isBundle && archive.files && archive.files.length > 1) {
       for (const i of activeBundleFileIndices(archive)) {
@@ -240,6 +254,8 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
   try {
     const estimatedBytes = estimateArchiveDownloadBytes(archive);
     noteDownloadStarted(estimatedBytes);
+    const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+    const canUseRange = !!rangeHeader && !archive.isBundle;
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
@@ -254,7 +270,11 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
       return res.status(404).json({ error: "file_not_found" });
     }
-    await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    if (canUseRange) {
+      await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+    } else {
+      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
+    }
     const targets: { archiveId: string; fileIndex: number }[] = [];
     if (archive.isBundle && archive.files && archive.files.length > 1) {
       for (const i of activeBundleFileIndices(archive)) {
@@ -268,6 +288,120 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
   } catch {
     noteDownloadError();
     return res.status(500).json({ error: "restore_failed" });
+  }
+});
+
+publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/media", async (req, res) => {
+  const resolved = await resolveArchiveByShare(req.params.token, req.params.archiveId);
+  if (!("archive" in resolved)) {
+    return res.status(resolved.status).json({ error: resolved.error });
+  }
+
+  const { archive } = resolved;
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  let fileIndex = Number(req.params.index);
+  if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  if (!archive.isBundle) {
+    fileIndex = 0;
+  }
+  const file = archive.files?.[fileIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+
+  const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
+  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  if (!mediaKind) {
+    return res.status(415).json({ error: "unsupported_media_type" });
+  }
+
+  const contentType = (mime.lookup(fileName) as string) || (mediaKind === "video" ? "video/mp4" : "audio/mpeg");
+  const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
+  const estimatedBytes = Number(file.size || archive.originalSize || 0);
+  noteDownloadStarted(estimatedBytes);
+
+  try {
+    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    if (archive.isBundle) {
+      await streamArchiveFileToResponse(archive, fileIndex, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    } else if (rangeHeader) {
+      await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    } else {
+      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
+        disposition: "inline",
+        fileName,
+        contentType
+      });
+    }
+    noteDownloadDone(estimatedBytes);
+  } catch (err) {
+    noteDownloadError();
+    log("preview", `public media error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    return res.status(500).json({ error: "media_failed" });
+  }
+});
+
+publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/subtitle.vtt", async (req, res) => {
+  const resolved = await resolveArchiveByShare(req.params.token, req.params.archiveId);
+  if (!("archive" in resolved)) {
+    return res.status(resolved.status).json({ error: resolved.error });
+  }
+
+  const { archive } = resolved;
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  let fileIndex = Number(req.params.index);
+  if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  if (!archive.isBundle) {
+    fileIndex = 0;
+  }
+  const file = archive.files?.[fileIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = file.originalName || file.name || archive.displayName || archive.name;
+  if (!supportsSubtitle(fileName, file.detectedKind)) {
+    return res.status(415).json({ error: "unsupported_subtitle_type" });
+  }
+
+  try {
+    const subtitle = await ensureArchiveSubtitle(archive, fileIndex);
+    res.setHeader("Content-Type", subtitle.contentType);
+    res.setHeader("Content-Length", subtitle.size);
+    res.setHeader("Content-Disposition", inlineContentDisposition(`${fileName}.vtt`));
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    return fs.createReadStream(subtitle.filePath).pipe(res);
+  } catch (err) {
+    const message = (err as Error).message || "subtitle_failed";
+    if (isPermanentSubtitleFailureMessage(message)) {
+      return res.status(404).json({ error: "subtitle_unavailable" });
+    }
+    log("subtitle", `public error ${archive.id} file=${fileIndex} ${message}`);
+    if (message === "source_missing" || message === "subtitle_provider_not_configured") {
+      return res.status(404).json({ error: "subtitle_unavailable" });
+    }
+    return res.status(500).json({ error: "subtitle_failed" });
   }
 });
 

@@ -24,6 +24,29 @@ export interface ArchiveFile {
     failedAt?: Date | null;
     error?: string;
   };
+  subtitle?: {
+    contentType: string;
+    size: number;
+    localPath: string;
+    language?: string;
+    provider?: "discord" | "telegram";
+    url?: string;
+    messageId?: string;
+    webhookId?: string;
+    telegramFileId?: string;
+    telegramChatId?: string;
+    mirrorProvider?: "discord" | "telegram";
+    mirrorUrl?: string;
+    mirrorMessageId?: string;
+    mirrorWebhookId?: string;
+    mirrorTelegramFileId?: string;
+    mirrorTelegramChatId?: string;
+    mirrorPending?: boolean;
+    mirrorError?: string;
+    updatedAt?: Date;
+    failedAt?: Date | null;
+    error?: string;
+  };
 }
 
 export interface ArchivePart {
@@ -103,6 +126,29 @@ const FileSchema = new Schema<ArchiveFile>(
       url: { type: String, default: "" },
       messageId: { type: String, default: "" },
       webhookId: { type: String, default: "" },
+      updatedAt: { type: Date, default: null },
+      failedAt: { type: Date, default: null },
+      error: { type: String, default: "" }
+    },
+    subtitle: {
+      contentType: { type: String, default: "text/vtt; charset=utf-8" },
+      size: { type: Number, default: 0 },
+      localPath: { type: String, default: "" },
+      language: { type: String, default: "auto" },
+      provider: { type: String, enum: ["discord", "telegram"], default: null },
+      url: { type: String, default: "" },
+      messageId: { type: String, default: "" },
+      webhookId: { type: String, default: "" },
+      telegramFileId: { type: String, default: "" },
+      telegramChatId: { type: String, default: "" },
+      mirrorProvider: { type: String, enum: ["discord", "telegram"], default: null },
+      mirrorUrl: { type: String, default: "" },
+      mirrorMessageId: { type: String, default: "" },
+      mirrorWebhookId: { type: String, default: "" },
+      mirrorTelegramFileId: { type: String, default: "" },
+      mirrorTelegramChatId: { type: String, default: "" },
+      mirrorPending: { type: Boolean, default: false },
+      mirrorError: { type: String, default: "" },
       updatedAt: { type: Date, default: null },
       failedAt: { type: Date, default: null },
       error: { type: String, default: "" }

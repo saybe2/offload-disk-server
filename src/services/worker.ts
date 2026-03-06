@@ -18,6 +18,8 @@ import {
 } from "./partProvider.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
+import { ensureArchiveSubtitleFromSource, supportsSubtitle } from "./subtitles.js";
+import { queueArchiveSubtitles } from "./subtitleWorker.js";
 import { isTelegramReady } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
 import {
@@ -174,6 +176,28 @@ async function generateLocalThumbnails(archive: any) {
   }
   if (generated > 0) {
     log(`thumb ready ${archive.id} generated=${generated}`);
+  }
+}
+
+async function generateLocalSubtitles(archive: any) {
+  if (!archive?.files?.length) return;
+  let generated = 0;
+  for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
+    const file = archive.files[fileIndex];
+    if (file?.deletedAt) continue;
+    const fileName = file?.originalName || file?.name || "";
+    if (!supportsSubtitle(fileName, file?.detectedKind)) continue;
+    try {
+      await ensureArchiveSubtitleFromSource(archive, fileIndex);
+      generated += 1;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`subtitle skip ${archive.id} file=${fileIndex} ${message}`);
+      queueArchiveSubtitles(archive.id);
+    }
+  }
+  if (generated > 0) {
+    log(`subtitle ready ${archive.id} generated=${generated}`);
   }
 }
 
@@ -572,6 +596,7 @@ async function processNextArchive() {
     await archive.save();
 
     await generateLocalThumbnails(archive);
+    await generateLocalSubtitles(archive);
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     log(`ready ${archive.id}`);
     noteUploadArchiveDone(archive.originalSize || 0, Date.now() - startedAt);

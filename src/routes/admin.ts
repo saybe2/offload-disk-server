@@ -17,6 +17,7 @@ import {
 } from "../services/mirrorSyncControl.js";
 import { getAnalyticsSnapshot } from "../services/analytics.js";
 import { config } from "../config.js";
+import { supportsSubtitle } from "../services/subtitles.js";
 
 export const adminRouter = Router();
 
@@ -171,6 +172,62 @@ adminRouter.post("/mirror-sync/retry-failed", requireAdmin, async (_req, res) =>
 
 adminRouter.get("/analytics", requireAdmin, async (_req, res) => {
   res.json(getAnalyticsSnapshot());
+});
+
+adminRouter.get("/subtitle-sync", requireAdmin, async (_req, res) => {
+  const archives = await Archive.find({
+    status: { $in: ["queued", "processing", "ready"] },
+    deletedAt: null,
+    trashedAt: null,
+    "files.0": { $exists: true }
+  })
+    .select("status files")
+    .lean();
+
+  let filesTotal = 0;
+  let filesDone = 0;
+  let filesFailed = 0;
+  let filesPending = 0;
+  let mirrorPending = 0;
+  let totalBytes = 0;
+  let doneBytes = 0;
+
+  for (const archive of archives as any[]) {
+    for (const file of archive.files || []) {
+      if (file?.deletedAt) continue;
+      const fileName = file?.originalName || file?.name || "";
+      if (!supportsSubtitle(fileName, file?.detectedKind)) continue;
+      const bytes = Number(file?.size || 0);
+      filesTotal += 1;
+      totalBytes += bytes;
+      if (file?.subtitle?.updatedAt) {
+        filesDone += 1;
+        doneBytes += bytes;
+        if (file?.subtitle?.mirrorPending) {
+          mirrorPending += 1;
+        }
+      } else if (file?.subtitle?.failedAt) {
+        filesFailed += 1;
+      } else {
+        filesPending += 1;
+      }
+    }
+  }
+
+  const filesPercent = filesTotal > 0 ? Math.floor((filesDone / filesTotal) * 100) : 100;
+  const bytesPercent = totalBytes > 0 ? Math.floor((doneBytes / totalBytes) * 100) : 100;
+  res.json({
+    filesTotal,
+    filesDone,
+    filesPending,
+    filesFailed,
+    mirrorPending,
+    filesPercent,
+    totalBytes,
+    doneBytes,
+    remainingBytes: Math.max(0, totalBytes - doneBytes),
+    bytesPercent
+  });
 });
 
 adminRouter.get("/users", requireAdmin, async (_req, res) => {
