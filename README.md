@@ -238,6 +238,18 @@ Subtitles:
 - `SUBTITLE_LOCAL_COMMAND` (fallback local command with `{input}` `{output}` `{lang}`)
 - `SUBTITLE_PREFER_SOURCE`
 
+Local subtitle fallback (built-in in Docker image):
+- Image includes `ffmpeg` + `faster-whisper` and helper scripts:
+  - `tools/subtitle_local.sh`
+  - `tools/subtitle_local.py`
+- Recommended `.env`:
+  - `SUBTITLE_LOCAL_COMMAND=bash /home/container/tools/subtitle_local.sh {input} {output} {lang}`
+- Optional tuning:
+  - `SUBTITLE_LOCAL_MODEL` (default `small`)
+  - `SUBTITLE_LOCAL_MODEL_DIR` (default `/home/container/data/asr_models`)
+  - `SUBTITLE_LOCAL_DEVICE` (default `cpu`)
+  - `SUBTITLE_LOCAL_COMPUTE_TYPE` (default `int8`)
+
 Worker:
 - `WORKER_CONCURRENCY`
 - `WORKER_POLL_MS`
