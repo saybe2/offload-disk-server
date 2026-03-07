@@ -89,6 +89,12 @@ const BROWSER_AUDIO_EXTENSIONS = new Set([
   ".aac"
 ]);
 
+function extOf(fileName: string) {
+  const lower = String(fileName || "").toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  return dot >= 0 ? lower.slice(dot) : "";
+}
+
 function isCodeLikeFileName(fileName: string) {
   if (!fileName) return false;
   const name = String(fileName).trim();
@@ -118,9 +124,7 @@ export function isPreviewAllowedForFile(fileName: string, contentType: string) {
 }
 
 export function isBrowserPlayableMedia(fileName: string, detectedKind?: string) {
-  const lower = String(fileName || "").toLowerCase();
-  const dot = lower.lastIndexOf(".");
-  const ext = dot >= 0 ? lower.slice(dot) : "";
+  const ext = extOf(fileName);
   if (detectedKind === "video") {
     return BROWSER_VIDEO_EXTENSIONS.has(ext);
   }
@@ -130,6 +134,15 @@ export function isBrowserPlayableMedia(fileName: string, detectedKind?: string) 
   if (BROWSER_VIDEO_EXTENSIONS.has(ext) || BROWSER_AUDIO_EXTENSIONS.has(ext)) {
     return true;
   }
+  return false;
+}
+
+export function isMediaPreviewSupported(fileName: string, mediaKind?: string | null) {
+  if (!mediaKind) return false;
+  if (isBrowserPlayableMedia(fileName, mediaKind)) return true;
+  const ext = extOf(fileName);
+  // MPEG-TS is remuxed to MP4 server-side before preview response.
+  if (mediaKind === "video" && ext === ".ts") return true;
   return false;
 }
 

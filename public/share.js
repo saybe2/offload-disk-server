@@ -69,6 +69,12 @@ function isBrowserPlayableMedia(fileName, mediaKind) {
   return false;
 }
 
+function isMediaPreviewSupported(fileName, mediaKind) {
+  if (!mediaKind) return false;
+  if (isBrowserPlayableMedia(fileName, mediaKind)) return true;
+  return mediaKind === 'video' && fileExtension(fileName) === '.ts';
+}
+
 function supportsThumb(name) {
   const ext = fileExtension(name);
   return thumbImageExt.has(ext) || thumbVideoExt.has(ext);
@@ -250,7 +256,7 @@ async function openPreviewModal(item) {
   sharePreviewModal.classList.remove('hidden');
 
   const mediaKind = getMediaKind(item.name, item.detectedKind);
-  if (mediaKind && isBrowserPlayableMedia(item.name, mediaKind) && item.mediaUrl) {
+  if (mediaKind && isMediaPreviewSupported(item.name, mediaKind) && item.mediaUrl) {
     sharePreviewState.classList.add('hidden');
     if (mediaKind === 'video') {
       sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
