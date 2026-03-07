@@ -1,6 +1,7 @@
 import fs from "fs";
 import mime from "mime-types";
 import path from "path";
+import { pipeline } from "stream/promises";
 import { Router } from "express";
 import { Archive } from "../models/Archive.js";
 import { Folder } from "../models/Folder.js";
@@ -320,34 +321,63 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   if (!mediaKind) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
+  if (!isBrowserPlayableMedia(fileName, mediaKind)) {
+    return res.status(415).json({ error: "unsupported_media_type" });
+  }
 
+  const ext = path.extname(fileName).toLowerCase();
+  const needsTsRemux = mediaKind === "video" && ext === ".ts";
   const contentType = (mime.lookup(fileName) as string) || (mediaKind === "video" ? "video/mp4" : "audio/mpeg");
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(file.size || archive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
+  const remuxTempDir = needsTsRemux
+    ? path.join(config.cacheDir, "preview_media", `${archive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+    : null;
 
   try {
     void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
-    if (archive.isBundle) {
-      await streamArchiveFileToResponse(archive, fileIndex, res, config.cacheDir, config.masterKey, {
-        disposition: "inline",
-        fileName,
-        contentType
-      });
-    } else if (rangeHeader) {
-      await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
-        disposition: "inline",
-        fileName,
-        contentType
-      });
+    if (needsTsRemux && remuxTempDir) {
+      await fs.promises.mkdir(remuxTempDir, { recursive: true });
+      const sourcePath = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}`);
+      const mp4Path = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}.mp4`);
+      if (archive.isBundle) {
+        await restoreArchiveFileToFile(archive, fileIndex, sourcePath, config.cacheDir, config.masterKey);
+      } else {
+        await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
+      }
+      const remuxed = await remuxTsToMp4(sourcePath, mp4Path);
+      const servePath = remuxed ? mp4Path : sourcePath;
+      const serveType = remuxed ? "video/mp4" : "video/mp2t";
+      const stat = await fs.promises.stat(servePath);
+      res.setHeader("Content-Type", serveType);
+      res.setHeader("Content-Length", stat.size);
+      res.setHeader("Content-Disposition", inlineContentDisposition(fileName));
+      res.setHeader("Cache-Control", "private, max-age=60");
+      await pipeline(fs.createReadStream(servePath), res);
+      noteDownloadDone(stat.size || estimatedBytes);
     } else {
-      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
-        disposition: "inline",
-        fileName,
-        contentType
-      });
+      if (archive.isBundle) {
+        await streamArchiveFileToResponse(archive, fileIndex, res, config.cacheDir, config.masterKey, {
+          disposition: "inline",
+          fileName,
+          contentType
+        });
+      } else if (rangeHeader) {
+        await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
+          disposition: "inline",
+          fileName,
+          contentType
+        });
+      } else {
+        await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
+          disposition: "inline",
+          fileName,
+          contentType
+        });
+      }
+      noteDownloadDone(estimatedBytes);
     }
-    noteDownloadDone(estimatedBytes);
   } catch (err) {
     noteDownloadError();
     log("preview", `public media error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
@@ -356,6 +386,10 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       return;
     }
     return res.status(500).json({ error: "media_failed" });
+  } finally {
+    if (remuxTempDir) {
+      await fs.promises.rm(remuxTempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 });
 
