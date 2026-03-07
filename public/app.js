@@ -100,6 +100,8 @@ const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp',
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob']);
 const mediaVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob', '.ts']);
 const mediaAudioExt = new Set(['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.oga', '.opus', '.wma', '.aiff']);
+const browserVideoExt = new Set(['.mp4', '.webm', '.ogv', '.m4v', '.mov']);
+const browserAudioExt = new Set(['.mp3', '.wav', '.ogg', '.oga', '.opus', '.m4a', '.aac']);
 const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 const VIEW_MODES = new Set(['list', 'tile', 'large']);
@@ -305,6 +307,13 @@ function getMediaKind(fileName, detectedKind) {
   if (mediaVideoExt.has(ext)) return 'video';
   if (mediaAudioExt.has(ext)) return 'audio';
   return null;
+}
+
+function isBrowserPlayableMedia(fileName, mediaKind) {
+  const ext = fileExtension(fileName);
+  if (mediaKind === 'video') return browserVideoExt.has(ext);
+  if (mediaKind === 'audio') return browserAudioExt.has(ext);
+  return false;
 }
 
 function supportsThumb(name, detectedKind) {
@@ -703,7 +712,9 @@ function canPreviewItem(item) {
   }
   const fileName = file?.originalName || file?.name || archive.displayName || archive.name || '';
   if (!fileName) return false;
-  if (getMediaKind(fileName, file?.detectedKind)) {
+  const mediaKind = getMediaKind(fileName, file?.detectedKind);
+  if (mediaKind) {
+    if (!isBrowserPlayableMedia(fileName, mediaKind)) return false;
     return true;
   }
   const size = Number(file?.size ?? archive.originalSize ?? 0);

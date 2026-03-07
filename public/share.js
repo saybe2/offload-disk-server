@@ -19,6 +19,8 @@ const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp',
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
 const mediaVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.ts', '.m2ts', '.3gp', '.ogv', '.vob']);
 const mediaAudioExt = new Set(['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.oga', '.opus', '.wma', '.aiff']);
+const browserVideoExt = new Set(['.mp4', '.webm', '.ogv', '.m4v', '.mov']);
+const browserAudioExt = new Set(['.mp3', '.wav', '.ogg', '.oga', '.opus', '.m4a', '.aac']);
 const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 let shareToken = '';
@@ -58,6 +60,13 @@ function getMediaKind(fileName, detectedKind) {
   if (mediaVideoExt.has(ext)) return 'video';
   if (mediaAudioExt.has(ext)) return 'audio';
   return null;
+}
+
+function isBrowserPlayableMedia(fileName, mediaKind) {
+  const ext = fileExtension(fileName);
+  if (mediaKind === 'video') return browserVideoExt.has(ext);
+  if (mediaKind === 'audio') return browserAudioExt.has(ext);
+  return false;
 }
 
 function supportsThumb(name) {
@@ -241,7 +250,7 @@ async function openPreviewModal(item) {
   sharePreviewModal.classList.remove('hidden');
 
   const mediaKind = getMediaKind(item.name, item.detectedKind);
-  if (mediaKind && item.mediaUrl) {
+  if (mediaKind && isBrowserPlayableMedia(item.name, mediaKind) && item.mediaUrl) {
     sharePreviewState.classList.add('hidden');
     if (mediaKind === 'video') {
       sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
