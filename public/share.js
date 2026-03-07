@@ -237,17 +237,54 @@ function closePreviewModal() {
   resetPreviewContent('');
 }
 
-function attachSubtitleTrack(videoEl, trackUrl) {
+function attachSubtitleTrack(videoEl, trackUrl, label = 'Track 1') {
   videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   if (!trackUrl) return;
   const track = document.createElement('track');
   track.kind = 'subtitles';
-  track.label = 'Auto';
+  track.label = label;
   track.srclang = 'en';
   track.src = trackUrl;
   track.default = true;
   track.dataset.autoSubtitle = '1';
   videoEl.appendChild(track);
+}
+
+async function fetchShareSubtitleTracks(tracksUrl) {
+  if (!tracksUrl) return [];
+  try {
+    const res = await fetch(tracksUrl);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data?.tracks)) return [];
+    return data.tracks
+      .map((track) => ({
+        audioTrack: Number(track?.audioTrack || 0),
+        language: String(track?.language || 'auto'),
+        label: String(track?.label || '')
+      }))
+      .filter((track) => Number.isInteger(track.audioTrack) && track.audioTrack >= 0)
+      .sort((a, b) => a.audioTrack - b.audioTrack);
+  } catch {
+    return [];
+  }
+}
+
+function attachSubtitleTracks(videoEl, subtitleBaseUrl, tracks) {
+  videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
+  const list = Array.isArray(tracks) && tracks.length > 0 ? tracks : [{ audioTrack: 0, label: 'Track 1', language: 'auto' }];
+  for (let i = 0; i < list.length; i += 1) {
+    const item = list[i];
+    const sep = subtitleBaseUrl.includes('?') ? '&' : '?';
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = item.label || `Track ${item.audioTrack + 1}`;
+    track.srclang = (item.language || 'auto').toLowerCase();
+    track.src = `${subtitleBaseUrl}${sep}audioTrack=${item.audioTrack}`;
+    track.default = i === 0;
+    track.dataset.autoSubtitle = '1';
+    videoEl.appendChild(track);
+  }
 }
 
 async function openPreviewModal(item) {
@@ -261,7 +298,12 @@ async function openPreviewModal(item) {
     if (mediaKind === 'video') {
       sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
       sharePreviewVideo.src = item.mediaUrl;
-      attachSubtitleTrack(sharePreviewVideo, item.subtitleUrl || '');
+      const tracks = await fetchShareSubtitleTracks(item.subtitleTracksUrl || '');
+      if (item.subtitleUrl) {
+        attachSubtitleTracks(sharePreviewVideo, item.subtitleUrl, tracks);
+      } else {
+        attachSubtitleTrack(sharePreviewVideo, '', 'Track 1');
+      }
       sharePreviewVideo.classList.remove('hidden');
       sharePreviewVideo.load();
       return;
@@ -444,6 +486,7 @@ async function loadShare() {
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media` : null,
           subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt` : null,
+          subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle-tracks` : null,
           previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
         });
       });
@@ -465,6 +508,7 @@ async function loadShare() {
         thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
         mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
         subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
+        subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
         previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
         fileName: file.originalName || file.name
       });
@@ -502,6 +546,9 @@ async function loadShare() {
             subtitleUrl: (isReady && canPreview && mediaKind === 'video')
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt`
               : null,
+            subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video')
+              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle-tracks`
+              : null,
             previewUrl: (isReady && canPreview && !mediaKind)
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
               : null
@@ -525,6 +572,7 @@ async function loadShare() {
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
           subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
+          subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
           previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
         });
       }

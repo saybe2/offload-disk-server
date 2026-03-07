@@ -773,17 +773,52 @@ function closePreviewModal() {
   resetPreviewContent('');
 }
 
-function attachSubtitleTrack(videoEl, trackUrl) {
+function attachSubtitleTrack(videoEl, trackUrl, label = 'Auto') {
   videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   if (!trackUrl) return;
   const track = document.createElement('track');
   track.kind = 'subtitles';
-  track.label = 'Auto';
+  track.label = label;
   track.srclang = 'en';
   track.src = trackUrl;
   track.default = true;
   track.dataset.autoSubtitle = '1';
   videoEl.appendChild(track);
+}
+
+async function fetchSubtitleTracks(archiveId, fileIndex) {
+  const url = `/api/archives/${archiveId}/files/${fileIndex}/subtitle-tracks`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data?.tracks)) return [];
+    return data.tracks
+      .map((track) => ({
+        audioTrack: Number(track?.audioTrack || 0),
+        language: String(track?.language || 'auto'),
+        label: String(track?.label || '')
+      }))
+      .filter((track) => Number.isInteger(track.audioTrack) && track.audioTrack >= 0)
+      .sort((a, b) => a.audioTrack - b.audioTrack);
+  } catch {
+    return [];
+  }
+}
+
+function attachSubtitleTracks(videoEl, archiveId, fileIndex, tracks) {
+  const list = Array.isArray(tracks) && tracks.length > 0 ? tracks : [{ audioTrack: 0, language: 'auto', label: 'Track 1' }];
+  videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
+  list.forEach((item, idx) => {
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = item.label || `Track ${item.audioTrack + 1}`;
+    track.srclang = (item.language || 'auto').toLowerCase();
+    track.src = `/api/archives/${archiveId}/files/${fileIndex}/subtitle.vtt?audioTrack=${item.audioTrack}`;
+    track.default = idx === 0;
+    track.dataset.autoSubtitle = '1';
+    videoEl.appendChild(track);
+  });
 }
 
 async function openPreviewModal(item) {
@@ -805,7 +840,12 @@ async function openPreviewModal(item) {
     if (mediaKind === 'video') {
       previewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
       previewVideo.src = mediaUrl;
-      attachSubtitleTrack(previewVideo, subtitleUrl);
+      const tracks = await fetchSubtitleTracks(archive._id, targetIndex);
+      if (tracks.length > 0) {
+        attachSubtitleTracks(previewVideo, archive._id, targetIndex, tracks);
+      } else {
+        attachSubtitleTrack(previewVideo, subtitleUrl, 'Track 1');
+      }
       previewVideo.classList.remove('hidden');
       previewVideo.load();
       return;

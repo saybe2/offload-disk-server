@@ -47,6 +47,17 @@ export interface ArchiveFile {
     failedAt?: Date | null;
     error?: string;
   };
+  subtitleTracks?: Array<{
+    audioTrack: number;
+    label?: string;
+    language?: string;
+    contentType: string;
+    size: number;
+    localPath: string;
+    updatedAt?: Date;
+    failedAt?: Date | null;
+    error?: string;
+  }>;
   transcode?: {
     archiveId?: string;
     status?: "queued" | "processing" | "ready" | "error" | "skipped" | null;
@@ -163,6 +174,22 @@ const FileSchema = new Schema<ArchiveFile>(
       updatedAt: { type: Date, default: null },
       failedAt: { type: Date, default: null },
       error: { type: String, default: "" }
+    },
+    subtitleTracks: {
+      type: [
+        {
+          audioTrack: { type: Number, required: true },
+          label: { type: String, default: "" },
+          language: { type: String, default: "auto" },
+          contentType: { type: String, default: "text/vtt; charset=utf-8" },
+          size: { type: Number, default: 0 },
+          localPath: { type: String, default: "" },
+          updatedAt: { type: Date, default: null },
+          failedAt: { type: Date, default: null },
+          error: { type: String, default: "" }
+        }
+      ],
+      default: []
     },
     transcode: {
       archiveId: { type: String, default: "" },

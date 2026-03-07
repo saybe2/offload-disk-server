@@ -167,7 +167,8 @@ async function migrateArchives() {
       { encryptionVersion: { $exists: false } },
       { archiveKind: { $exists: false } },
       { sourceArchiveId: { $exists: false } },
-      { sourceFileIndex: { $exists: false } }
+      { sourceFileIndex: { $exists: false } },
+      { "files.subtitleTracks": { $exists: false } }
     ]
   }).lean();
 
@@ -175,6 +176,7 @@ async function migrateArchives() {
     const files = (doc.files || []).map((f: any) => ({
       ...f,
       originalName: f.originalName || f.name || path.basename(f.path || "file"),
+      subtitleTracks: Array.isArray(f?.subtitleTracks) ? f.subtitleTracks : [],
       transcode: {
         archiveId: String(f?.transcode?.archiveId || ""),
         status: f?.transcode?.status || null,

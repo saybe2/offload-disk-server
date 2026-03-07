@@ -45,6 +45,7 @@ import {
   ensureArchiveSubtitleFromSource,
   getMediaKind,
   isPermanentSubtitleFailureMessage,
+  listArchiveSubtitleTracks,
   supportsSubtitle
 } from "../services/subtitles.js";
 import { queueArchiveSubtitles } from "../services/subtitleWorker.js";
@@ -1495,16 +1496,25 @@ apiRouter.get("/archives/:id/files/:index/subtitle.vtt", requireAuth, async (req
   if (!file || isFileDeleted(file)) {
     return res.status(404).json({ error: "file_not_found" });
   }
+  const audioTrackRaw = req.query.audioTrack;
+  const audioTrack =
+    audioTrackRaw == null || audioTrackRaw === ""
+      ? 0
+      : Number.parseInt(String(audioTrackRaw), 10);
+  if (!Number.isInteger(audioTrack) || audioTrack < 0) {
+    return res.status(400).json({ error: "bad_audio_track" });
+  }
   const fileName = file.originalName || file.name || archive.displayName || archive.name;
   if (!supportsSubtitle(fileName, file.detectedKind)) {
     return res.status(415).json({ error: "unsupported_subtitle_type" });
   }
 
   try {
-    const subtitle = await ensureArchiveSubtitle(archive, targetIndex);
+    const subtitle = await ensureArchiveSubtitle(archive, targetIndex, audioTrack);
     res.setHeader("Content-Type", subtitle.contentType);
     res.setHeader("Content-Length", subtitle.size);
-    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(fileName)}.vtt`);
+    const suffix = audioTrack > 0 ? `.track${audioTrack + 1}` : "";
+    res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(fileName)}${suffix}.vtt`);
     res.setHeader("Cache-Control", "private, max-age=3600");
     return fs.createReadStream(subtitle.filePath).pipe(res);
   } catch (err) {
@@ -1518,6 +1528,41 @@ apiRouter.get("/archives/:id/files/:index/subtitle.vtt", requireAuth, async (req
     }
     return res.status(500).json({ error: "subtitle_failed" });
   }
+});
+
+apiRouter.get("/archives/:id/files/:index/subtitle-tracks", requireAuth, async (req, res) => {
+  const archive = await Archive.findById(req.params.id);
+  if (!archive) {
+    return res.status(404).json({ error: "not_found" });
+  }
+  if (!ensurePrimaryArchive(archive, res)) return;
+  if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+  const index = Number(req.params.index);
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  const targetIndex = archive.isBundle ? index : 0;
+  const file = archive.files?.[targetIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = file.originalName || file.name || archive.displayName || archive.name;
+  if (!supportsSubtitle(fileName, file.detectedKind)) {
+    return res.json({ tracks: [] });
+  }
+  const tracks = await listArchiveSubtitleTracks(archive, targetIndex);
+  return res.json({
+    tracks: tracks.map((track) => ({
+      audioTrack: track.audioTrack,
+      language: track.language,
+      label: track.label
+    }))
+  });
 });
 
 apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, res) => {
