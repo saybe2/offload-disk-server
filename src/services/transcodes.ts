@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { createRequire } from "module";
 import { spawn } from "child_process";
 import mime from "mime-types";
 import mongoose from "mongoose";
@@ -11,7 +12,8 @@ import { detectStoredFileType } from "./fileType.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { log } from "../logger.js";
 
-const ffmpegStaticPath: string | null = require("ffmpeg-static");
+const require = createRequire(import.meta.url);
+const ffmpegStaticPath = require("ffmpeg-static") as string | null;
 const ffmpegBin = ffmpegStaticPath || "ffmpeg";
 
 const videoExt = new Set([
