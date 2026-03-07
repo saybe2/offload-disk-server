@@ -57,6 +57,12 @@ type SubtitleCue = {
   text: string;
 };
 
+type AudioTrackInfo = {
+  audioTrack: number;
+  language: string;
+  label: string;
+};
+
 function toMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err || "");
 }
@@ -98,8 +104,30 @@ export function supportsSubtitle(fileName: string, detectedKind?: string) {
   return !!getMediaKind(fileName, detectedKind);
 }
 
-function subtitleTargetPath(archiveId: string, fileIndex: number) {
-  return path.join(config.cacheDir, "subtitles", `${archiveId}_${fileIndex}.vtt`);
+function subtitleTargetPath(archiveId: string, fileIndex: number, audioTrack = 0) {
+  if (!audioTrack) {
+    return path.join(config.cacheDir, "subtitles", `${archiveId}_${fileIndex}.vtt`);
+  }
+  return path.join(config.cacheDir, "subtitles", `${archiveId}_${fileIndex}_a${audioTrack}.vtt`);
+}
+
+function subtitleTrackKey(archiveId: string, fileIndex: number, audioTrack = 0) {
+  return `${archiveId}:${fileIndex}:track:${audioTrack}`;
+}
+
+function normalizeTrackLanguage(value?: string) {
+  const text = String(value || "").trim();
+  return text || "auto";
+}
+
+function buildTrackLabel(audioTrack: number, language?: string, title?: string) {
+  const idx = audioTrack + 1;
+  const lang = normalizeTrackLanguage(language);
+  const cleanTitle = String(title || "").trim();
+  if (cleanTitle && lang !== "auto") return `Track ${idx} (${lang}, ${cleanTitle})`;
+  if (cleanTitle) return `Track ${idx} (${cleanTitle})`;
+  if (lang !== "auto") return `Track ${idx} (${lang})`;
+  return `Track ${idx}`;
 }
 
 async function ensureSubtitleDir() {
@@ -320,6 +348,59 @@ function runFfprobeDuration(filePath: string) {
   });
 }
 
+async function listAudioTracksFromFile(filePath: string): Promise<AudioTrackInfo[]> {
+  return new Promise<AudioTrackInfo[]>((resolve, reject) => {
+    const args = [
+      "-v",
+      "error",
+      "-select_streams",
+      "a",
+      "-show_entries",
+      "stream=index:stream_tags=language,title",
+      "-of",
+      "json",
+      filePath
+    ];
+    const proc = spawn("ffprobe", args, { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += Buffer.from(chunk).toString("utf8");
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += Buffer.from(chunk).toString("utf8");
+    });
+    proc.on("error", (err) => reject(new Error(`ffprobe_spawn_failed:${toMessage(err)}`)));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffprobe_failed:${code}:${stderr.slice(-500)}`));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout || "{}") as { streams?: Array<{ tags?: Record<string, unknown> }> };
+        const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+        if (streams.length === 0) {
+          resolve([{ audioTrack: 0, language: "auto", label: "Track 1" }]);
+          return;
+        }
+        const tracks = streams.map((stream, idx) => {
+          const tags = stream?.tags || {};
+          const language = normalizeTrackLanguage(String(tags.language || ""));
+          const title = String(tags.title || "");
+          return {
+            audioTrack: idx,
+            language,
+            label: buildTrackLabel(idx, language, title)
+          } satisfies AudioTrackInfo;
+        });
+        resolve(tracks);
+      } catch (err) {
+        reject(new Error(`ffprobe_parse_failed:${toMessage(err)}`));
+      }
+    });
+  });
+}
+
 function sanitizeAsrBaseName(sourceName: string) {
   const base = path.basename(sourceName || "audio");
   const noExt = base.replace(/\.[^.]+$/, "");
@@ -327,7 +408,7 @@ function sanitizeAsrBaseName(sourceName: string) {
   return (cleaned || "audio").slice(0, 100);
 }
 
-async function prepareAsrUploadInput(inputPath: string, sourceName: string) {
+async function prepareAsrUploadInput(inputPath: string, sourceName: string, audioTrack = 0) {
   const sourceLabel = path.basename(sourceName || inputPath);
   const sourceStat = await fs.promises.stat(inputPath);
   const ext = extOf(sourceName || inputPath);
@@ -349,7 +430,7 @@ async function prepareAsrUploadInput(inputPath: string, sourceName: string) {
   );
   await fs.promises.mkdir(tempDir, { recursive: true });
   const outputPath = path.join(tempDir, `${sanitizeAsrBaseName(sourceLabel)}.mp3`);
-  log("subtitle", `prepare start file=${sourceLabel} size=${sourceStat.size}`);
+  log("subtitle", `prepare start file=${sourceLabel} track=${audioTrack} size=${sourceStat.size}`);
   try {
     await runFfmpeg([
       "-hide_banner",
@@ -359,6 +440,8 @@ async function prepareAsrUploadInput(inputPath: string, sourceName: string) {
       "-y",
       "-i",
       inputPath,
+      "-map",
+      `0:a:${Math.max(0, audioTrack)}?`,
       "-vn",
       "-ac",
       "1",
@@ -374,7 +457,10 @@ async function prepareAsrUploadInput(inputPath: string, sourceName: string) {
     if (!preparedStat.size) {
       throw new Error("prepared_audio_empty");
     }
-    log("subtitle", `prepare done file=${sourceLabel} prepared=${path.basename(outputPath)} size=${preparedStat.size}`);
+    log(
+      "subtitle",
+      `prepare done file=${sourceLabel} track=${audioTrack} prepared=${path.basename(outputPath)} size=${preparedStat.size}`
+    );
     return {
       uploadPath: outputPath,
       uploadName: path.basename(outputPath),
@@ -684,13 +770,13 @@ async function transcribeViaOpenAiChunked(preparedPath: string, preparedName: st
   return cuesToVtt(deduped);
 }
 
-async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
+async function transcribeViaOpenAi(inputPath: string, sourceName: string, audioTrack = 0) {
   if (!config.subtitleAsrEnabled || !config.subtitleAsrApiKey || !config.subtitleAsrModel) {
     throw new Error("subtitle_provider_not_configured");
   }
-  const upload = await prepareAsrUploadInput(inputPath, sourceName);
+  const upload = await prepareAsrUploadInput(inputPath, sourceName, audioTrack);
   try {
-    log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} size=${upload.uploadSize}`);
+    log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} track=${audioTrack} size=${upload.uploadSize}`);
     if (upload.uploadSize <= config.subtitleAsrMaxBytes) {
       return await transcribeViaAsrHttp(upload.uploadPath, upload.uploadName, sourceName);
     }
@@ -722,13 +808,13 @@ async function transcribeViaLocalCommand(inputPath: string, outputPath: string) 
   throw new Error("subtitle_local_empty");
 }
 
-async function generateSubtitleVtt(sourcePath: string, fileName: string, outputPath: string) {
+async function generateSubtitleVtt(sourcePath: string, fileName: string, outputPath: string, audioTrack = 0) {
   let raw = "";
   const failures: string[] = [];
 
   if (config.subtitleAsrEnabled) {
     try {
-      raw = await transcribeViaOpenAi(sourcePath, fileName);
+      raw = await transcribeViaOpenAi(sourcePath, fileName, audioTrack);
     } catch (err) {
       const message = toMessage(err);
       failures.push(`asr:${message}`);
@@ -835,45 +921,97 @@ async function uploadSubtitleBackup(archiveId: string, fileIndex: number, localP
   };
 }
 
-async function persistSubtitleMeta(archiveId: string, fileIndex: number, localPath: string): Promise<SubtitleResult> {
+function getTrackLanguage(track?: AudioTrackInfo | null) {
+  return normalizeTrackLanguage(String(track?.language || config.subtitleLanguage || "auto"));
+}
+
+function findStoredSubtitleTrack(file: any, audioTrack: number) {
+  if (!file) return null;
+  if (!audioTrack) return file.subtitle || null;
+  const tracks = Array.isArray(file.subtitleTracks) ? file.subtitleTracks : [];
+  return tracks.find((track: any) => Number(track?.audioTrack || 0) === audioTrack) || null;
+}
+
+async function upsertSubtitleTrackMeta(
+  archiveId: string,
+  fileIndex: number,
+  audioTrack: number,
+  patch: Record<string, unknown>
+) {
+  const doc = await Archive.findById(archiveId);
+  if (!doc) return;
+  const file: any = doc.files?.[fileIndex];
+  if (!file) return;
+  const tracks = Array.isArray(file.subtitleTracks) ? [...file.subtitleTracks] : [];
+  const idx = tracks.findIndex((track: any) => Number(track?.audioTrack || 0) === audioTrack);
+  if (idx >= 0) {
+    tracks[idx] = { ...tracks[idx], ...patch, audioTrack };
+  } else {
+    tracks.push({ audioTrack, ...patch });
+  }
+  tracks.sort((a: any, b: any) => Number(a?.audioTrack || 0) - Number(b?.audioTrack || 0));
+  file.subtitleTracks = tracks;
+  await doc.save();
+}
+
+async function persistSubtitleMeta(
+  archiveId: string,
+  fileIndex: number,
+  localPath: string,
+  audioTrack = 0,
+  track?: AudioTrackInfo
+): Promise<SubtitleResult> {
   const stat = await fs.promises.stat(localPath);
-  const backup = await uploadSubtitleBackup(archiveId, fileIndex, localPath);
-  const language = config.subtitleLanguage || "auto";
-  const primary = backup ? toProviderDoc(backup.primary) : null;
-  const mirror = backup?.mirrorCopy ? toProviderDoc(backup.mirrorCopy) : null;
-
-  await Archive.updateOne(
-    { _id: archiveId },
-    {
-      $set: {
-        [`files.${fileIndex}.subtitle.contentType`]: "text/vtt; charset=utf-8",
-        [`files.${fileIndex}.subtitle.size`]: stat.size,
-        [`files.${fileIndex}.subtitle.localPath`]: localPath,
-        [`files.${fileIndex}.subtitle.language`]: language,
-        [`files.${fileIndex}.subtitle.provider`]: primary?.provider || null,
-        [`files.${fileIndex}.subtitle.url`]: primary?.url || "",
-        [`files.${fileIndex}.subtitle.messageId`]: primary?.messageId || "",
-        [`files.${fileIndex}.subtitle.webhookId`]: primary?.webhookId || "",
-        [`files.${fileIndex}.subtitle.telegramFileId`]: primary?.telegramFileId || "",
-        [`files.${fileIndex}.subtitle.telegramChatId`]: primary?.telegramChatId || "",
-        [`files.${fileIndex}.subtitle.mirrorProvider`]: mirror?.provider || backup?.mirrorTarget || null,
-        [`files.${fileIndex}.subtitle.mirrorUrl`]: mirror?.url || "",
-        [`files.${fileIndex}.subtitle.mirrorMessageId`]: mirror?.messageId || "",
-        [`files.${fileIndex}.subtitle.mirrorWebhookId`]: mirror?.webhookId || "",
-        [`files.${fileIndex}.subtitle.mirrorTelegramFileId`]: mirror?.telegramFileId || "",
-        [`files.${fileIndex}.subtitle.mirrorTelegramChatId`]: mirror?.telegramChatId || "",
-        [`files.${fileIndex}.subtitle.mirrorPending`]: !!backup?.mirrorTarget && !mirror,
-        [`files.${fileIndex}.subtitle.mirrorError`]: backup?.mirrorError || "",
-        [`files.${fileIndex}.subtitle.updatedAt`]: new Date(),
-        [`files.${fileIndex}.subtitle.failedAt`]: null,
-        [`files.${fileIndex}.subtitle.error`]: ""
+  const language = getTrackLanguage(track);
+  const contentType = "text/vtt; charset=utf-8";
+  if (!audioTrack) {
+    const backup = await uploadSubtitleBackup(archiveId, fileIndex, localPath);
+    const primary = backup ? toProviderDoc(backup.primary) : null;
+    const mirror = backup?.mirrorCopy ? toProviderDoc(backup.mirrorCopy) : null;
+    await Archive.updateOne(
+      { _id: archiveId },
+      {
+        $set: {
+          [`files.${fileIndex}.subtitle.contentType`]: contentType,
+          [`files.${fileIndex}.subtitle.size`]: stat.size,
+          [`files.${fileIndex}.subtitle.localPath`]: localPath,
+          [`files.${fileIndex}.subtitle.language`]: language,
+          [`files.${fileIndex}.subtitle.provider`]: primary?.provider || null,
+          [`files.${fileIndex}.subtitle.url`]: primary?.url || "",
+          [`files.${fileIndex}.subtitle.messageId`]: primary?.messageId || "",
+          [`files.${fileIndex}.subtitle.webhookId`]: primary?.webhookId || "",
+          [`files.${fileIndex}.subtitle.telegramFileId`]: primary?.telegramFileId || "",
+          [`files.${fileIndex}.subtitle.telegramChatId`]: primary?.telegramChatId || "",
+          [`files.${fileIndex}.subtitle.mirrorProvider`]: mirror?.provider || backup?.mirrorTarget || null,
+          [`files.${fileIndex}.subtitle.mirrorUrl`]: mirror?.url || "",
+          [`files.${fileIndex}.subtitle.mirrorMessageId`]: mirror?.messageId || "",
+          [`files.${fileIndex}.subtitle.mirrorWebhookId`]: mirror?.webhookId || "",
+          [`files.${fileIndex}.subtitle.mirrorTelegramFileId`]: mirror?.telegramFileId || "",
+          [`files.${fileIndex}.subtitle.mirrorTelegramChatId`]: mirror?.telegramChatId || "",
+          [`files.${fileIndex}.subtitle.mirrorPending`]: !!backup?.mirrorTarget && !mirror,
+          [`files.${fileIndex}.subtitle.mirrorError`]: backup?.mirrorError || "",
+          [`files.${fileIndex}.subtitle.updatedAt`]: new Date(),
+          [`files.${fileIndex}.subtitle.failedAt`]: null,
+          [`files.${fileIndex}.subtitle.error`]: ""
+        }
       }
-    }
-  );
-
+    );
+  } else {
+    await upsertSubtitleTrackMeta(archiveId, fileIndex, audioTrack, {
+      audioTrack,
+      label: track?.label || buildTrackLabel(audioTrack, language, ""),
+      language,
+      contentType,
+      size: stat.size,
+      localPath,
+      updatedAt: new Date(),
+      failedAt: null,
+      error: ""
+    });
+  }
   return {
     filePath: localPath,
-    contentType: "text/vtt; charset=utf-8",
+    contentType,
     size: stat.size,
     language
   };
@@ -971,27 +1109,81 @@ async function generateSubtitleUsingSource(
   fileIndex: number,
   fileName: string,
   sourcePath: string,
-  localPath: string
+  localPath: string,
+  audioTrack = 0,
+  track?: AudioTrackInfo
 ) {
   try {
-    await generateSubtitleVtt(sourcePath, fileName, localPath);
+    await generateSubtitleVtt(sourcePath, fileName, localPath, audioTrack);
   } catch (err) {
     const message = toMessage(err);
     if (isPermanentSubtitleFailureMessage(message)) {
-      await markSubtitlePermanentFailure(archive.id, fileIndex, message);
+      if (!audioTrack) {
+        await markSubtitlePermanentFailure(archive.id, fileIndex, message);
+      } else {
+        await upsertSubtitleTrackMeta(archive.id, fileIndex, audioTrack, {
+          audioTrack,
+          label: track?.label || buildTrackLabel(audioTrack, track?.language, ""),
+          language: getTrackLanguage(track),
+          contentType: "text/vtt; charset=utf-8",
+          size: 0,
+          localPath,
+          updatedAt: null,
+          failedAt: new Date(),
+          error: message.slice(0, 500)
+        });
+      }
       throw makePermanentSubtitleFailure(message);
     }
     throw err;
   }
-  return persistSubtitleMeta(archive.id, fileIndex, localPath);
+  return persistSubtitleMeta(archive.id, fileIndex, localPath, audioTrack, track);
 }
 
-async function ensureArchiveSubtitleFromSourceInternal(archive: ArchiveDoc, fileIndex: number) {
+async function ensureSubtitleTrackFromSource(
+  archive: ArchiveDoc,
+  fileIndex: number,
+  audioTrack: number,
+  track: AudioTrackInfo,
+  fileName: string,
+  sourcePath: string
+) {
+  await ensureSubtitleDir();
+  const localPath = subtitleTargetPath(archive.id, fileIndex, audioTrack);
+  if (fs.existsSync(localPath)) {
+    const stat = await fs.promises.stat(localPath);
+    return {
+      filePath: localPath,
+      contentType: "text/vtt; charset=utf-8",
+      size: stat.size,
+      language: getTrackLanguage(track)
+    } satisfies SubtitleResult;
+  }
+  return generateSubtitleUsingSource(archive, fileIndex, fileName, sourcePath, localPath, audioTrack, track);
+}
+
+async function ensureAllSubtitleTracksFromSource(archive: ArchiveDoc, fileIndex: number, fileName: string, sourcePath: string) {
+  const tracks = await listAudioTracksFromFile(sourcePath).catch(() => [{ audioTrack: 0, language: "auto", label: "Track 1" }]);
+  const primary = tracks.find((track) => track.audioTrack === 0) || tracks[0] || { audioTrack: 0, language: "auto", label: "Track 1" };
+  const first = await ensureSubtitleTrackFromSource(archive, fileIndex, primary.audioTrack, primary, fileName, sourcePath);
+  for (const track of tracks) {
+    if (track.audioTrack === primary.audioTrack) continue;
+    try {
+      await ensureSubtitleTrackFromSource(archive, fileIndex, track.audioTrack, track, fileName, sourcePath);
+    } catch (err) {
+      const message = toMessage(err);
+      log("subtitle", `track skip archive=${archive.id} file=${fileIndex} track=${track.audioTrack} err=${message.slice(0, 200)}`);
+    }
+  }
+  return first;
+}
+
+async function ensureArchiveSubtitleFromSourceInternal(archive: ArchiveDoc, fileIndex: number, audioTrack = 0, allTracks = true) {
   const file = archive.files?.[fileIndex];
   if (!file) {
     throw new Error("file_not_found");
   }
-  if (file.subtitle?.failedAt) {
+  if (!audioTrack && file.subtitle?.failedAt) {
     throw makePermanentSubtitleFailure(file.subtitle.error || "marked_failed");
   }
   const fileName = (file.originalName || file.name || "").trim();
@@ -1001,39 +1193,37 @@ async function ensureArchiveSubtitleFromSourceInternal(archive: ArchiveDoc, file
   if (!file.path || !fs.existsSync(file.path)) {
     throw new Error("source_missing");
   }
-  await ensureSubtitleDir();
-  const localPath = subtitleTargetPath(archive.id, fileIndex);
-  if (fs.existsSync(localPath)) {
-    const stat = await fs.promises.stat(localPath);
-    return {
-      filePath: localPath,
-      contentType: "text/vtt; charset=utf-8",
-      size: stat.size,
-      language: file.subtitle?.language || config.subtitleLanguage || "auto"
-    };
+  const trackMeta = await listAudioTracksFromFile(file.path).catch(() => [{ audioTrack: 0, language: "auto", label: "Track 1" }]);
+  const selected = trackMeta.find((track) => track.audioTrack === audioTrack) || {
+    audioTrack,
+    language: "auto",
+    label: buildTrackLabel(audioTrack, "auto", "")
+  };
+  if (allTracks && !audioTrack) {
+    return ensureAllSubtitleTracksFromSource(archive, fileIndex, fileName, file.path);
   }
-  return generateSubtitleUsingSource(archive, fileIndex, fileName, file.path, localPath);
+  return ensureSubtitleTrackFromSource(archive, fileIndex, audioTrack, selected, fileName, file.path);
 }
 
-export async function ensureArchiveSubtitleFromSource(archive: ArchiveDoc, fileIndex: number) {
-  const key = `${archive.id}:${fileIndex}`;
+export async function ensureArchiveSubtitleFromSource(archive: ArchiveDoc, fileIndex: number, audioTrack = 0) {
+  const key = subtitleTrackKey(archive.id, fileIndex, audioTrack);
   const existing = inFlight.get(key);
   if (existing) {
     return existing;
   }
-  const promise = ensureArchiveSubtitleFromSourceInternal(archive, fileIndex).finally(() => {
+  const promise = ensureArchiveSubtitleFromSourceInternal(archive, fileIndex, audioTrack, audioTrack === 0).finally(() => {
     inFlight.delete(key);
   });
   inFlight.set(key, promise);
   return promise;
 }
 
-async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): Promise<SubtitleResult> {
+async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number, audioTrack = 0): Promise<SubtitleResult> {
   const file = archive.files?.[fileIndex];
   if (!file) {
     throw new Error("file_not_found");
   }
-  if (file.subtitle?.failedAt) {
+  if (!audioTrack && file.subtitle?.failedAt) {
     throw makePermanentSubtitleFailure(file.subtitle.error || "marked_failed");
   }
 
@@ -1043,20 +1233,21 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): P
   }
 
   await ensureSubtitleDir();
-  const localPath = subtitleTargetPath(archive.id, fileIndex);
+  const trackMeta = findStoredSubtitleTrack(file, audioTrack);
+  const localPath = String(trackMeta?.localPath || subtitleTargetPath(archive.id, fileIndex, audioTrack));
   if (fs.existsSync(localPath)) {
     const stat = await fs.promises.stat(localPath);
     return {
       filePath: localPath,
       contentType: "text/vtt; charset=utf-8",
       size: stat.size,
-      language: file.subtitle?.language || config.subtitleLanguage || "auto"
+      language: normalizeTrackLanguage(String(trackMeta?.language || config.subtitleLanguage || "auto"))
     };
   }
 
   if (file.path && fs.existsSync(file.path) && config.subtitlePreferSource) {
     try {
-      return await generateSubtitleUsingSource(archive, fileIndex, fileName, file.path, localPath);
+      return await ensureArchiveSubtitleFromSourceInternal(archive, fileIndex, audioTrack, audioTrack === 0);
     } catch (err) {
       if (isPermanentSubtitleFailureMessage(toMessage(err))) {
         throw err;
@@ -1065,7 +1256,7 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): P
     }
   }
 
-  if (await tryRestoreSubtitleFromRemote(archive, fileIndex, localPath)) {
+  if (!audioTrack && (await tryRestoreSubtitleFromRemote(archive, fileIndex, localPath))) {
     const stat = await fs.promises.stat(localPath);
     return {
       filePath: localPath,
@@ -1076,7 +1267,7 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): P
   }
 
   if (file.path && fs.existsSync(file.path)) {
-    return generateSubtitleUsingSource(archive, fileIndex, fileName, file.path, localPath);
+    return ensureArchiveSubtitleFromSourceInternal(archive, fileIndex, audioTrack, audioTrack === 0);
   }
 
   const tempDir = path.join(
@@ -1093,21 +1284,57 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): P
     } else {
       await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
     }
-    return await generateSubtitleUsingSource(archive, fileIndex, fileName, sourcePath, localPath);
+    if (!audioTrack) {
+      return await ensureAllSubtitleTracksFromSource(archive, fileIndex, fileName, sourcePath);
+    }
+    const tracks = await listAudioTracksFromFile(sourcePath).catch(() => [] as AudioTrackInfo[]);
+    const selected = tracks.find((track) => track.audioTrack === audioTrack) || {
+      audioTrack,
+      language: "auto",
+      label: buildTrackLabel(audioTrack, "auto", "")
+    };
+    return await ensureSubtitleTrackFromSource(archive, fileIndex, audioTrack, selected, fileName, sourcePath);
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-export async function ensureArchiveSubtitle(archive: ArchiveDoc, fileIndex: number) {
-  const key = `${archive.id}:${fileIndex}`;
+export async function ensureArchiveSubtitle(archive: ArchiveDoc, fileIndex: number, audioTrack = 0) {
+  const key = subtitleTrackKey(archive.id, fileIndex, audioTrack);
   const existing = inFlight.get(key);
   if (existing) {
     return existing;
   }
-  const promise = ensureSubtitleInternal(archive, fileIndex).finally(() => {
+  const promise = ensureSubtitleInternal(archive, fileIndex, audioTrack).finally(() => {
     inFlight.delete(key);
   });
   inFlight.set(key, promise);
   return promise;
+}
+
+export async function listArchiveSubtitleTracks(archive: ArchiveDoc, fileIndex: number) {
+  const file = archive.files?.[fileIndex];
+  if (!file || !supportsSubtitle(file.originalName || file.name || "", file.detectedKind)) {
+    return [] as AudioTrackInfo[];
+  }
+  if (file.path && fs.existsSync(file.path)) {
+    try {
+      return await listAudioTracksFromFile(file.path);
+    } catch {
+      // fallback to stored metadata
+    }
+  }
+  const tracks: AudioTrackInfo[] = [{ audioTrack: 0, language: normalizeTrackLanguage(String(file.subtitle?.language || "auto")), label: "Track 1" }];
+  const extra = Array.isArray((file as any).subtitleTracks) ? (file as any).subtitleTracks : [];
+  for (const item of extra) {
+    const audioTrack = Number(item?.audioTrack);
+    if (!Number.isInteger(audioTrack) || audioTrack <= 0) continue;
+    tracks.push({
+      audioTrack,
+      language: normalizeTrackLanguage(String(item?.language || "auto")),
+      label: String(item?.label || buildTrackLabel(audioTrack, item?.language, ""))
+    });
+  }
+  tracks.sort((a, b) => a.audioTrack - b.audioTrack);
+  return tracks;
 }

@@ -26,6 +26,7 @@ import {
   ensureArchiveSubtitle,
   getMediaKind,
   isPermanentSubtitleFailureMessage,
+  listArchiveSubtitleTracks,
   supportsSubtitle
 } from "../services/subtitles.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
@@ -441,16 +442,25 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/subt
   if (!file || isFileDeleted(file)) {
     return res.status(404).json({ error: "file_not_found" });
   }
+  const audioTrackRaw = req.query.audioTrack;
+  const audioTrack =
+    audioTrackRaw == null || audioTrackRaw === ""
+      ? 0
+      : Number.parseInt(String(audioTrackRaw), 10);
+  if (!Number.isInteger(audioTrack) || audioTrack < 0) {
+    return res.status(400).json({ error: "bad_audio_track" });
+  }
   const fileName = file.originalName || file.name || archive.displayName || archive.name;
   if (!supportsSubtitle(fileName, file.detectedKind)) {
     return res.status(415).json({ error: "unsupported_subtitle_type" });
   }
 
   try {
-    const subtitle = await ensureArchiveSubtitle(archive, fileIndex);
+    const subtitle = await ensureArchiveSubtitle(archive, fileIndex, audioTrack);
     res.setHeader("Content-Type", subtitle.contentType);
     res.setHeader("Content-Length", subtitle.size);
-    res.setHeader("Content-Disposition", inlineContentDisposition(`${fileName}.vtt`));
+    const suffix = audioTrack > 0 ? `.track${audioTrack + 1}` : "";
+    res.setHeader("Content-Disposition", inlineContentDisposition(`${fileName}${suffix}.vtt`));
     res.setHeader("Cache-Control", "private, max-age=3600");
     return fs.createReadStream(subtitle.filePath).pipe(res);
   } catch (err) {
@@ -464,6 +474,42 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/subt
     }
     return res.status(500).json({ error: "subtitle_failed" });
   }
+});
+
+publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/subtitle-tracks", async (req, res) => {
+  const resolved = await resolveArchiveByShare(req.params.token, req.params.archiveId);
+  if (!("archive" in resolved)) {
+    return res.status(resolved.status).json({ error: resolved.error });
+  }
+
+  const { archive } = resolved;
+  if (archive.status !== "ready") {
+    return res.status(409).json({ error: "not_ready" });
+  }
+
+  let fileIndex = Number(req.params.index);
+  if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+    return res.status(400).json({ error: "bad_index" });
+  }
+  if (!archive.isBundle) {
+    fileIndex = 0;
+  }
+  const file = archive.files?.[fileIndex];
+  if (!file || isFileDeleted(file)) {
+    return res.status(404).json({ error: "file_not_found" });
+  }
+  const fileName = file.originalName || file.name || archive.displayName || archive.name;
+  if (!supportsSubtitle(fileName, file.detectedKind)) {
+    return res.json({ tracks: [] });
+  }
+  const tracks = await listArchiveSubtitleTracks(archive, fileIndex);
+  return res.json({
+    tracks: tracks.map((track) => ({
+      audioTrack: track.audioTrack,
+      language: track.language,
+      label: track.label
+    }))
+  });
 });
 
 publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/thumbnail", async (req, res) => {
