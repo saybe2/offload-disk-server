@@ -47,6 +47,14 @@ export interface ArchiveFile {
     failedAt?: Date | null;
     error?: string;
   };
+  transcode?: {
+    archiveId?: string;
+    status?: "queued" | "processing" | "ready" | "error" | "skipped" | null;
+    size?: number;
+    contentType?: string;
+    updatedAt?: Date | null;
+    error?: string;
+  };
 }
 
 export interface ArchivePart {
@@ -77,6 +85,9 @@ export interface ArchiveDoc extends mongoose.Document {
   name: string;
   displayName: string;
   downloadName: string;
+  archiveKind?: "primary" | "transcoded";
+  sourceArchiveId?: mongoose.Types.ObjectId | null;
+  sourceFileIndex?: number | null;
   isBundle: boolean;
   encryptionVersion?: number;
   folderId?: mongoose.Types.ObjectId | null;
@@ -152,6 +163,14 @@ const FileSchema = new Schema<ArchiveFile>(
       updatedAt: { type: Date, default: null },
       failedAt: { type: Date, default: null },
       error: { type: String, default: "" }
+    },
+    transcode: {
+      archiveId: { type: String, default: "" },
+      status: { type: String, enum: ["queued", "processing", "ready", "error", "skipped"], default: null },
+      size: { type: Number, default: 0 },
+      contentType: { type: String, default: "" },
+      updatedAt: { type: Date, default: null },
+      error: { type: String, default: "" }
     }
   },
   { _id: false }
@@ -189,6 +208,9 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     name: { type: String, required: true },
     displayName: { type: String, required: true },
     downloadName: { type: String, required: true },
+    archiveKind: { type: String, enum: ["primary", "transcoded"], default: "primary", index: true },
+    sourceArchiveId: { type: Schema.Types.ObjectId, ref: "Archive", default: null, index: true },
+    sourceFileIndex: { type: Number, default: null },
     isBundle: { type: Boolean, default: false },
     encryptionVersion: { type: Number, default: 2 },
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null, index: true },

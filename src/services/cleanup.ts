@@ -108,6 +108,22 @@ async function cleanupSubtitleWorkDir(cutoffMs: number) {
   }
 }
 
+async function cleanupTranscodeWorkDir(cutoffMs: number) {
+  const baseDir = path.join(config.cacheDir, "transcode_work");
+  const entries = await fs.promises.readdir(baseDir, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    const full = path.join(baseDir, entry.name);
+    const stat = await fs.promises.stat(full).catch(() => null);
+    if (!stat || stat.mtimeMs > cutoffMs) continue;
+    await removePath(full).catch(() => undefined);
+    removed += 1;
+  }
+  if (removed > 0) {
+    log("cleanup", `transcode_work removed=${removed}`);
+  }
+}
+
 async function cleanupCacheOnce() {
   const ttlMs = config.uploadTmpTtlHours * HOUR_MS;
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) return;
@@ -121,6 +137,7 @@ async function cleanupCacheOnce() {
     await cleanupUploadsDir(cutoffMs, keepUploads);
     await cleanupWorkDir(cutoffMs, keepWork);
     await cleanupSubtitleWorkDir(cutoffMs);
+    await cleanupTranscodeWorkDir(cutoffMs);
   } catch (err) {
     log("cleanup", `error ${(err as Error).message}`);
   }

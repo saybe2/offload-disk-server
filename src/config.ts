@@ -54,6 +54,8 @@ const defaultProxyTargets = [
 ];
 
 const defaultSubtitleVideoCodecs = ["h264", "hevc", "vp9", "av1", "mpeg4", "mjpeg", "vp8", "theora", "prores"];
+const defaultTranscodeSkipVideoExt = [".mp4", ".m4v", ".webm"];
+const defaultTranscodeSkipAudioExt = [".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus"];
 
 export const config = {
   port: toNumber(process.env.PORT, 3000),
@@ -128,6 +130,16 @@ export const config = {
   subtitleAsrPrompt: (process.env.SUBTITLE_ASR_PROMPT || "").trim(),
   subtitleLocalCommand: (process.env.SUBTITLE_LOCAL_COMMAND || "").trim(),
   subtitlePreferSource: (process.env.SUBTITLE_PREFER_SOURCE || "true") === "true",
+  transcodeWorkerEnabled: (process.env.TRANSCODE_WORKER_ENABLED || "true") === "true",
+  transcodeWorkerConcurrency: Math.max(1, toNumber(process.env.TRANSCODE_WORKER_CONCURRENCY, 1)),
+  transcodeWorkerPollMs: Math.max(1000, toNumber(process.env.TRANSCODE_WORKER_POLL_MS, 9000)),
+  transcodeBackfillScanLimit: Math.max(20, toNumber(process.env.TRANSCODE_BACKFILL_SCAN_LIMIT, 160)),
+  transcodeRetryMs: Math.max(5000, toNumber(process.env.TRANSCODE_RETRY_MS, 120000)),
+  transcodeVideoCrf: Math.max(16, Math.min(32, toNumber(process.env.TRANSCODE_VIDEO_CRF, 23))),
+  transcodeVideoPreset: (process.env.TRANSCODE_VIDEO_PRESET || "veryfast").trim() || "veryfast",
+  transcodeAudioBitrateKbps: Math.max(64, toNumber(process.env.TRANSCODE_AUDIO_BITRATE_KBPS, 160)),
+  transcodeSkipVideoExt: toList(process.env.TRANSCODE_SKIP_VIDEO_EXT, defaultTranscodeSkipVideoExt),
+  transcodeSkipAudioExt: toList(process.env.TRANSCODE_SKIP_AUDIO_EXT, defaultTranscodeSkipAudioExt),
   mediaPreviewVideoCodecs: toList(process.env.MEDIA_PREVIEW_VIDEO_CODECS, defaultSubtitleVideoCodecs),
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",
