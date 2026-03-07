@@ -30,6 +30,10 @@ import {
   noteMirrorSyncSuccess
 } from "./mirrorSyncControl.js";
 import {
+  noteDeleteDone,
+  noteDeleteError,
+  noteDeletePartDone,
+  noteDeleteStarted,
   noteMirrorPartDone,
   noteMirrorPartError,
   noteUploadArchiveDone,
@@ -678,6 +682,8 @@ async function processDelete() {
   if (!candidate) return false;
 
   log(`delete start ${candidate.id}`);
+  noteDeleteStarted();
+  const startedAt = Date.now();
 
   try {
     const hooks = await Webhook.find();
@@ -693,6 +699,7 @@ async function processDelete() {
       try {
         await deletePartRemote(part, hookById);
         deletedParts += 1;
+        noteDeletePartDone(Number(part?.plainSize || part?.size || 0));
         await Archive.updateOne(
           { _id: candidate.id },
           { $set: { deletedParts } }
@@ -712,7 +719,11 @@ async function processDelete() {
 
     await User.updateOne({ _id: candidate.userId }, { $inc: { usedBytes: -candidate.originalSize } });
     log(`delete done ${candidate.id}`);
+    noteDeleteDone(Date.now() - startedAt);
     return true;
+  } catch (err) {
+    noteDeleteError();
+    throw err;
   } finally {
     await Archive.updateOne({ _id: candidate.id }, { $set: { deleting: false } });
   }

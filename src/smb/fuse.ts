@@ -14,6 +14,13 @@ import { downloadToFile } from "../services/discord.js";
 import { refreshMirrorPartUrl, refreshPartUrl } from "../services/partProvider.js";
 import { log } from "../logger.js";
 import { sanitizeFilename } from "../utils/names.js";
+import {
+  noteSmbError,
+  noteSmbRead,
+  noteSmbReadOpen,
+  noteSmbWrite,
+  noteSmbWriteOpen
+} from "../services/analytics.js";
 
 const READ_DIR = "smb_read";
 const WRITE_DIR = "smb_write";
@@ -73,6 +80,16 @@ const handleMap = new Map<
       folderId: string | null;
     }
 >();
+
+export function getSmbRuntimeState() {
+  return {
+    dirCacheEntries: dirCache.size,
+    userCacheEntries: userCache.size,
+    readCacheEntries: readCache.size,
+    progressiveReadEntries: progressiveReadCache.size,
+    activeHandles: handleMap.size
+  };
+}
 
 function nowTs() {
   return Date.now();
@@ -634,6 +651,7 @@ export function startFuse() {
             overwriteId = resolved.file.archive._id.toString();
           }
           handleMap.set(fd, { type: "write", path: tempPath, username, folderId: folder ? folder._id.toString() : null, overwriteId });
+          noteSmbWriteOpen();
           return cb(0, fd);
         }
         const resolved = await resolvePath(filePath);
@@ -655,6 +673,7 @@ export function startFuse() {
             username: resolved.username,
             folderId: resolved.folder ? resolved.folder._id.toString() : null
           });
+          noteSmbReadOpen();
           return cb(0, fd);
         }
         const info = await ensureReadablePath(resolved.file);
@@ -664,8 +683,10 @@ export function startFuse() {
           if (entry) entry.refs += 1;
         }
         handleMap.set(fd, { type: "read", path: info.path, key: info.key, username: resolved.username, folderId: resolved.folder ? resolved.folder._id.toString() : null });
+        noteSmbReadOpen();
         return cb(0, fd);
       } catch (err: any) {
+        noteSmbError();
         if (err?.message === "not_ready") return cb(ERR.EAGAIN);
         return cb(ERR.EIO);
       }
@@ -687,8 +708,10 @@ export function startFuse() {
         const tempPath = path.join(dir, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
         const fd = fs.openSync(tempPath, "w+");
         handleMap.set(fd, { type: "write", path: tempPath, username, folderId: folder ? folder._id.toString() : null });
+        noteSmbWriteOpen();
         return cb(0, fd);
       } catch (err) {
+        noteSmbError();
         return cb(ERR.EIO);
       }
     },
@@ -698,24 +721,43 @@ export function startFuse() {
         ensureProgressiveRangeReady(handle.key, position, length)
           .then(() => {
             fs.read(fd, buffer, 0, length, position, (err, bytesRead) => {
-              if (err) return cb(0);
+              if (err) {
+                noteSmbError();
+                return cb(0);
+              }
+              if (bytesRead > 0) {
+                noteSmbRead(bytesRead);
+              }
               return cb(bytesRead);
             });
           })
           .catch((err) => {
             log("smb", `progressive read failed: ${err instanceof Error ? err.message : err}`);
+            noteSmbError();
             cb(0);
           });
         return;
       }
       fs.read(fd, buffer, 0, length, position, (err, bytesRead) => {
-        if (err) return cb(0);
+        if (err) {
+          noteSmbError();
+          return cb(0);
+        }
+        if (bytesRead > 0) {
+          noteSmbRead(bytesRead);
+        }
         return cb(bytesRead);
       });
     },
     write: (filePath: string, fd: number, buffer: Buffer, length: number, position: number, cb: (bytes: number) => void) => {
       fs.write(fd, buffer, 0, length, position, (err, bytesWritten) => {
-        if (err) return cb(0);
+        if (err) {
+          noteSmbError();
+          return cb(0);
+        }
+        if (bytesWritten > 0) {
+          noteSmbWrite(bytesWritten);
+        }
         return cb(bytesWritten);
       });
     },
@@ -766,6 +808,7 @@ export function startFuse() {
           }
           return cb(0);
         } catch (err) {
+          noteSmbError();
           return cb(ERR.EIO);
         }
       });

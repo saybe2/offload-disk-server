@@ -8,6 +8,7 @@ import { Webhook } from "../models/Webhook.js";
 import { config } from "../config.js";
 import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./discord.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
+import { noteThumbnailDone, noteThumbnailError, noteThumbnailStarted } from "./analytics.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
 const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob", ".ts"]);
@@ -251,9 +252,12 @@ async function generateThumbUsingSource(
   localPath: string,
   detectedKind?: string
 ) {
+  noteThumbnailStarted();
+  const startedAt = Date.now();
   try {
     await generateThumbFromFile(sourcePath, fileName, localPath, detectedKind);
   } catch (err) {
+    noteThumbnailError();
     const message = toMessage(err);
     if (isPermanentThumbnailFailureMessage(message)) {
       await Archive.updateOne(
@@ -270,7 +274,9 @@ async function generateThumbUsingSource(
     }
     throw err;
   }
-  return persistThumbMeta(archive.id, fileIndex, localPath);
+  const result = await persistThumbMeta(archive.id, fileIndex, localPath);
+  noteThumbnailDone(result.size, Date.now() - startedAt);
+  return result;
 }
 
 export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, fileIndex: number) {

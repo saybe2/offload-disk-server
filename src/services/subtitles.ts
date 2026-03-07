@@ -11,6 +11,13 @@ import { uploadPartMirrored, type PartProvider, type ProviderCopy } from "./part
 import { buildTelegramFileUrl, isTelegramReady, uploadBufferToTelegram } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
 import { log } from "../logger.js";
+import {
+  noteSubtitleDone,
+  noteSubtitleError,
+  noteSubtitleProviderAttempt,
+  noteSubtitleProviderFailure,
+  noteSubtitleStarted
+} from "./analytics.js";
 
 const subtitleVideoExt = new Set([
   ".mp4",
@@ -775,12 +782,16 @@ async function transcribeViaOpenAi(inputPath: string, sourceName: string, audioT
     throw new Error("subtitle_provider_not_configured");
   }
   const upload = await prepareAsrUploadInput(inputPath, sourceName, audioTrack);
+  noteSubtitleProviderAttempt("asr");
   try {
     log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} track=${audioTrack} size=${upload.uploadSize}`);
     if (upload.uploadSize <= config.subtitleAsrMaxBytes) {
       return await transcribeViaAsrHttp(upload.uploadPath, upload.uploadName, sourceName);
     }
     return await transcribeViaOpenAiChunked(upload.uploadPath, upload.uploadName, sourceName, upload.uploadSize);
+  } catch (err) {
+    noteSubtitleProviderFailure("asr");
+    throw err;
   } finally {
     await upload.cleanup();
   }
@@ -790,22 +801,27 @@ async function transcribeViaLocalCommand(inputPath: string, outputPath: string) 
   if (!config.subtitleLocalCommand) {
     throw new Error("subtitle_local_command_not_configured");
   }
+  noteSubtitleProviderAttempt("local");
   const command = config.subtitleLocalCommand
     .replaceAll("{input}", shellEscape(inputPath))
     .replaceAll("{output}", shellEscape(outputPath))
     .replaceAll("{lang}", shellEscape(config.subtitleLanguage || "auto"));
   log("subtitle", `local start file=${path.basename(inputPath)}`);
-  const { stdout } = await runCommand(command);
-
-  if (fs.existsSync(outputPath)) {
-    log("subtitle", `local done file=${path.basename(inputPath)}`);
-    return fs.promises.readFile(outputPath, "utf8");
+  try {
+    const { stdout } = await runCommand(command);
+    if (fs.existsSync(outputPath)) {
+      log("subtitle", `local done file=${path.basename(inputPath)}`);
+      return fs.promises.readFile(outputPath, "utf8");
+    }
+    if (stdout.trim()) {
+      log("subtitle", `local done(stdout) file=${path.basename(inputPath)}`);
+      return stdout;
+    }
+    throw new Error("subtitle_local_empty");
+  } catch (err) {
+    noteSubtitleProviderFailure("local");
+    throw err;
   }
-  if (stdout.trim()) {
-    log("subtitle", `local done(stdout) file=${path.basename(inputPath)}`);
-    return stdout;
-  }
-  throw new Error("subtitle_local_empty");
 }
 
 async function generateSubtitleVtt(sourcePath: string, fileName: string, outputPath: string, audioTrack = 0) {
@@ -1113,9 +1129,13 @@ async function generateSubtitleUsingSource(
   audioTrack = 0,
   track?: AudioTrackInfo
 ) {
+  const sourceBytes = await fs.promises.stat(sourcePath).then((s) => Number(s.size || 0)).catch(() => 0);
+  noteSubtitleStarted(sourceBytes);
+  const startedAt = Date.now();
   try {
     await generateSubtitleVtt(sourcePath, fileName, localPath, audioTrack);
   } catch (err) {
+    noteSubtitleError();
     const message = toMessage(err);
     if (isPermanentSubtitleFailureMessage(message)) {
       if (!audioTrack) {
@@ -1137,7 +1157,14 @@ async function generateSubtitleUsingSource(
     }
     throw err;
   }
-  return persistSubtitleMeta(archive.id, fileIndex, localPath, audioTrack, track);
+  try {
+    const result = await persistSubtitleMeta(archive.id, fileIndex, localPath, audioTrack, track);
+    noteSubtitleDone(result.size, Date.now() - startedAt);
+    return result;
+  } catch (err) {
+    noteSubtitleError();
+    throw err;
+  }
 }
 
 async function ensureSubtitleTrackFromSource(

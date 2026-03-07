@@ -65,6 +65,9 @@ import {
   noteDownloadDone,
   noteDownloadError,
   noteDownloadStarted,
+  notePreviewDone,
+  notePreviewError,
+  notePreviewStarted,
   noteUploadArchiveDone,
   noteUploadArchiveError,
   noteUploadArchiveStarted,
@@ -1419,6 +1422,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
+  notePreviewStarted(estimatedBytes);
   log(
     "preview",
     rangeHeader
@@ -1451,6 +1455,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       res.setHeader("Cache-Control", "private, max-age=60");
       await pipeline(fs.createReadStream(servePath), res);
       noteDownloadDone(stat.size || estimatedBytes);
+      notePreviewDone();
     } else {
       if (mediaArchive.isBundle) {
         await streamArchiveFileToResponse(mediaArchive, targetIndex, res, config.cacheDir, config.masterKey, {
@@ -1472,6 +1477,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
         });
       }
       noteDownloadDone(estimatedBytes);
+      notePreviewDone();
     }
   } catch (err) {
     if (isClientStreamAbortError(err)) {
@@ -1481,6 +1487,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       return;
     }
     noteDownloadError();
+    notePreviewError();
     log("preview", `media error ${archive.id} file=${targetIndex} ${(err as Error).message}`);
     if (res.headersSent) {
       res.destroy();
@@ -1687,6 +1694,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
   noteDownloadStarted(fileSize);
+  notePreviewStarted(fileSize);
 
   const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
   const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}`);
@@ -1715,9 +1723,11 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     res.setHeader("Cache-Control", "private, max-age=60");
     void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
     noteDownloadDone(body.length || fileSize);
+    notePreviewDone();
     return res.end(body);
   } catch (err) {
     noteDownloadError();
+    notePreviewError();
     log("preview", `error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     return res.status(500).json({ error: "preview_failed" });
   } finally {
