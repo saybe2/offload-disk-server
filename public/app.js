@@ -316,6 +316,12 @@ function isBrowserPlayableMedia(fileName, mediaKind) {
   return false;
 }
 
+function isMediaPreviewSupported(fileName, mediaKind) {
+  if (!mediaKind) return false;
+  if (isBrowserPlayableMedia(fileName, mediaKind)) return true;
+  return mediaKind === 'video' && fileExtension(fileName) === '.ts';
+}
+
 function supportsThumb(name, detectedKind) {
   if (detectedKind === 'image' || detectedKind === 'video') return true;
   if (detectedKind && detectedKind !== 'image' && detectedKind !== 'video') return false;
@@ -714,7 +720,7 @@ function canPreviewItem(item) {
   if (!fileName) return false;
   const mediaKind = getMediaKind(fileName, file?.detectedKind);
   if (mediaKind) {
-    if (!isBrowserPlayableMedia(fileName, mediaKind)) return false;
+    if (!isMediaPreviewSupported(fileName, mediaKind)) return false;
     return true;
   }
   const size = Number(file?.size ?? archive.originalSize ?? 0);

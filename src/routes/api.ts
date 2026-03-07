@@ -50,7 +50,7 @@ import {
 import { queueArchiveSubtitles } from "../services/subtitleWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
-  isBrowserPlayableMedia,
+  isMediaPreviewSupported,
   isPreviewAllowedForFile,
   isPreviewContentTypeAllowed,
   resolvePreviewContentType
@@ -242,7 +242,7 @@ function isPreviewSupportedForFile(archive: any, file: any) {
   const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
   const mediaKind = getMediaKind(fileName, file.detectedKind);
   if (mediaKind) {
-    return isBrowserPlayableMedia(fileName, mediaKind);
+    return isMediaPreviewSupported(fileName, mediaKind);
   }
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
@@ -1300,7 +1300,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   if (!mediaKind) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
-  if (!isBrowserPlayableMedia(fileName, mediaKind)) {
+  if (!isMediaPreviewSupported(fileName, mediaKind)) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
 
