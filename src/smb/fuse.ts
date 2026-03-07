@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { createRequire } from "module";
 import { config } from "../config.js";
 import { Archive } from "../models/Archive.js";
@@ -7,7 +8,10 @@ import { Folder } from "../models/Folder.js";
 import { User } from "../models/User.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "../services/restore.js";
 import { createArchiveFromLocalFile } from "../services/archiveCreate.js";
+import { deriveKey } from "../services/crypto.js";
 import { uniqueParts } from "../services/parts.js";
+import { downloadToFile } from "../services/discord.js";
+import { refreshMirrorPartUrl, refreshPartUrl } from "../services/partProvider.js";
 import { log } from "../logger.js";
 import { sanitizeFilename } from "../utils/names.js";
 
@@ -31,7 +35,44 @@ type DirListing = {
 const dirCache = new Map<string, { ts: number; data: DirListing }>();
 const userCache = new Map<string, { ts: number; data: any | null }>();
 const readCache = new Map<string, { path: string; refs: number; ready: boolean; promise?: Promise<void> }>();
-const handleMap = new Map<number, { type: "read" | "write"; path: string; key?: string; username: string; folderId: string | null; overwriteId?: string }>();
+type ProgressivePartInfo = {
+  index: number;
+  start: number;
+  end: number;
+  plainSize: number;
+  part: any;
+};
+
+type ProgressiveReadCacheEntry = {
+  archiveId: string;
+  cryptoKey: Buffer;
+  path: string;
+  refs: number;
+  size: number;
+  partInfos: ProgressivePartInfo[];
+  readyParts: Set<number>;
+  loadingParts: Map<number, Promise<void>>;
+};
+
+const progressiveReadCache = new Map<string, ProgressiveReadCacheEntry>();
+const handleMap = new Map<
+  number,
+  | {
+      type: "read" | "write";
+      path: string;
+      key?: string;
+      username: string;
+      folderId: string | null;
+      overwriteId?: string;
+    }
+  | {
+      type: "progressive_read";
+      path: string;
+      key: string;
+      username: string;
+      folderId: string | null;
+    }
+>();
 
 function nowTs() {
   return Date.now();
@@ -216,6 +257,199 @@ async function resolvePath(filePath: string) {
   return { type: "file" as const, username, user, folder: parentFolder, file };
 }
 
+async function hashFile(filePath: string) {
+  const hash = crypto.createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    const rs = fs.createReadStream(filePath);
+    rs.on("error", reject);
+    rs.on("data", (data) => hash.update(data));
+    rs.on("end", () => resolve());
+  });
+  return hash.digest("hex");
+}
+
+async function decryptPartToBuffer(partPath: string, part: { iv?: string; authTag?: string; index: number }, key: Buffer) {
+  const ivB64 = part.iv || "";
+  const authTagB64 = part.authTag || "";
+  if (!ivB64 || !authTagB64) {
+    throw new Error(`part_crypto_missing:${part.index}`);
+  }
+  const iv = Buffer.from(ivB64, "base64");
+  const authTag = Buffer.from(authTagB64, "base64");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(authTag);
+  const encrypted = await fs.promises.readFile(partPath);
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+async function downloadPartWithRepair(
+  archiveId: string,
+  part: {
+    index: number;
+    url: string;
+    mirrorUrl?: string;
+    mirrorMessageId?: string;
+    mirrorWebhookId?: string;
+    mirrorProvider?: "discord" | "telegram";
+    mirrorTelegramFileId?: string;
+  },
+  partPath: string
+) {
+  try {
+    await downloadToFile(part.url, partPath);
+    return;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/download_failed:(401|403|404)/.test(message)) {
+      throw err;
+    }
+  }
+
+  try {
+    await refreshPartUrl(archiveId, part);
+    await downloadToFile(part.url, partPath);
+    return;
+  } catch {
+    // try mirror below
+  }
+
+  if (!part.mirrorUrl) {
+    throw new Error("part_download_failed_no_mirror");
+  }
+  try {
+    await downloadToFile(part.mirrorUrl, partPath);
+    return;
+  } catch {
+    await refreshMirrorPartUrl(archiveId, part);
+    await downloadToFile(String(part.mirrorUrl || ""), partPath);
+  }
+}
+
+function buildProgressivePartInfos(archive: any, totalSize: number) {
+  const parts = uniqueParts(archive.parts || []).slice().sort((a, b) => Number(a.index) - Number(b.index));
+  const infos: ProgressivePartInfo[] = [];
+  let cursor = 0;
+  for (const part of parts) {
+    const plainSize = Math.max(0, Number(part.plainSize || part.size || 0));
+    if (plainSize <= 0) continue;
+    infos.push({
+      index: Number(part.index),
+      start: cursor,
+      end: cursor + plainSize - 1,
+      plainSize,
+      part
+    });
+    cursor += plainSize;
+  }
+  if (infos.length > 0 && totalSize > 0) {
+    const last = infos[infos.length - 1];
+    const expectedEnd = totalSize - 1;
+    if (expectedEnd > last.end) {
+      last.plainSize += expectedEnd - last.end;
+      last.end = expectedEnd;
+    } else if (expectedEnd < last.end) {
+      last.plainSize = Math.max(0, last.plainSize - (last.end - expectedEnd));
+      last.end = expectedEnd;
+    }
+  }
+  return infos;
+}
+
+function findOverlappingProgressiveParts(entry: ProgressiveReadCacheEntry, start: number, end: number) {
+  const indexes: number[] = [];
+  for (const info of entry.partInfos) {
+    if (info.end < start) continue;
+    if (info.start > end) break;
+    indexes.push(info.index);
+  }
+  return indexes;
+}
+
+async function ensureProgressivePartReady(key: string, partIndex: number) {
+  const entry = progressiveReadCache.get(key);
+  if (!entry) throw new Error("progressive_entry_missing");
+  if (entry.readyParts.has(partIndex)) return;
+  const inFlight = entry.loadingParts.get(partIndex);
+  if (inFlight) {
+    await inFlight;
+    return;
+  }
+  const info = entry.partInfos.find((partInfo) => partInfo.index === partIndex);
+  if (!info) throw new Error(`progressive_part_missing:${partIndex}`);
+  const job = (async () => {
+    const partPath = `${entry.path}.part_${partIndex}`;
+    await downloadPartWithRepair(entry.archiveId, info.part, partPath);
+    const actualHash = await hashFile(partPath);
+    if (actualHash !== info.part.hash) {
+      throw new Error(`part_hash_mismatch:${partIndex}`);
+    }
+    const plain = await decryptPartToBuffer(partPath, info.part as any, entry.cryptoKey);
+    await fs.promises.unlink(partPath).catch(() => undefined);
+    const fd = await fs.promises.open(entry.path, "r+");
+    try {
+      await fd.write(plain, 0, plain.length, info.start);
+    } finally {
+      await fd.close();
+    }
+    entry.readyParts.add(partIndex);
+  })();
+  entry.loadingParts.set(partIndex, job);
+  try {
+    await job;
+  } finally {
+    entry.loadingParts.delete(partIndex);
+  }
+}
+
+async function ensureProgressiveRangeReady(key: string, position: number, length: number) {
+  const entry = progressiveReadCache.get(key);
+  if (!entry) throw new Error("progressive_entry_missing");
+  if (length <= 0 || position >= entry.size) return;
+  const start = Math.max(0, position);
+  const end = Math.min(entry.size - 1, position + length - 1);
+  const indexes = findOverlappingProgressiveParts(entry, start, end);
+  for (const index of indexes) {
+    await ensureProgressivePartReady(key, index);
+  }
+}
+
+async function ensureProgressiveReadablePath(file: FileItem) {
+  const archive = file.archive;
+  const fileIndex = file.fileIndex;
+  const key = `${archive._id}:${fileIndex}`;
+  const existing = progressiveReadCache.get(key);
+  if (existing) {
+    return { path: existing.path, key, size: existing.size };
+  }
+  const size = Math.max(0, Number(file.size || 0));
+  const partInfos = buildProgressivePartInfos(archive, size);
+  if (partInfos.length === 0) {
+    throw new Error("parts_missing");
+  }
+  const cacheDir = path.join(config.cacheDir, READ_DIR);
+  await fs.promises.mkdir(cacheDir, { recursive: true });
+  const outputPath = path.join(cacheDir, `${archive._id}_${fileIndex}_progressive`);
+  const fd = await fs.promises.open(outputPath, "w+");
+  try {
+    if (size > 0) {
+      await fd.truncate(size);
+    }
+  } finally {
+    await fd.close();
+  }
+  progressiveReadCache.set(key, {
+    archiveId: String(archive._id),
+    cryptoKey: deriveKey(config.masterKey),
+    path: outputPath,
+    refs: 0,
+    size,
+    partInfos,
+    readyParts: new Set<number>(),
+    loadingParts: new Map<number, Promise<void>>()
+  });
+  return { path: outputPath, key, size };
+}
+
 async function ensureReadablePath(file: FileItem) {
   const archive = file.archive;
   const fileIndex = file.fileIndex;
@@ -262,6 +496,17 @@ function releaseReadable(key?: string) {
   entry.refs -= 1;
   if (entry.refs <= 0) {
     readCache.delete(key);
+    fs.promises.unlink(entry.path).catch(() => undefined);
+  }
+}
+
+function releaseProgressiveReadable(key?: string) {
+  if (!key) return;
+  const entry = progressiveReadCache.get(key);
+  if (!entry) return;
+  entry.refs -= 1;
+  if (entry.refs <= 0) {
+    progressiveReadCache.delete(key);
     fs.promises.unlink(entry.path).catch(() => undefined);
   }
 }
@@ -393,6 +638,25 @@ export function startFuse() {
         }
         const resolved = await resolvePath(filePath);
         if (resolved.type !== "file") return cb(ERR.ENOENT);
+        const canProgressive =
+          resolved.file.archive.status === "ready" &&
+          !resolved.file.archive.isBundle &&
+          Number(resolved.file.size || 0) > 0 &&
+          Number(resolved.file.archive.encryptionVersion || 2) >= 2;
+        if (canProgressive) {
+          const info = await ensureProgressiveReadablePath(resolved.file);
+          const fd = fs.openSync(info.path, "r");
+          const entry = progressiveReadCache.get(info.key);
+          if (entry) entry.refs += 1;
+          handleMap.set(fd, {
+            type: "progressive_read",
+            path: info.path,
+            key: info.key,
+            username: resolved.username,
+            folderId: resolved.folder ? resolved.folder._id.toString() : null
+          });
+          return cb(0, fd);
+        }
         const info = await ensureReadablePath(resolved.file);
         const fd = fs.openSync(info.path, "r");
         if (info.key) {
@@ -429,6 +693,21 @@ export function startFuse() {
       }
     },
     read: (filePath: string, fd: number, buffer: Buffer, length: number, position: number, cb: (bytes: number) => void) => {
+      const handle = handleMap.get(fd);
+      if (handle?.type === "progressive_read") {
+        ensureProgressiveRangeReady(handle.key, position, length)
+          .then(() => {
+            fs.read(fd, buffer, 0, length, position, (err, bytesRead) => {
+              if (err) return cb(0);
+              return cb(bytesRead);
+            });
+          })
+          .catch((err) => {
+            log("smb", `progressive read failed: ${err instanceof Error ? err.message : err}`);
+            cb(0);
+          });
+        return;
+      }
       fs.read(fd, buffer, 0, length, position, (err, bytesRead) => {
         if (err) return cb(0);
         return cb(bytesRead);
@@ -447,6 +726,10 @@ export function startFuse() {
         if (!handle) return cb(0);
         if (handle.type === "read") {
           releaseReadable(handle.key);
+          return cb(0);
+        }
+        if (handle.type === "progressive_read") {
+          releaseProgressiveReadable(handle.key);
           return cb(0);
         }
         try {
