@@ -93,6 +93,7 @@ async function refillQueue() {
       .lean();
   }
 
+  let queuedNow = 0;
   for (const archive of candidates) {
     if (queued.size >= config.transcodeWorkerConcurrency * 6) break;
     if (!archiveNeedsTranscodeWork(archive)) continue;
@@ -101,6 +102,10 @@ async function refillQueue() {
     const waitUntil = retryAt.get(id) || 0;
     if (waitUntil > Date.now()) continue;
     queued.add(id);
+    queuedNow += 1;
+  }
+  if (queuedNow > 0) {
+    log(`queue +${queuedNow} total=${queued.size}`);
   }
 
   if (candidates.length < config.transcodeBackfillScanLimit) {
@@ -127,7 +132,7 @@ async function processArchive(archiveId: string) {
 
   let generated = 0;
   for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
-    if (!fileNeedsTranscode(archive.files[fileIndex])) continue;
+    if (!fileNeedsTranscode(archive.files[fileIndex], true)) continue;
     try {
       const id = await ensureArchiveFileTranscode(archive, fileIndex);
       if (id) {
@@ -145,7 +150,7 @@ async function processArchive(archiveId: string) {
   retryAt.delete(archiveId);
   const refreshed = await Archive.findById(archiveId).select("stagingDir files").lean();
   if (refreshed && config.cacheDeleteAfterUpload) {
-    const stillPending = (refreshed.files || []).some((file: any) => fileNeedsTranscode(file));
+    const stillPending = (refreshed.files || []).some((file: any) => fileNeedsTranscode(file, true));
     if (!stillPending) {
       const stagingDir = String(refreshed.stagingDir || "");
       if (stagingDir) {
@@ -159,6 +164,8 @@ async function processArchive(archiveId: string) {
   }
   if (generated > 0) {
     log(`ready ${archiveId} generated=${generated}`);
+  } else {
+    log(`skip ${archiveId} no_pending_files`);
   }
 }
 
