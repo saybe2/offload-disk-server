@@ -77,6 +77,20 @@ function getPreviewMediaKind(fileName: string, file: any) {
   return null;
 }
 
+function isClientStreamAbortError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err || "");
+  const code = typeof err === "object" && err ? String((err as any).code || "") : "";
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("premature close") ||
+    lower.includes("aborted") ||
+    lower.includes("econnreset") ||
+    lower.includes("err_stream_premature_close") ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_PREMATURE_CLOSE"
+  );
+}
+
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
   if (String(file?.transcode?.status || "") === "ready" && String(file?.transcode?.archiveId || "")) return true;
@@ -406,6 +420,12 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       noteDownloadDone(estimatedBytes);
     }
   } catch (err) {
+    if (isClientStreamAbortError(err)) {
+      if (res.headersSent) {
+        res.destroy();
+      }
+      return;
+    }
     noteDownloadError();
     log("preview", `public media error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     if (res.headersSent) {
