@@ -106,6 +106,23 @@ async function ensureSubtitleDir() {
   await fs.promises.mkdir(path.join(config.cacheDir, "subtitles"), { recursive: true });
 }
 
+async function cleanupOrphanSubtitleWorkDirs(archiveId: string, fileIndex: number) {
+  const baseDir = path.join(config.cacheDir, "subtitle_work");
+  const prefix = `${archiveId}_${fileIndex}_`;
+  const entries = await fs.promises.readdir(baseDir, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!entry.name.startsWith(prefix)) continue;
+    const full = path.join(baseDir, entry.name);
+    await fs.promises.rm(full, { recursive: true, force: true }).catch(() => undefined);
+    removed += 1;
+  }
+  if (removed > 0) {
+    log("subtitle", `work cleanup archive=${archiveId} file=${fileIndex} removed=${removed}`);
+  }
+}
+
 async function markSubtitlePermanentFailure(archiveId: string, fileIndex: number, message: string) {
   await Archive.updateOne(
     { _id: archiveId },
@@ -969,7 +986,7 @@ async function generateSubtitleUsingSource(
   return persistSubtitleMeta(archive.id, fileIndex, localPath);
 }
 
-export async function ensureArchiveSubtitleFromSource(archive: ArchiveDoc, fileIndex: number) {
+async function ensureArchiveSubtitleFromSourceInternal(archive: ArchiveDoc, fileIndex: number) {
   const file = archive.files?.[fileIndex];
   if (!file) {
     throw new Error("file_not_found");
@@ -996,6 +1013,19 @@ export async function ensureArchiveSubtitleFromSource(archive: ArchiveDoc, fileI
     };
   }
   return generateSubtitleUsingSource(archive, fileIndex, fileName, file.path, localPath);
+}
+
+export async function ensureArchiveSubtitleFromSource(archive: ArchiveDoc, fileIndex: number) {
+  const key = `${archive.id}:${fileIndex}`;
+  const existing = inFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+  const promise = ensureArchiveSubtitleFromSourceInternal(archive, fileIndex).finally(() => {
+    inFlight.delete(key);
+  });
+  inFlight.set(key, promise);
+  return promise;
 }
 
 async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): Promise<SubtitleResult> {
@@ -1054,6 +1084,7 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number): P
     "subtitle_work",
     `${archive.id}_${fileIndex}_${Math.random().toString(36).slice(2, 8)}`
   );
+  await cleanupOrphanSubtitleWorkDirs(archive.id, fileIndex);
   await fs.promises.mkdir(tempDir, { recursive: true });
   const sourcePath = path.join(tempDir, file.name || `${fileIndex}_${Date.now()}`);
   try {
