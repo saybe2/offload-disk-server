@@ -50,6 +50,7 @@ import {
 import { queueArchiveSubtitles } from "../services/subtitleWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
+  isBrowserPlayableMedia,
   isPreviewAllowedForFile,
   isPreviewContentTypeAllowed,
   resolvePreviewContentType
@@ -239,8 +240,9 @@ function isFileDeleted(file: any) {
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
   const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
-  if (getMediaKind(fileName, file.detectedKind)) {
-    return true;
+  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  if (mediaKind) {
+    return isBrowserPlayableMedia(fileName, mediaKind);
   }
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));

@@ -29,7 +29,7 @@ import {
 } from "../services/subtitles.js";
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
-import { isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
+import { isBrowserPlayableMedia, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { log } from "../logger.js";
 import { noteDownloadDone, noteDownloadError, noteDownloadStarted } from "../services/analytics.js";
 
@@ -61,7 +61,8 @@ function isFileDeleted(file: any) {
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
   const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
-  if (getMediaKind(fileName, file.detectedKind)) return true;
+  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  if (mediaKind) return isBrowserPlayableMedia(fileName, mediaKind);
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
   if (fileSize > previewMaxBytes) return false;

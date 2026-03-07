@@ -71,6 +71,24 @@ const CODE_EXTENSIONS = new Set([
   ".log"
 ]);
 
+const BROWSER_VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".webm",
+  ".ogv",
+  ".m4v",
+  ".mov"
+]);
+
+const BROWSER_AUDIO_EXTENSIONS = new Set([
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".oga",
+  ".opus",
+  ".m4a",
+  ".aac"
+]);
+
 function isCodeLikeFileName(fileName: string) {
   if (!fileName) return false;
   const name = String(fileName).trim();
@@ -97,6 +115,22 @@ export function isPreviewContentTypeAllowed(contentType: string) {
 
 export function isPreviewAllowedForFile(fileName: string, contentType: string) {
   return isPreviewContentTypeAllowed(contentType) || isCodeLikeFileName(fileName);
+}
+
+export function isBrowserPlayableMedia(fileName: string, detectedKind?: string) {
+  const lower = String(fileName || "").toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const ext = dot >= 0 ? lower.slice(dot) : "";
+  if (detectedKind === "video") {
+    return BROWSER_VIDEO_EXTENSIONS.has(ext);
+  }
+  if (detectedKind === "audio") {
+    return BROWSER_AUDIO_EXTENSIONS.has(ext);
+  }
+  if (BROWSER_VIDEO_EXTENSIONS.has(ext) || BROWSER_AUDIO_EXTENSIONS.has(ext)) {
+    return true;
+  }
+  return false;
 }
 
 export function resolvePreviewContentType(fileName: string, contentType: string) {
