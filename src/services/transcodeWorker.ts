@@ -1,4 +1,5 @@
 import { Archive } from "../models/Archive.js";
+import { User } from "../models/User.js";
 import { config } from "../config.js";
 import { ensureArchiveFileTranscode, needsTranscodeCopy, syncSourceTranscodeStateFromArchive } from "./transcodes.js";
 import fs from "fs";
@@ -9,6 +10,7 @@ const active = new Set<string>();
 const retryAt = new Map<string, number>();
 let ticker: NodeJS.Timeout | null = null;
 let tickRunning = false;
+let backfillOffset = 0;
 
 export function getTranscodeWorkerState() {
   return {
@@ -24,13 +26,19 @@ function log(message: string) {
   console.log(`[transcode-worker] ${new Date().toISOString()} ${message}`);
 }
 
-function fileNeedsTranscode(file: any) {
+function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
   if (!file || file.deletedAt) return false;
   const sourceName = file.originalName || file.name || "";
   if (!needsTranscodeCopy(sourceName, file.detectedKind)) return false;
   const status = String(file?.transcode?.status || "");
+  const error = String(file?.transcode?.error || "");
   const archiveId = String(file?.transcode?.archiveId || "");
-  if (status === "ready" || status === "queued" || status === "processing" || status === "skipped") {
+  if (
+    status === "ready" ||
+    status === "queued" ||
+    status === "processing" ||
+    (status === "skipped" && !(allowRetryDisabledSkip && error === "disabled_by_user"))
+  ) {
     return false;
   }
   if (archiveId && status !== "error") {
@@ -43,7 +51,7 @@ function archiveNeedsTranscodeWork(archive: any) {
   if (!archive?.files || archive.files.length === 0) return false;
   if (String(archive.archiveKind || "primary") === "transcoded") return false;
   if (archive.status !== "ready") return false;
-  return archive.files.some((file: any) => fileNeedsTranscode(file));
+  return archive.files.some((file: any) => fileNeedsTranscode(file, true));
 }
 
 function nextRetryDelayMs(message: string) {
@@ -63,17 +71,27 @@ export function queueArchiveTranscodes(archiveId: string) {
 
 async function refillQueue() {
   if (queued.size >= config.transcodeWorkerConcurrency * 4) return;
-  const candidates = await Archive.find({
+  const baseQuery = {
     archiveKind: { $ne: "transcoded" },
     status: "ready",
     deletedAt: null,
     trashedAt: null,
     "files.0": { $exists: true }
-  })
+  };
+  let candidates = await Archive.find(baseQuery)
     .sort({ createdAt: 1 })
+    .skip(backfillOffset)
     .select("_id status archiveKind files")
     .limit(config.transcodeBackfillScanLimit)
     .lean();
+  if (candidates.length === 0 && backfillOffset > 0) {
+    backfillOffset = 0;
+    candidates = await Archive.find(baseQuery)
+      .sort({ createdAt: 1 })
+      .select("_id status archiveKind files")
+      .limit(config.transcodeBackfillScanLimit)
+      .lean();
+  }
 
   for (const archive of candidates) {
     if (queued.size >= config.transcodeWorkerConcurrency * 6) break;
@@ -84,6 +102,12 @@ async function refillQueue() {
     if (waitUntil > Date.now()) continue;
     queued.add(id);
   }
+
+  if (candidates.length < config.transcodeBackfillScanLimit) {
+    backfillOffset = 0;
+  } else {
+    backfillOffset += candidates.length;
+  }
 }
 
 async function processArchive(archiveId: string) {
@@ -92,6 +116,12 @@ async function processArchive(archiveId: string) {
   if (archive.deletedAt || archive.trashedAt) return;
   if (String(archive.archiveKind || "primary") === "transcoded") return;
   if (archive.status !== "ready") return;
+
+  const owner = await User.findById(archive.userId).select("transcodeCopiesEnabled").lean();
+  if (!owner?.transcodeCopiesEnabled) {
+    retryAt.set(archiveId, Date.now() + nextRetryDelayMs("disabled_by_user"));
+    return;
+  }
 
   await syncSourceTranscodeStateFromArchive(archive).catch(() => undefined);
 
