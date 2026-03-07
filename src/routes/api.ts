@@ -82,6 +82,20 @@ function sanitizeName(name: string) {
   return sanitizeFilename(name);
 }
 
+function isClientStreamAbortError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err || "");
+  const code = typeof err === "object" && err ? String((err as any).code || "") : "";
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("premature close") ||
+    lower.includes("aborted") ||
+    lower.includes("econnreset") ||
+    lower.includes("err_stream_premature_close") ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_PREMATURE_CLOSE"
+  );
+}
+
 const CP1252_MAP: Record<number, number> = {
   0x20AC: 0x80,
   0x201A: 0x82,
@@ -1460,6 +1474,12 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       noteDownloadDone(estimatedBytes);
     }
   } catch (err) {
+    if (isClientStreamAbortError(err)) {
+      if (res.headersSent) {
+        res.destroy();
+      }
+      return;
+    }
     noteDownloadError();
     log("preview", `media error ${archive.id} file=${targetIndex} ${(err as Error).message}`);
     if (res.headersSent) {
