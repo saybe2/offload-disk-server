@@ -51,6 +51,12 @@ export interface SubtitleResult {
   language: string;
 }
 
+type SubtitleCue = {
+  start: number;
+  end: number;
+  text: string;
+};
+
 function toMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err || "");
 }
@@ -261,6 +267,42 @@ function runFfmpeg(args: string[]) {
   });
 }
 
+function runFfprobeDuration(filePath: string) {
+  return new Promise<number>((resolve, reject) => {
+    const args = [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      filePath
+    ];
+    const proc = spawn("ffprobe", args, { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += Buffer.from(chunk).toString("utf8");
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += Buffer.from(chunk).toString("utf8");
+    });
+    proc.on("error", (err) => reject(new Error(`ffprobe_spawn_failed:${toMessage(err)}`)));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffprobe_failed:${code}:${stderr.slice(-500)}`));
+        return;
+      }
+      const duration = Number.parseFloat(stdout.trim());
+      if (!Number.isFinite(duration) || duration <= 0) {
+        reject(new Error("ffprobe_invalid_duration"));
+        return;
+      }
+      resolve(duration);
+    });
+  });
+}
+
 function sanitizeAsrBaseName(sourceName: string) {
   const base = path.basename(sourceName || "audio");
   const noExt = base.replace(/\.[^.]+$/, "");
@@ -364,6 +406,267 @@ function normalizeVtt(raw: string) {
   return `WEBVTT\n\n00:00:00.000 --> 23:59:59.000\n${text}\n`;
 }
 
+function parseTimestampToSeconds(value: string) {
+  const normalized = String(value || "").trim().replace(",", ".");
+  const match = normalized.match(/^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!match) return null;
+  const h = Number.parseInt(match[1], 10);
+  const m = Number.parseInt(match[2], 10);
+  const s = Number.parseInt(match[3], 10);
+  const msRaw = match[4] || "0";
+  const ms = Number.parseInt(msRaw.padEnd(3, "0").slice(0, 3), 10);
+  if ([h, m, s, ms].some((n) => !Number.isFinite(n))) return null;
+  return h * 3600 + m * 60 + s + ms / 1000;
+}
+
+function formatTimestamp(seconds: number) {
+  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const secs = Math.floor(safe % 60);
+  const ms = Math.floor((safe - Math.floor(safe)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(
+    2,
+    "0"
+  )}.${String(ms).padStart(3, "0")}`;
+}
+
+function parseVttCues(rawVtt: string) {
+  const lines = String(rawVtt || "").replace(/\r\n/g, "\n").split("\n");
+  const cues: SubtitleCue[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith("WEBVTT") || line.startsWith("NOTE")) {
+      i += 1;
+      continue;
+    }
+    const timingLine = line.includes("-->") ? line : (lines[i + 1] || "").trim();
+    const timingMatch = timingLine.match(
+      /^(\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)\s*-->\s*(\d{2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)/
+    );
+    if (!timingMatch) {
+      i += 1;
+      continue;
+    }
+    const start = parseTimestampToSeconds(timingMatch[1]);
+    const end = parseTimestampToSeconds(timingMatch[2]);
+    if (start == null || end == null || end <= start) {
+      i += 1;
+      continue;
+    }
+    i += line.includes("-->") ? 1 : 2;
+    const textLines: string[] = [];
+    while (i < lines.length && lines[i].trim() !== "") {
+      textLines.push(lines[i]);
+      i += 1;
+    }
+    cues.push({
+      start,
+      end,
+      text: textLines.join("\n").trim()
+    });
+    while (i < lines.length && lines[i].trim() === "") i += 1;
+  }
+  return cues;
+}
+
+function normalizeCueText(text: string) {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function dedupeCues(cues: SubtitleCue[]) {
+  const ordered = [...cues].sort((a, b) => (a.start === b.start ? a.end - b.end : a.start - b.start));
+  const out: SubtitleCue[] = [];
+  for (const cue of ordered) {
+    const text = String(cue.text || "").trim();
+    if (!text) continue;
+    if (!Number.isFinite(cue.start) || !Number.isFinite(cue.end)) continue;
+    if (cue.end <= cue.start + 0.01) continue;
+    const prev = out[out.length - 1];
+    if (
+      prev &&
+      normalizeCueText(prev.text) === normalizeCueText(text) &&
+      cue.start <= prev.end + 2
+    ) {
+      prev.end = Math.max(prev.end, cue.end);
+      continue;
+    }
+    out.push({ start: cue.start, end: cue.end, text });
+  }
+  return out;
+}
+
+function cuesToVtt(cues: SubtitleCue[]) {
+  const out: string[] = ["WEBVTT", ""];
+  for (const cue of cues) {
+    out.push(`${formatTimestamp(cue.start)} --> ${formatTimestamp(cue.end)}`);
+    out.push(cue.text);
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+function extractTextFromApiBody(bodyText: string) {
+  if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
+    return bodyText;
+  }
+  try {
+    const parsed = JSON.parse(bodyText) as { text?: string; vtt?: string };
+    const fromJson = parsed.vtt || parsed.text || "";
+    if (!fromJson) {
+      throw new Error("missing_text");
+    }
+    return fromJson;
+  } catch {
+    return bodyText;
+  }
+}
+
+function transcriptToChunkCues(raw: string, chunkDurationSec: number) {
+  const normalized = normalizeVtt(raw);
+  const parsed = parseVttCues(normalized);
+  if (parsed.length === 0) {
+    const text = String(raw || "").trim();
+    if (!text) {
+      throw new Error("subtitle_empty");
+    }
+    return [{ start: 0, end: Math.max(1, chunkDurationSec), text }];
+  }
+  return parsed.map((cue) => ({
+    start: Math.max(0, Math.min(chunkDurationSec, cue.start)),
+    end: Math.max(0, Math.min(chunkDurationSec, cue.end)),
+    text: cue.text
+  }));
+}
+
+async function transcribeViaAsrHttp(inputPath: string, uploadName: string, sourceName: string) {
+  const form = new FormData();
+  form.append("model", config.subtitleAsrModel);
+  if (config.subtitleAsrResponseFormat) {
+    form.append("response_format", config.subtitleAsrResponseFormat);
+  }
+  if (config.subtitleLanguage && config.subtitleLanguage !== "auto") {
+    form.append("language", config.subtitleLanguage);
+  }
+  if (config.subtitleAsrPrompt) {
+    form.append("prompt", config.subtitleAsrPrompt);
+  }
+  const fileBuffer = await fs.promises.readFile(inputPath);
+  form.append("file", new File([fileBuffer], uploadName));
+
+  const response = await outboundFetch(config.subtitleAsrUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.subtitleAsrApiKey}`
+    },
+    body: form
+  });
+  const bodyText = await response.text();
+  if (!response.ok) {
+    throw new Error(`subtitle_asr_failed:${response.status}:${bodyText.slice(0, 500)}`);
+  }
+  log("subtitle", `asr done file=${path.basename(sourceName || inputPath)} size=${fileBuffer.length}`);
+  return extractTextFromApiBody(bodyText);
+}
+
+async function transcribeViaOpenAiChunked(preparedPath: string, preparedName: string, sourceName: string, preparedSize: number) {
+  const durationSec = await runFfprobeDuration(preparedPath);
+  const targetBytes = Math.max(1024 * 1024, Math.floor(config.subtitleAsrMaxBytes * 0.92));
+  const bytesPerSec = Math.max(1, preparedSize / Math.max(1, durationSec));
+  const overlapSec = 2;
+  const chunkSec = Math.max(120, Math.floor(targetBytes / bytesPerSec));
+  const effectiveChunkSec = Math.max(overlapSec + 5, chunkSec);
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let guard = 0;
+  while (start < durationSec - 0.01 && guard < 10000) {
+    const end = Math.min(durationSec, start + effectiveChunkSec);
+    ranges.push({ start, end });
+    if (end >= durationSec - 0.01) break;
+    start = Math.max(0, end - overlapSec);
+    guard += 1;
+  }
+  if (ranges.length === 0) {
+    throw new Error("subtitle_chunk_ranges_empty");
+  }
+
+  const chunkDir = path.join(
+    config.cacheDir,
+    "subtitle_work",
+    `asr_chunk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  );
+  await fs.promises.mkdir(chunkDir, { recursive: true });
+  log(
+    "subtitle",
+    `asr chunking file=${path.basename(sourceName || preparedName)} size=${preparedSize} duration=${Math.round(
+      durationSec
+    )}s chunks=${ranges.length} chunkSec=${effectiveChunkSec} overlap=${overlapSec}`
+  );
+
+  const merged: SubtitleCue[] = [];
+  try {
+    for (let i = 0; i < ranges.length; i += 1) {
+      const range = ranges[i];
+      const duration = Math.max(1, range.end - range.start);
+      const chunkPath = path.join(chunkDir, `part_${String(i + 1).padStart(3, "0")}.mp3`);
+      await runFfmpeg([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-ss",
+        String(range.start),
+        "-i",
+        preparedPath,
+        "-t",
+        String(duration),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-b:a",
+        "64k",
+        "-f",
+        "mp3",
+        chunkPath
+      ]);
+      const chunkStat = await fs.promises.stat(chunkPath);
+      if (chunkStat.size > config.subtitleAsrMaxBytes) {
+        throw new Error(`subtitle_chunk_too_large:${i + 1}:${chunkStat.size}`);
+      }
+      log("subtitle", `asr chunk start file=${path.basename(sourceName || preparedName)} part=${i + 1}/${ranges.length}`);
+      const raw = await transcribeViaAsrHttp(
+        chunkPath,
+        `${sanitizeAsrBaseName(preparedName)}_part_${String(i + 1).padStart(3, "0")}.mp3`,
+        sourceName
+      );
+      let cues = transcriptToChunkCues(raw, duration);
+      if (i > 0 && overlapSec > 0) {
+        cues = cues.filter((cue) => cue.end > overlapSec);
+      }
+      for (const cue of cues) {
+        const shiftedStart = Math.max(0, cue.start + range.start);
+        const shiftedEnd = Math.min(durationSec, cue.end + range.start);
+        if (shiftedEnd <= shiftedStart + 0.01) continue;
+        merged.push({ start: shiftedStart, end: shiftedEnd, text: cue.text });
+      }
+      log("subtitle", `asr chunk done file=${path.basename(sourceName || preparedName)} part=${i + 1}/${ranges.length}`);
+    }
+  } finally {
+    await fs.promises.rm(chunkDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  const deduped = dedupeCues(merged);
+  if (deduped.length === 0) {
+    throw new Error("subtitle_empty");
+  }
+  return cuesToVtt(deduped);
+}
+
 async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
   if (!config.subtitleAsrEnabled || !config.subtitleAsrApiKey || !config.subtitleAsrModel) {
     throw new Error("subtitle_provider_not_configured");
@@ -371,50 +674,10 @@ async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
   const upload = await prepareAsrUploadInput(inputPath, sourceName);
   try {
     log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} size=${upload.uploadSize}`);
-    if (upload.uploadSize > config.subtitleAsrMaxBytes) {
-      throw new Error("subtitle_source_too_large_for_asr");
+    if (upload.uploadSize <= config.subtitleAsrMaxBytes) {
+      return await transcribeViaAsrHttp(upload.uploadPath, upload.uploadName, sourceName);
     }
-
-    const form = new FormData();
-    form.append("model", config.subtitleAsrModel);
-    if (config.subtitleAsrResponseFormat) {
-      form.append("response_format", config.subtitleAsrResponseFormat);
-    }
-    if (config.subtitleLanguage && config.subtitleLanguage !== "auto") {
-      form.append("language", config.subtitleLanguage);
-    }
-    if (config.subtitleAsrPrompt) {
-      form.append("prompt", config.subtitleAsrPrompt);
-    }
-    const fileBuffer = await fs.promises.readFile(upload.uploadPath);
-    form.append("file", new File([fileBuffer], upload.uploadName));
-
-    const response = await outboundFetch(config.subtitleAsrUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.subtitleAsrApiKey}`
-      },
-      body: form
-    });
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(`subtitle_asr_failed:${response.status}:${bodyText.slice(0, 500)}`);
-    }
-    log("subtitle", `asr done file=${path.basename(sourceName || inputPath)} size=${upload.uploadSize}`);
-
-    if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
-      return bodyText;
-    }
-    try {
-      const parsed = JSON.parse(bodyText) as { text?: string; vtt?: string };
-      const fromJson = parsed.vtt || parsed.text || "";
-      if (!fromJson) {
-        throw new Error("missing_text");
-      }
-      return fromJson;
-    } catch {
-      return bodyText;
-    }
+    return await transcribeViaOpenAiChunked(upload.uploadPath, upload.uploadName, sourceName, upload.uploadSize);
   } finally {
     await upload.cleanup();
   }
