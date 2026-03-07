@@ -34,7 +34,14 @@ import { sanitizeFilename } from "../utils/names.js";
 import { isMediaPreviewSupported, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { findReadyTranscodeArchive } from "../services/transcodes.js";
 import { log } from "../logger.js";
-import { noteDownloadDone, noteDownloadError, noteDownloadStarted } from "../services/analytics.js";
+import {
+  noteDownloadDone,
+  noteDownloadError,
+  noteDownloadStarted,
+  notePreviewDone,
+  notePreviewError,
+  notePreviewStarted
+} from "../services/analytics.js";
 
 export const publicRouter = Router();
 type ResolveArchiveSuccess = { share: any; archive: any };
@@ -372,6 +379,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
+  notePreviewStarted(estimatedBytes);
   const remuxTempDir = needsTsRemux
     ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
@@ -397,6 +405,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       res.setHeader("Cache-Control", "private, max-age=60");
       await pipeline(fs.createReadStream(servePath), res);
       noteDownloadDone(stat.size || estimatedBytes);
+      notePreviewDone();
     } else {
       if (mediaArchive.isBundle) {
         await streamArchiveFileToResponse(mediaArchive, fileIndex, res, config.cacheDir, config.masterKey, {
@@ -418,6 +427,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
         });
       }
       noteDownloadDone(estimatedBytes);
+      notePreviewDone();
     }
   } catch (err) {
     if (isClientStreamAbortError(err)) {
@@ -427,6 +437,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       return;
     }
     noteDownloadError();
+    notePreviewError();
     log("preview", `public media error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     if (res.headersSent) {
       res.destroy();
@@ -625,6 +636,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
   noteDownloadStarted(fileSize);
+  notePreviewStarted(fileSize);
 
   const tempDir = path.join(
     config.cacheDir,
@@ -656,9 +668,11 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     res.setHeader("Cache-Control", "private, max-age=60");
     void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
     noteDownloadDone(body.length || fileSize);
+    notePreviewDone();
     return res.end(body);
   } catch (err) {
     noteDownloadError();
+    notePreviewError();
     log("preview", `public error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     return res.status(500).json({ error: "preview_failed" });
   } finally {

@@ -11,6 +11,7 @@ import { sanitizeFilename } from "../utils/names.js";
 import { detectStoredFileType } from "./fileType.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { log } from "../logger.js";
+import { noteTranscodeDone, noteTranscodeError, noteTranscodeStarted } from "./analytics.js";
 
 const require = createRequire(import.meta.url);
 const ffmpegStaticPath = require("ffmpeg-static") as string | null;
@@ -224,75 +225,95 @@ async function createTranscodedArchive(
   const contentType = (mime.lookup(outputName) as string) || (mediaKind === "video" ? "video/mp4" : "audio/mp4");
 
   log("transcode", `start source=${sourceArchive.id} file=${fileIndex} name=${sourceName}`);
-  await transcodeToOutput(sourcePath, outputPath, mediaKind);
-  const stat = await fs.promises.stat(outputPath);
-  if (!stat.size) {
-    throw new Error("transcode_output_empty");
-  }
+  const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+  const inputBytes = Math.max(0, Number(sourceStat?.size || 0));
+  noteTranscodeStarted(inputBytes);
+  const startedAt = Date.now();
+  let finished = false;
+  try {
+    await transcodeToOutput(sourcePath, outputPath, mediaKind);
+    const transcodeDurationMs = Date.now() - startedAt;
+    const stat = await fs.promises.stat(outputPath);
+    if (!stat.size) {
+      noteTranscodeError();
+      finished = true;
+      throw new Error("transcode_output_empty");
+    }
 
-  const user = await User.findById(sourceArchive.userId);
-  if (!user) {
-    throw new Error("user_not_found");
-  }
-  if (user.quotaBytes > 0 && user.usedBytes + stat.size > user.quotaBytes) {
-    await updateSourceTranscodeState(sourceArchive.id, fileIndex, {
-      status: "error",
-      error: "quota_exceeded",
-      archiveId: "",
-      size: 0,
-      contentType
+    const user = await User.findById(sourceArchive.userId);
+    if (!user) {
+      throw new Error("user_not_found");
+    }
+    if (user.quotaBytes > 0 && user.usedBytes + stat.size > user.quotaBytes) {
+      noteTranscodeError();
+      finished = true;
+      await updateSourceTranscodeState(sourceArchive.id, fileIndex, {
+        status: "error",
+        error: "quota_exceeded",
+        archiveId: "",
+        size: 0,
+        contentType
+      });
+      await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+      return null;
+    }
+
+    const detectedType = await detectStoredFileType(outputPath, outputName);
+    const archive = await Archive.create({
+      userId: sourceArchive.userId,
+      name: sanitizeFilename(outputName),
+      displayName: `${sourceName} (converted)`,
+      downloadName: outputName,
+      archiveKind: "transcoded",
+      sourceArchiveId: sourceArchive._id,
+      sourceFileIndex: fileIndex,
+      isBundle: false,
+      encryptionVersion: 2,
+      folderId: null,
+      priority: 1,
+      priorityOverride: true,
+      status: "queued",
+      contentModifiedAt: new Date(),
+      originalSize: stat.size,
+      encryptedSize: 0,
+      uploadedBytes: 0,
+      uploadedParts: 0,
+      totalParts: 0,
+      chunkSizeBytes: computed.chunkSizeBytes,
+      stagingDir: workDir,
+      files: [
+        {
+          path: outputPath,
+          name: path.basename(outputPath),
+          originalName: outputName,
+          size: stat.size,
+          contentModifiedAt: new Date(),
+          detectedKind: detectedType.kind,
+          detectedTypeLabel: detectedType.label
+        }
+      ],
+      parts: []
     });
-    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    return null;
+
+    await User.updateOne({ _id: sourceArchive.userId }, { $inc: { usedBytes: stat.size } });
+    await updateSourceTranscodeState(sourceArchive.id, fileIndex, {
+      archiveId: archive.id,
+      status: "queued",
+      size: stat.size,
+      contentType,
+      error: ""
+    });
+    noteTranscodeDone(stat.size, transcodeDurationMs);
+    finished = true;
+    log("transcode", `queued source=${sourceArchive.id} file=${fileIndex} archive=${archive.id} size=${stat.size}`);
+    return archive.id;
+  } catch (err) {
+    if (!finished) {
+      noteTranscodeError();
+      finished = true;
+    }
+    throw err;
   }
-
-  const detectedType = await detectStoredFileType(outputPath, outputName);
-  const archive = await Archive.create({
-    userId: sourceArchive.userId,
-    name: sanitizeFilename(outputName),
-    displayName: `${sourceName} (converted)`,
-    downloadName: outputName,
-    archiveKind: "transcoded",
-    sourceArchiveId: sourceArchive._id,
-    sourceFileIndex: fileIndex,
-    isBundle: false,
-    encryptionVersion: 2,
-    folderId: null,
-    priority: 1,
-    priorityOverride: true,
-    status: "queued",
-    contentModifiedAt: new Date(),
-    originalSize: stat.size,
-    encryptedSize: 0,
-    uploadedBytes: 0,
-    uploadedParts: 0,
-    totalParts: 0,
-    chunkSizeBytes: computed.chunkSizeBytes,
-    stagingDir: workDir,
-    files: [
-      {
-        path: outputPath,
-        name: path.basename(outputPath),
-        originalName: outputName,
-        size: stat.size,
-        contentModifiedAt: new Date(),
-        detectedKind: detectedType.kind,
-        detectedTypeLabel: detectedType.label
-      }
-    ],
-    parts: []
-  });
-
-  await User.updateOne({ _id: sourceArchive.userId }, { $inc: { usedBytes: stat.size } });
-  await updateSourceTranscodeState(sourceArchive.id, fileIndex, {
-    archiveId: archive.id,
-    status: "queued",
-    size: stat.size,
-    contentType,
-    error: ""
-  });
-  log("transcode", `queued source=${sourceArchive.id} file=${fileIndex} archive=${archive.id} size=${stat.size}`);
-  return archive.id;
 }
 
 async function ensureSourceUserEnabled(userId: string) {
