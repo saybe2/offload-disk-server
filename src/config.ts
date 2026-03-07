@@ -123,6 +123,7 @@ export const config = {
   subtitleAsrUrl: (process.env.SUBTITLE_ASR_URL || "https://api.openai.com/v1/audio/transcriptions").trim(),
   subtitleAsrModel: (process.env.SUBTITLE_ASR_MODEL || "whisper-1").trim(),
   subtitleAsrApiKey: (process.env.SUBTITLE_ASR_API_KEY || "").trim(),
+  subtitleAsrResponseFormat: (process.env.SUBTITLE_ASR_RESPONSE_FORMAT || "").trim(),
   subtitleAsrMaxBytes: Math.max(1024 * 1024, toNumber(process.env.SUBTITLE_ASR_MAX_BYTES, 24 * 1024 * 1024)),
   subtitleAsrPrompt: (process.env.SUBTITLE_ASR_PROMPT || "").trim(),
   subtitleLocalCommand: (process.env.SUBTITLE_LOCAL_COMMAND || "").trim(),

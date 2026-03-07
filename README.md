@@ -17,6 +17,7 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 - Automatic thumbnail generation from local upload cache during upload processing + background backfill for existing files.
 - Streaming media preview endpoint (`Range`) for large audio/video files (no full browser download required for seek on non-bundle files).
 - Automatic subtitles for audio/video preview (new uploads + background backfill), stored locally and mirrored to Discord/Telegram.
+  - ASR upload path is normalized to compact `mp3` (mono/16k/64k) and sent with minimal multipart payload (`model` + `file` by default).
 - Background workers for upload/delete jobs.
 - Optional SMB 2/3 access via FUSE view.
 
@@ -233,6 +234,7 @@ Subtitles:
 - `SUBTITLE_ASR_URL`
 - `SUBTITLE_ASR_MODEL`
 - `SUBTITLE_ASR_API_KEY`
+- `SUBTITLE_ASR_RESPONSE_FORMAT` (optional; keep empty for minimal payload)
 - `SUBTITLE_ASR_MAX_BYTES`
 - `SUBTITLE_ASR_PROMPT`
 - `SUBTITLE_LOCAL_COMMAND` (fallback local command with `{input}` `{output}` `{lang}`)
