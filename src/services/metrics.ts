@@ -608,13 +608,27 @@ async function refreshMetrics() {
         deletedAt: null,
         trashedAt: null,
         "files.0": { $exists: true },
-        files: { $elemMatch: { deletedAt: { $exists: false }, "thumbnail.updatedAt": { $exists: false } } }
+        files: {
+          $elemMatch: {
+            $and: [
+              { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
+              { "thumbnail.updatedAt": { $exists: false } }
+            ]
+          }
+        }
       }),
       Archive.countDocuments({
         deletedAt: null,
         trashedAt: null,
         "files.0": { $exists: true },
-        files: { $elemMatch: { deletedAt: { $exists: false }, "subtitle.updatedAt": { $exists: false } } }
+        files: {
+          $elemMatch: {
+            $and: [
+              { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
+              { "subtitle.updatedAt": { $exists: false } }
+            ]
+          }
+        }
       }),
       Archive.countDocuments({
         deletedAt: null,
@@ -623,12 +637,17 @@ async function refreshMetrics() {
         status: "ready",
         files: {
           $elemMatch: {
-            deletedAt: { $exists: false },
-            $or: [
-              { "transcode.status": { $exists: false } },
-              { "transcode.status": { $in: ["error", ""] } },
-              { "transcode.archiveId": { $exists: false } },
-              { "transcode.archiveId": "" }
+            $and: [
+              { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
+              {
+                $or: [
+                  { "transcode.status": { $exists: false } },
+                  { "transcode.status": { $in: ["error", ""] } },
+                  { "transcode.status": "skipped", "transcode.error": "disabled_by_user" },
+                  { "transcode.archiveId": { $exists: false } },
+                  { "transcode.archiveId": "" }
+                ]
+              }
             ]
           }
         }
