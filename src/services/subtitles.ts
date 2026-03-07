@@ -241,6 +241,95 @@ function runCommand(command: string) {
   });
 }
 
+function runFfmpeg(args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, { windowsHide: true });
+    let stderr = "";
+    proc.stderr.on("data", (chunk) => {
+      stderr += Buffer.from(chunk).toString("utf8");
+    });
+    proc.on("error", (err) => {
+      reject(new Error(`ffmpeg_spawn_failed:${toMessage(err)}`));
+    });
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`ffmpeg_failed:${code}:${stderr.slice(-500)}`));
+    });
+  });
+}
+
+function sanitizeAsrBaseName(sourceName: string) {
+  const base = path.basename(sourceName || "audio");
+  const noExt = base.replace(/\.[^.]+$/, "");
+  const cleaned = noExt.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return (cleaned || "audio").slice(0, 100);
+}
+
+async function prepareAsrUploadInput(inputPath: string, sourceName: string) {
+  const sourceLabel = path.basename(sourceName || inputPath);
+  const sourceStat = await fs.promises.stat(inputPath);
+  const ext = extOf(sourceName || inputPath);
+  const mediaKind = getMediaKind(sourceName || inputPath);
+  const shouldPrepare = !!mediaKind || sourceStat.size > config.subtitleAsrMaxBytes || ext === ".webm";
+  if (!shouldPrepare) {
+    return {
+      uploadPath: inputPath,
+      uploadName: sourceLabel,
+      uploadSize: sourceStat.size,
+      cleanup: async () => undefined
+    };
+  }
+
+  const tempDir = path.join(
+    config.cacheDir,
+    "subtitle_work",
+    `asr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  );
+  await fs.promises.mkdir(tempDir, { recursive: true });
+  const outputPath = path.join(tempDir, `${sanitizeAsrBaseName(sourceLabel)}.mp3`);
+  log("subtitle", `prepare start file=${sourceLabel} size=${sourceStat.size}`);
+  try {
+    await runFfmpeg([
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-nostdin",
+      "-y",
+      "-i",
+      inputPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-b:a",
+      "64k",
+      "-f",
+      "mp3",
+      outputPath
+    ]);
+    const preparedStat = await fs.promises.stat(outputPath);
+    if (!preparedStat.size) {
+      throw new Error("prepared_audio_empty");
+    }
+    log("subtitle", `prepare done file=${sourceLabel} prepared=${path.basename(outputPath)} size=${preparedStat.size}`);
+    return {
+      uploadPath: outputPath,
+      uploadName: path.basename(outputPath),
+      uploadSize: preparedStat.size,
+      cleanup: async () => {
+        await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    };
+  } catch (err) {
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
 function looksLikeSrt(raw: string) {
   return /\d+\s*\n\d{2}:\d{2}:\d{2},\d{3}\s*-->/.test(raw);
 }
@@ -279,49 +368,55 @@ async function transcribeViaOpenAi(inputPath: string, sourceName: string) {
   if (!config.subtitleAsrEnabled || !config.subtitleAsrApiKey || !config.subtitleAsrModel) {
     throw new Error("subtitle_provider_not_configured");
   }
-  const stat = await fs.promises.stat(inputPath);
-  log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} size=${stat.size}`);
-  if (stat.size > config.subtitleAsrMaxBytes && !config.subtitleLocalCommand) {
-    throw new Error("subtitle_source_too_large_for_asr");
-  }
-
-  const form = new FormData();
-  form.append("model", config.subtitleAsrModel);
-  form.append("response_format", "vtt");
-  if (config.subtitleLanguage && config.subtitleLanguage !== "auto") {
-    form.append("language", config.subtitleLanguage);
-  }
-  if (config.subtitleAsrPrompt) {
-    form.append("prompt", config.subtitleAsrPrompt);
-  }
-  const fileBuffer = await fs.promises.readFile(inputPath);
-  form.append("file", new File([fileBuffer], path.basename(sourceName || inputPath)));
-
-  const response = await outboundFetch(config.subtitleAsrUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.subtitleAsrApiKey}`
-    },
-    body: form
-  });
-  const bodyText = await response.text();
-  if (!response.ok) {
-    throw new Error(`subtitle_asr_failed:${response.status}:${bodyText.slice(0, 500)}`);
-  }
-  log("subtitle", `asr done file=${path.basename(sourceName || inputPath)} size=${stat.size}`);
-
-  if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
-    return bodyText;
-  }
+  const upload = await prepareAsrUploadInput(inputPath, sourceName);
   try {
-    const parsed = JSON.parse(bodyText) as { text?: string; vtt?: string };
-    const fromJson = parsed.vtt || parsed.text || "";
-    if (!fromJson) {
-      throw new Error("missing_text");
+    log("subtitle", `asr start file=${path.basename(sourceName || inputPath)} size=${upload.uploadSize}`);
+    if (upload.uploadSize > config.subtitleAsrMaxBytes) {
+      throw new Error("subtitle_source_too_large_for_asr");
     }
-    return fromJson;
-  } catch {
-    return bodyText;
+
+    const form = new FormData();
+    form.append("model", config.subtitleAsrModel);
+    if (config.subtitleAsrResponseFormat) {
+      form.append("response_format", config.subtitleAsrResponseFormat);
+    }
+    if (config.subtitleLanguage && config.subtitleLanguage !== "auto") {
+      form.append("language", config.subtitleLanguage);
+    }
+    if (config.subtitleAsrPrompt) {
+      form.append("prompt", config.subtitleAsrPrompt);
+    }
+    const fileBuffer = await fs.promises.readFile(upload.uploadPath);
+    form.append("file", new File([fileBuffer], upload.uploadName));
+
+    const response = await outboundFetch(config.subtitleAsrUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.subtitleAsrApiKey}`
+      },
+      body: form
+    });
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(`subtitle_asr_failed:${response.status}:${bodyText.slice(0, 500)}`);
+    }
+    log("subtitle", `asr done file=${path.basename(sourceName || inputPath)} size=${upload.uploadSize}`);
+
+    if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
+      return bodyText;
+    }
+    try {
+      const parsed = JSON.parse(bodyText) as { text?: string; vtt?: string };
+      const fromJson = parsed.vtt || parsed.text || "";
+      if (!fromJson) {
+        throw new Error("missing_text");
+      }
+      return fromJson;
+    } catch {
+      return bodyText;
+    }
+  } finally {
+    await upload.cleanup();
   }
 }
 
