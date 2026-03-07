@@ -20,8 +20,10 @@ import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
 import { ensureArchiveSubtitleFromSource, supportsSubtitle } from "./subtitles.js";
 import { queueArchiveSubtitles } from "./subtitleWorker.js";
+import { queueArchiveTranscodes } from "./transcodeWorker.js";
 import { isTelegramReady } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
+import { archiveNeedsTranscodeCopies, syncSourceTranscodeStateFromArchive } from "./transcodes.js";
 import {
   getMirrorSyncState,
   noteMirrorSyncRateLimited,
@@ -421,6 +423,7 @@ async function processNextArchive() {
     return;
   }
 
+  const isTranscodedArchive = String((archive as any).archiveKind || "primary") === "transcoded";
   log(`start ${archive.id} priority=${archive.priority}`);
   const startedAt = Date.now();
   noteUploadArchiveStarted();
@@ -606,14 +609,27 @@ async function processNextArchive() {
     archive.encryptionVersion = 2;
     await archive.save();
 
-    await generateLocalThumbnails(archive);
-    await generateLocalSubtitles(archive);
+    if (!isTranscodedArchive) {
+      await generateLocalThumbnails(archive);
+      await generateLocalSubtitles(archive);
+    }
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
+    if (isTranscodedArchive) {
+      await syncSourceTranscodeStateFromArchive({ ...archive.toObject(), status: "ready", error: "" }).catch(() => undefined);
+    } else {
+      queueArchiveTranscodes(archive.id);
+    }
     log(`ready ${archive.id}`);
     noteUploadArchiveDone(archive.originalSize || 0, Date.now() - startedAt);
 
     if (config.cacheDeleteAfterUpload) {
-      await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
+      const shouldKeepSourceForTranscode =
+        !isTranscodedArchive &&
+        config.transcodeWorkerEnabled &&
+        archiveNeedsTranscodeCopies(archive);
+      if (!shouldKeepSourceForTranscode) {
+        await fs.promises.rm(archive.stagingDir, { recursive: true, force: true });
+      }
       await fs.promises.rm(workDir, { recursive: true, force: true });
     }
 
@@ -628,9 +644,19 @@ async function processNextArchive() {
         { _id: archive.id },
         { $set: { status: "queued", error: message }, $inc: { retryCount: 1 } }
       );
+      if (isTranscodedArchive) {
+        await syncSourceTranscodeStateFromArchive({ ...archive.toObject(), status: "queued", error: message }).catch(() => undefined);
+      }
       log(`retry queued ${archive.id} (${archive.retryCount + 1}/${config.uploadRetryMax}) ${message}`);
     } else {
-      await Archive.updateOne({ _id: archive.id }, { $set: { status: "error", error: message } });
+      const errorSet: Record<string, unknown> = { status: "error", error: message };
+      if (isTranscodedArchive) {
+        errorSet.deleteRequestedAt = new Date();
+      }
+      await Archive.updateOne({ _id: archive.id }, { $set: errorSet });
+      if (isTranscodedArchive) {
+        await syncSourceTranscodeStateFromArchive({ ...archive.toObject(), status: "error", error: message }).catch(() => undefined);
+      }
       log(`error ${archive.id} ${message}`);
     }
     noteUploadArchiveError();

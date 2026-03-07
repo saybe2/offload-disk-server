@@ -48,6 +48,7 @@ import {
   supportsSubtitle
 } from "../services/subtitles.js";
 import { queueArchiveSubtitles } from "../services/subtitleWorker.js";
+import { queueArchiveTranscodes } from "../services/transcodeWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
   isMediaPreviewSupported,
@@ -58,6 +59,7 @@ import {
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
+import { findReadyTranscodeArchive, listLinkedTranscodeArchiveIds } from "../services/transcodes.js";
 import {
   noteDownloadDone,
   noteDownloadError,
@@ -237,10 +239,25 @@ function isFileDeleted(file: any) {
   return !!file?.deletedAt;
 }
 
+function getPreviewMediaKind(fileName: string, file: any) {
+  const direct = getMediaKind(fileName, file?.detectedKind);
+  if (direct) return direct;
+  const ext = path.extname(fileName).toLowerCase();
+  const label = String(file?.detectedTypeLabel || "").toLowerCase();
+  const size = Number(file?.size || 0);
+  if (ext === ".ts" && (label.includes("video") || size > 512 * 1024)) {
+    return "video" as const;
+  }
+  return null;
+}
+
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
+  if (String(file?.transcode?.status || "") === "ready" && String(file?.transcode?.archiveId || "")) {
+    return true;
+  }
   const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
-  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  const mediaKind = getPreviewMediaKind(fileName, file);
   if (mediaKind) {
     return isMediaPreviewSupported(fileName, mediaKind);
   }
@@ -277,6 +294,22 @@ function hasActiveFiles(archive: any) {
   return archive.files.some((file: any) => !isFileDeleted(file));
 }
 
+function isTranscodedArchive(archive: any) {
+  return String(archive?.archiveKind || "primary") === "transcoded";
+}
+
+function ensurePrimaryArchive(archive: any, res: Response) {
+  if (!archive) {
+    res.status(404).json({ error: "not_found" });
+    return false;
+  }
+  if (isTranscodedArchive(archive)) {
+    res.status(404).json({ error: "not_found" });
+    return false;
+  }
+  return true;
+}
+
 function estimateArchiveDownloadBytes(archive: any) {
   if (!archive?.isBundle) {
     return Number(archive?.originalSize || archive?.files?.[0]?.size || 0);
@@ -291,6 +324,33 @@ function estimateArchiveDownloadBytes(archive: any) {
   }
   return sum > 0 ? sum : Number(archive?.originalSize || 0);
 }
+
+async function applyToLinkedTranscodes(sourceArchive: any, update: Record<string, unknown>, fileIndex?: number) {
+  let ids: string[] = [];
+  if (Number.isInteger(fileIndex)) {
+    const ref = String(sourceArchive?.files?.[Number(fileIndex)]?.transcode?.archiveId || "");
+    if (ref) ids = [ref];
+  } else {
+    ids = await listLinkedTranscodeArchiveIds(sourceArchive, true);
+  }
+  if (ids.length === 0) return;
+  await Archive.updateMany(
+    { _id: { $in: ids }, archiveKind: "transcoded", deletedAt: null },
+    { $set: update }
+  );
+}
+
+apiRouter.patch("/me/settings", requireAuth, async (req, res) => {
+  const { transcodeCopiesEnabled } = req.body as { transcodeCopiesEnabled?: boolean };
+  if (typeof transcodeCopiesEnabled !== "boolean") {
+    return res.status(400).json({ error: "bad_settings" });
+  }
+  await User.updateOne(
+    { _id: req.session.userId },
+    { $set: { transcodeCopiesEnabled } }
+  );
+  return res.json({ ok: true, transcodeCopiesEnabled });
+});
 
 apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
   let aborted = false;
@@ -504,6 +564,7 @@ apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
       name: archiveName,
       displayName,
       downloadName,
+      archiveKind: "primary",
       isBundle,
       encryptionVersion: 2,
       folderId: group.folderId,
@@ -658,6 +719,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
         name: sanitizeName(safeName),
         displayName: safeName,
         downloadName: safeName,
+        archiveKind: "primary",
         isBundle: false,
         encryptionVersion: 2,
         folderId: folderRef,
@@ -929,6 +991,7 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
           }
         }
         await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
+        queueArchiveTranscodes(archive.id);
         log("stream", `upload ready archive=${archive.id} parts=${uploadedPartsCount}`);
         noteUploadArchiveDone(originalSize, Date.now() - streamStartedAt);
         if (config.cacheDeleteAfterUpload) {
@@ -986,6 +1049,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   const baseFilter = req.session.role === "admin" ? {} : { userId: req.session.userId };
   const filter = {
     ...baseFilter,
+    archiveKind: { $ne: "transcoded" },
     deletedAt: null,
     trashedAt: isTrash ? { $ne: null } : null
   } as Record<string, unknown>;
@@ -1006,6 +1070,7 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1122,7 +1187,7 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
   }
 
   const ids = [...new Set(items.map((i) => i.archiveId))];
-  const archives = await Archive.find({ _id: { $in: ids } });
+  const archives = await Archive.find({ _id: { $in: ids }, archiveKind: { $ne: "transcoded" } });
   if (req.session.role !== "admin") {
     const forbidden = archives.find((a) => a.userId.toString() !== req.session.userId);
     if (forbidden) return res.status(403).json({ error: "forbidden" });
@@ -1222,6 +1287,7 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1237,26 +1303,43 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
   if (targetFile && isFileDeleted(targetFile)) {
     return res.status(404).json({ error: "file_deleted" });
   }
+  const wantsTranscoded = req.query.transcoded === "1";
 
   try {
+    const transcodedArchive = wantsTranscoded ? await findReadyTranscodeArchive(archive, targetIndex) : null;
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-    const canUseRange = !!rangeHeader && !archive.isBundle;
-    const estimatedBytes = archive.isBundle
-      ? Number(targetFile?.size || 0)
-      : Number(archive.originalSize || archive.files?.[0]?.size || 0);
+    const streamArchive = transcodedArchive || archive;
+    const streamFileName = transcodedArchive
+      ? (transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || archive.downloadName || archive.name)
+      : (archive.downloadName || archive.name);
+    const canUseRange = !!rangeHeader && !streamArchive.isBundle;
+    const estimatedBytes = transcodedArchive
+      ? Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0)
+      : archive.isBundle
+        ? Number(targetFile?.size || 0)
+        : Number(archive.originalSize || archive.files?.[0]?.size || 0);
     noteDownloadStarted(estimatedBytes);
     log(
       "download",
-      canUseRange ? `start ${archive.id} file=${index} range=${rangeHeader}` : `start ${archive.id} file=${index}`
+      canUseRange
+        ? `start ${archive.id} file=${index}${transcodedArchive ? " transcoded=1" : ""} range=${rangeHeader}`
+        : `start ${archive.id} file=${index}${transcodedArchive ? " transcoded=1" : ""}`
     );
-    if (!archive.isBundle) {
+    if (wantsTranscoded && !transcodedArchive) {
+      return res.status(404).json({ error: "transcoded_not_ready" });
+    }
+    if (!streamArchive.isBundle) {
       if (canUseRange) {
-        await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
+        await streamArchiveRangeToResponse(streamArchive, rangeHeader!, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
         noteDownloadDone(estimatedBytes);
         return;
       }
-      await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey);
-      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
+      await streamArchiveToResponse(streamArchive, res, config.cacheDir, config.masterKey, {
+        fileName: streamFileName
+      });
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: targetIndex }]);
       noteDownloadDone(estimatedBytes);
       return;
     }
@@ -1279,6 +1362,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1295,8 +1379,17 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   if (!file || isFileDeleted(file)) {
     return res.status(404).json({ error: "file_not_found" });
   }
-  const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
-  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  const preferTranscoded = req.query.transcoded !== "0";
+  const transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, targetIndex) : null;
+  const mediaArchive = transcodedArchive || archive;
+  const mediaFile = transcodedArchive ? mediaArchive.files?.[0] : file;
+  const fileName = (
+    mediaFile?.originalName ||
+    mediaFile?.name ||
+    mediaArchive.downloadName ||
+    mediaArchive.name
+  ).replace(/[\\/]/g, "_");
+  const mediaKind = getPreviewMediaKind(fileName, mediaFile);
   if (!mediaKind) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
@@ -1309,16 +1402,16 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   const fallbackType = mediaKind === "video" ? "video/mp4" : "audio/mpeg";
   const contentType = (mime.lookup(fileName) as string) || fallbackType;
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-  const estimatedBytes = Number(file.size || archive.originalSize || 0);
+  const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
   log(
     "preview",
     rangeHeader
-      ? `media start ${archive.id} file=${targetIndex} range=${rangeHeader}`
-      : `media start ${archive.id} file=${targetIndex}`
+      ? `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""} range=${rangeHeader}`
+      : `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""}`
   );
   const remuxTempDir = needsTsRemux
-    ? path.join(config.cacheDir, "preview_media", `${archive.id}_${targetIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+    ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${targetIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
 
   try {
@@ -1327,10 +1420,10 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${targetIndex}_${sanitizeName(fileName)}`);
       const mp4Path = path.join(remuxTempDir, `${targetIndex}_${sanitizeName(fileName)}.mp4`);
-      if (archive.isBundle) {
-        await restoreArchiveFileToFile(archive, targetIndex, sourcePath, config.cacheDir, config.masterKey);
+      if (mediaArchive.isBundle) {
+        await restoreArchiveFileToFile(mediaArchive, targetIndex, sourcePath, config.cacheDir, config.masterKey);
       } else {
-        await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
+        await restoreArchiveToFile(mediaArchive, sourcePath, config.cacheDir, config.masterKey);
       }
       const remuxed = await remuxTsToMp4(sourcePath, mp4Path);
       const servePath = remuxed ? mp4Path : sourcePath;
@@ -1344,20 +1437,20 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       await pipeline(fs.createReadStream(servePath), res);
       noteDownloadDone(stat.size || estimatedBytes);
     } else {
-      if (archive.isBundle) {
-        await streamArchiveFileToResponse(archive, targetIndex, res, config.cacheDir, config.masterKey, {
+      if (mediaArchive.isBundle) {
+        await streamArchiveFileToResponse(mediaArchive, targetIndex, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType
         });
       } else if (rangeHeader) {
-        await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
+        await streamArchiveRangeToResponse(mediaArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType
         });
       } else {
-        await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
+        await streamArchiveToResponse(mediaArchive, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType
@@ -1385,6 +1478,7 @@ apiRouter.get("/archives/:id/files/:index/subtitle.vtt", requireAuth, async (req
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1431,6 +1525,7 @@ apiRouter.get("/archives/:id/files/:index/thumbnail", requireAuth, async (req, r
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1482,6 +1577,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1569,6 +1665,7 @@ apiRouter.get("/archives/:id/parts", requireAuth, async (req, res) => {
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1618,6 +1715,7 @@ apiRouter.post("/archives/:id/parts/:index/refresh", requireAuth, async (req, re
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1647,6 +1745,7 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
   if (!archive) {
     return res.status(404).json({ error: "not_found" });
   }
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1701,6 +1800,7 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
 apiRouter.post("/archives/:id/files/:index/trash", requireAuth, async (req, res) => {
   const archive = await Archive.findById(req.params.id);
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1719,6 +1819,7 @@ apiRouter.post("/archives/:id/files/:index/trash", requireAuth, async (req, res)
   }
 
   archive.files[index].deletedAt = new Date();
+  await applyToLinkedTranscodes(archive, { deleteRequestedAt: new Date(), trashedAt: new Date() }, index);
   const remaining = activeBundleFileIndices(archive).length;
   if (remaining <= 0) {
     archive.trashedAt = new Date();
@@ -1733,13 +1834,16 @@ apiRouter.post("/archives/:id/files/:index/trash", requireAuth, async (req, res)
 apiRouter.post("/archives/:id/trash", requireAuth, async (req, res) => {
   const archive = await Archive.findById(req.params.id).lean();
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
+  const now = new Date();
   await Archive.updateOne(
     { _id: req.params.id },
-    { $set: { trashedAt: new Date(), deleteTotalParts: uniqueParts(archive.parts).length, deletedParts: 0 } }
+    { $set: { trashedAt: now, deleteTotalParts: uniqueParts(archive.parts).length, deletedParts: 0 } }
   );
+  await applyToLinkedTranscodes(archive, { trashedAt: now });
   log("api", `trash ${req.params.id}`);
   return res.json({ ok: true });
 });
@@ -1747,6 +1851,7 @@ apiRouter.post("/archives/:id/trash", requireAuth, async (req, res) => {
 apiRouter.post("/archives/:id/restore", requireAuth, async (req, res) => {
   const archive = await Archive.findById(req.params.id).lean();
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1754,6 +1859,7 @@ apiRouter.post("/archives/:id/restore", requireAuth, async (req, res) => {
     { _id: req.params.id },
     { $set: { trashedAt: null, deleteRequestedAt: null, deleting: false, deletedParts: 0 } }
   );
+  await applyToLinkedTranscodes(archive, { trashedAt: null, deleteRequestedAt: null, deleting: false, deletedParts: 0 });
   log("api", `restore ${req.params.id}`);
   return res.json({ ok: true });
 });
@@ -1761,13 +1867,16 @@ apiRouter.post("/archives/:id/restore", requireAuth, async (req, res) => {
 apiRouter.post("/archives/:id/purge", requireAuth, async (req, res) => {
   const archive = await Archive.findById(req.params.id).lean();
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
+  const now = new Date();
   await Archive.updateOne(
     { _id: req.params.id },
-    { $set: { deleteRequestedAt: new Date(), deleteTotalParts: uniqueParts(archive.parts).length, deletedParts: 0 } }
+    { $set: { deleteRequestedAt: now, deleteTotalParts: uniqueParts(archive.parts).length, deletedParts: 0 } }
   );
+  await applyToLinkedTranscodes(archive, { deleteRequestedAt: now });
   log("api", `purge ${req.params.id}`);
   return res.json({ ok: true });
 });
@@ -1776,6 +1885,7 @@ apiRouter.patch("/archives/:id/move", requireAuth, async (req, res) => {
   const { folderId } = req.body as { folderId?: string | null };
   const archive = await Archive.findById(req.params.id).lean();
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -1882,6 +1992,7 @@ apiRouter.delete("/folders/:id", requireAuth, async (req, res) => {
   const descendantIds = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
   const archives = await Archive.find({
     userId: folder.userId,
+    archiveKind: { $ne: "transcoded" },
     folderId: { $in: descendantIds },
     trashedAt: null,
     deletedAt: null
@@ -1897,6 +2008,12 @@ apiRouter.delete("/folders/:id", requireAuth, async (req, res) => {
   );
 
   const archiveIds = archives.map((a) => a._id);
+  if (archiveIds.length > 0) {
+    await Archive.updateMany(
+      { archiveKind: "transcoded", sourceArchiveId: { $in: archiveIds }, deletedAt: null },
+      { $set: { trashedAt: now } }
+    );
+  }
   await Share.deleteMany({
     userId: folder.userId,
     $or: [
@@ -1917,6 +2034,7 @@ apiRouter.get("/folders/:id/info", requireAuth, async (req, res) => {
   }
   const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
   const archives = await Archive.find({
+    archiveKind: { $ne: "transcoded" },
     folderId: { $in: descendants },
     trashedAt: null,
     deletedAt: null
@@ -1942,6 +2060,7 @@ apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {
 
   const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
   const archives = await Archive.find({
+    archiveKind: { $ne: "transcoded" },
     folderId: { $in: descendants },
     trashedAt: null,
     deletedAt: null
@@ -2038,6 +2157,7 @@ apiRouter.post("/shares", requireAuth, async (req, res) => {
   if (archiveId) {
     const archive = await Archive.findById(archiveId).lean();
     if (!archive) return res.status(404).json({ error: "not_found" });
+    if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
     if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
       return res.status(403).json({ error: "forbidden" });
     }
@@ -2084,7 +2204,7 @@ apiRouter.get("/shares", requireAuth, async (req, res) => {
 
   const archiveIds = shares.filter((s) => s.archiveId).map((s) => s.archiveId);
   const folderIds = shares.filter((s) => s.folderId).map((s) => s.folderId);
-  const archives = await Archive.find({ _id: { $in: archiveIds } })
+  const archives = await Archive.find({ _id: { $in: archiveIds }, archiveKind: { $ne: "transcoded" } })
     .select("displayName name status isBundle files.originalName files.name files.size files.detectedKind files.deletedAt")
     .lean();
   const folders = await Folder.find({ _id: { $in: folderIds } })
@@ -2154,6 +2274,7 @@ apiRouter.patch("/archives/:id/priority", requireAuth, async (req, res) => {
   const { priority } = req.body as { priority?: number };
   const archive = await Archive.findById(req.params.id);
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }
@@ -2176,6 +2297,7 @@ apiRouter.patch("/archives/:id/rename", requireAuth, async (req, res) => {
   const safeName = sanitizeFilename(name);
   const archive = await Archive.findById(req.params.id);
   if (!archive) return res.status(404).json({ error: "not_found" });
+  if (!ensurePrimaryArchive(archive, res)) return;
   if (req.session.role !== "admin" && archive.userId.toString() !== req.session.userId) {
     return res.status(403).json({ error: "forbidden" });
   }

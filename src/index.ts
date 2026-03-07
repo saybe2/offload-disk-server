@@ -22,6 +22,7 @@ import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
 import { startSubtitleWorker } from "./services/subtitleWorker.js";
+import { startTranscodeWorker } from "./services/transcodeWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
 import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
@@ -134,7 +135,8 @@ async function ensureAdminUser() {
     passwordHash: hash,
     role: "admin",
     quotaBytes: 0,
-    usedBytes: 0
+    usedBytes: 0,
+    transcodeCopiesEnabled: true
   });
 }
 
@@ -162,14 +164,25 @@ async function migrateArchives() {
       { priority: { $exists: false } },
       { priorityOverride: { $exists: false } },
       { retryCount: { $exists: false } },
-      { encryptionVersion: { $exists: false } }
+      { encryptionVersion: { $exists: false } },
+      { archiveKind: { $exists: false } },
+      { sourceArchiveId: { $exists: false } },
+      { sourceFileIndex: { $exists: false } }
     ]
   }).lean();
 
   for await (const doc of cursor) {
     const files = (doc.files || []).map((f: any) => ({
       ...f,
-      originalName: f.originalName || f.name || path.basename(f.path || "file")
+      originalName: f.originalName || f.name || path.basename(f.path || "file"),
+      transcode: {
+        archiveId: String(f?.transcode?.archiveId || ""),
+        status: f?.transcode?.status || null,
+        size: Number(f?.transcode?.size || 0),
+        contentType: String(f?.transcode?.contentType || ""),
+        updatedAt: f?.transcode?.updatedAt || null,
+        error: String(f?.transcode?.error || "")
+      }
     }));
 
     const firstName = files[0]?.originalName || doc.name || `file_${doc._id}`;
@@ -189,6 +202,9 @@ async function migrateArchives() {
           priorityOverride: doc.priorityOverride ?? false,
           retryCount: doc.retryCount ?? 0,
           encryptionVersion: doc.encryptionVersion ?? 1,
+          archiveKind: doc.archiveKind || "primary",
+          sourceArchiveId: doc.sourceArchiveId || null,
+          sourceFileIndex: Number.isInteger(doc.sourceFileIndex) ? doc.sourceFileIndex : null,
           deleteTotalParts: doc.deleteTotalParts ?? 0,
           deletedParts: doc.deletedParts ?? 0,
           ...(partsChanged ? { parts } : {})
@@ -196,6 +212,13 @@ async function migrateArchives() {
       }
     );
   }
+}
+
+async function migrateUsers() {
+  await User.updateMany(
+    { transcodeCopiesEnabled: { $exists: false } },
+    { $set: { transcodeCopiesEnabled: true } }
+  );
 }
 
 async function migrateParts() {
@@ -237,6 +260,7 @@ async function ensureCacheDirs() {
     path.join(config.cacheDir, "thumb_work"),
     path.join(config.cacheDir, "subtitles"),
     path.join(config.cacheDir, "subtitle_work"),
+    path.join(config.cacheDir, "transcode_work"),
     path.join(config.cacheDir, "preview_public"),
     path.join(config.cacheDir, "smb_read"),
     path.join(config.cacheDir, "smb_write")
@@ -255,12 +279,14 @@ async function main() {
   await migrateArchives();
   await migrateParts();
   await migrateFolders();
+  await migrateUsers();
   await initAnalyticsPersistence();
   await initMirrorSyncControl();
 
   startWorker();
   startThumbnailWorker();
   startSubtitleWorker();
+  startTranscodeWorker();
   startFuse();
   startCacheCleanup();
 

@@ -24,6 +24,7 @@ const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
 const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
 const navTrash = document.getElementById('navTrash');
+const transcodeCopiesToggle = document.getElementById('transcodeCopiesToggle');
 const sidebar = document.querySelector('.sidebar');
 const listTable = document.getElementById('listTable');
 const gridView = document.getElementById('gridView');
@@ -108,6 +109,7 @@ const VIEW_MODES = new Set(['list', 'tile', 'large']);
 let activeArchiveShares = new Map();
 let activeFolderShares = new Map();
 let lastStructureSignature = '';
+let transcodeToggleBusy = false;
 if (!VIEW_MODES.has(viewMode)) {
   viewMode = 'list';
 }
@@ -154,8 +156,13 @@ async function loadMe() {
   const me = await res.json();
   adminLink.style.display = me.role === 'admin' ? 'inline' : 'none';
   const usedGb = (me.usedBytes / (1024 * 1024 * 1024)).toFixed(2);
+  const transcodeGb = ((Number(me.transcodedUsedBytes || 0)) / (1024 * 1024 * 1024)).toFixed(2);
   const quotaGb = me.quotaBytes > 0 ? (me.quotaBytes / (1024 * 1024 * 1024)).toFixed(2) : 'unlimited';
-  quotaEl.textContent = `Used: ${usedGb} GB / Quota: ${quotaGb} GB`;
+  quotaEl.textContent = `Used: ${usedGb} GB / Quota: ${quotaGb} GB (converted: ${transcodeGb} GB)`;
+  if (transcodeCopiesToggle) {
+    transcodeCopiesToggle.checked = !!me.transcodeCopiesEnabled;
+    transcodeCopiesToggle.disabled = transcodeToggleBusy;
+  }
   return me;
 }
 
@@ -1100,6 +1107,16 @@ function getDownloadUrl(item) {
   return `/api/archives/${item.archive._id}/download`;
 }
 
+function hasReadyTranscode(item) {
+  const status = String(item?.file?.transcode?.status || '');
+  const archiveId = String(item?.file?.transcode?.archiveId || '');
+  return status === 'ready' && !!archiveId;
+}
+
+function getConvertedDownloadUrl(item) {
+  return `/api/archives/${item.archive._id}/files/${item.fileIndex}/download?transcoded=1`;
+}
+
 function buildCurrentFileItems() {
   return sortFileItems(filterItems(buildFileItems(archivesCache)));
 }
@@ -1113,7 +1130,7 @@ function buildStructureSignature() {
   const archiveBits = archivesCache
     .map((a) => {
       const files = (a.files || [])
-        .map((f, i) => `${i}:${f.originalName || f.name || ''}|${f.size || 0}|${f.deletedAt ? 1 : 0}|${f.detectedKind || ''}|${f.previewCount || 0}|${f.downloadCount || 0}`)
+        .map((f, i) => `${i}:${f.originalName || f.name || ''}|${f.size || 0}|${f.deletedAt ? 1 : 0}|${f.detectedKind || ''}|${f.previewCount || 0}|${f.downloadCount || 0}|${f.transcode?.status || ''}|${f.transcode?.archiveId || ''}`)
         .join(';');
       return [
         a._id,
@@ -1730,6 +1747,12 @@ function renderArchives() {
         link.href = getDownloadUrl(item);
         link.textContent = 'Download';
         actionTd.appendChild(link);
+        if (hasReadyTranscode(item)) {
+          const convertedLink = document.createElement('a');
+          convertedLink.href = getConvertedDownloadUrl(item);
+          convertedLink.textContent = 'Download converted';
+          actionTd.appendChild(convertedLink);
+        }
       }
       const delBtn = document.createElement('button');
       delBtn.textContent = item.isBundle ? 'Remove' : 'Delete';
@@ -2316,6 +2339,7 @@ async function openFileContextMenu(item, x, y) {
   const a = item.archive;
   const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
   const downloadUrl = getDownloadUrl(item);
+  const convertedDownloadUrl = getConvertedDownloadUrl(item);
   const bundleUrl = `/api/archives/${a._id}/download`;
   const key = `${a._id}:${item.fileIndex}`;
   if (!selectedItems.has(key)) {
@@ -2341,6 +2365,9 @@ async function openFileContextMenu(item, x, y) {
   if (a.status === 'ready') {
     const label = selectedItems.size > 1 ? 'Download this file' : 'Download';
     items.push({ label, onClick: async () => { location.href = downloadUrl; } });
+    if (hasReadyTranscode(item)) {
+      items.push({ label: 'Download converted', onClick: async () => { location.href = convertedDownloadUrl; } });
+    }
   } else {
     items.push({ label: 'Download', disabled: true });
   }
@@ -2391,6 +2418,7 @@ async function openFileContextMenu(item, x, y) {
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
       { label: 'Views', value: String((item.file && typeof item.file.previewCount === 'number') ? item.file.previewCount : 0) },
       { label: 'Downloads', value: String((item.file && typeof item.file.downloadCount === 'number') ? item.file.downloadCount : 0) },
+      { label: 'Converted copy', value: hasReadyTranscode(item) ? `ready (${formatSize(item.file?.transcode?.size || 0)})` : String(item.file?.transcode?.status || 'none') },
       { label: 'Parts', value: String(partsCount) },
       { label: 'Size', value: formatSize(item.file?.size ?? a.originalSize) },
       { label: 'Created', value: formatDate(a.createdAt) },
@@ -2811,6 +2839,29 @@ folderPrioritySave.addEventListener('click', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ priority: Number(folderPrioritySelect.value) })
   });
+});
+
+transcodeCopiesToggle?.addEventListener('change', async () => {
+  if (transcodeToggleBusy) return;
+  const enabled = !!transcodeCopiesToggle.checked;
+  transcodeToggleBusy = true;
+  transcodeCopiesToggle.disabled = true;
+  try {
+    const res = await fetch('/api/me/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transcodeCopiesEnabled: enabled })
+    });
+    if (!res.ok) {
+      throw new Error('save_failed');
+    }
+    await loadMe();
+  } catch (err) {
+    transcodeCopiesToggle.checked = !enabled;
+  } finally {
+    transcodeToggleBusy = false;
+    transcodeCopiesToggle.disabled = false;
+  }
 });
 
 logoutBtn.addEventListener('click', async () => {

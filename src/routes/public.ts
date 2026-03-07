@@ -31,6 +31,7 @@ import {
 import { remuxTsToMp4 } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isMediaPreviewSupported, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
+import { findReadyTranscodeArchive } from "../services/transcodes.js";
 import { log } from "../logger.js";
 import { noteDownloadDone, noteDownloadError, noteDownloadStarted } from "../services/analytics.js";
 
@@ -59,10 +60,27 @@ function isFileDeleted(file: any) {
   return !!file?.deletedAt;
 }
 
+function isTranscodedArchive(archive: any) {
+  return String(archive?.archiveKind || "primary") === "transcoded";
+}
+
+function getPreviewMediaKind(fileName: string, file: any) {
+  const direct = getMediaKind(fileName, file?.detectedKind);
+  if (direct) return direct;
+  const ext = path.extname(fileName).toLowerCase();
+  const label = String(file?.detectedTypeLabel || "").toLowerCase();
+  const size = Number(file?.size || 0);
+  if (ext === ".ts" && (label.includes("video") || size > 512 * 1024)) {
+    return "video" as const;
+  }
+  return null;
+}
+
 function isPreviewSupportedForFile(archive: any, file: any) {
   if (!file || isFileDeleted(file)) return false;
+  if (String(file?.transcode?.status || "") === "ready" && String(file?.transcode?.archiveId || "")) return true;
   const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
-  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  const mediaKind = getPreviewMediaKind(fileName, file);
   if (mediaKind) return isMediaPreviewSupported(fileName, mediaKind);
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
@@ -109,6 +127,7 @@ async function resolveArchiveByShare(token: string, archiveId?: string): Promise
     }
     const archive = await Archive.findById(share.archiveId);
     if (!archive) return { status: 404, error: "not_found" as const };
+    if (isTranscodedArchive(archive)) return { status: 404, error: "not_found" as const };
     return { share, archive };
   }
 
@@ -119,6 +138,7 @@ async function resolveArchiveByShare(token: string, archiveId?: string): Promise
     const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
     const archive = await Archive.findOne({
       _id: archiveId,
+      archiveKind: { $ne: "transcoded" },
       folderId: { $in: descendants },
       deletedAt: null,
       trashedAt: null
@@ -138,6 +158,7 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
   if (share.type === "archive" && share.archiveId) {
     const archive = await Archive.findById(share.archiveId).lean();
     if (!archive) return res.status(404).json({ error: "not_found" });
+    if (isTranscodedArchive(archive)) return res.status(404).json({ error: "not_found" });
     return res.json({
       type: "archive",
       name: archive.displayName || archive.name,
@@ -164,6 +185,7 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
     if (!folder) return res.status(404).json({ error: "not_found" });
     const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
     const archives = await Archive.find({
+      archiveKind: { $ne: "transcoded" },
       folderId: { $in: descendants },
       deletedAt: null,
       trashedAt: null
@@ -316,8 +338,12 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
     return res.status(404).json({ error: "file_not_found" });
   }
 
-  const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
-  const mediaKind = getMediaKind(fileName, file.detectedKind);
+  const preferTranscoded = req.query.transcoded !== "0";
+  const transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, fileIndex) : null;
+  const mediaArchive = transcodedArchive || archive;
+  const mediaFile = transcodedArchive ? mediaArchive.files?.[0] : file;
+  const fileName = (mediaFile?.originalName || mediaFile?.name || mediaArchive.downloadName || mediaArchive.name).replace(/[\\/]/g, "_");
+  const mediaKind = getPreviewMediaKind(fileName, mediaFile);
   if (!mediaKind) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
@@ -329,10 +355,10 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   const needsTsRemux = mediaKind === "video" && ext === ".ts";
   const contentType = (mime.lookup(fileName) as string) || (mediaKind === "video" ? "video/mp4" : "audio/mpeg");
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-  const estimatedBytes = Number(file.size || archive.originalSize || 0);
+  const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
   const remuxTempDir = needsTsRemux
-    ? path.join(config.cacheDir, "preview_media", `${archive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
+    ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
 
   try {
@@ -341,10 +367,10 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}`);
       const mp4Path = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}.mp4`);
-      if (archive.isBundle) {
-        await restoreArchiveFileToFile(archive, fileIndex, sourcePath, config.cacheDir, config.masterKey);
+      if (mediaArchive.isBundle) {
+        await restoreArchiveFileToFile(mediaArchive, fileIndex, sourcePath, config.cacheDir, config.masterKey);
       } else {
-        await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
+        await restoreArchiveToFile(mediaArchive, sourcePath, config.cacheDir, config.masterKey);
       }
       const remuxed = await remuxTsToMp4(sourcePath, mp4Path);
       const servePath = remuxed ? mp4Path : sourcePath;
@@ -357,20 +383,20 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       await pipeline(fs.createReadStream(servePath), res);
       noteDownloadDone(stat.size || estimatedBytes);
     } else {
-      if (archive.isBundle) {
-        await streamArchiveFileToResponse(archive, fileIndex, res, config.cacheDir, config.masterKey, {
+      if (mediaArchive.isBundle) {
+        await streamArchiveFileToResponse(mediaArchive, fileIndex, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType
         });
       } else if (rangeHeader) {
-        await streamArchiveRangeToResponse(archive, rangeHeader, res, config.cacheDir, config.masterKey, {
+        await streamArchiveRangeToResponse(mediaArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType
         });
       } else {
-        await streamArchiveToResponse(archive, res, config.cacheDir, config.masterKey, {
+        await streamArchiveToResponse(mediaArchive, res, config.cacheDir, config.masterKey, {
           disposition: "inline",
           fileName,
           contentType

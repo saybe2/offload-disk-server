@@ -5,6 +5,7 @@ import { User } from "../models/User.js";
 import { Folder } from "../models/Folder.js";
 import { config, computed } from "../config.js";
 import { queueArchiveThumbnails } from "./thumbnailWorker.js";
+import { queueArchiveSubtitles } from "./subtitleWorker.js";
 import { detectStoredFileType } from "./fileType.js";
 
 function sanitizeName(name: string) {
@@ -50,6 +51,7 @@ export async function createArchiveFromLocalFile(params: {
     name: archiveName,
     displayName: safeName,
     downloadName,
+    archiveKind: "primary",
     isBundle: false,
     encryptionVersion: 2,
     folderId: folderRef,
@@ -78,6 +80,7 @@ export async function createArchiveFromLocalFile(params: {
 
   await User.updateOne({ _id: userId }, { $inc: { usedBytes: stat.size } });
   queueArchiveThumbnails(archive.id);
+  queueArchiveSubtitles(archive.id);
 
   return archive;
 }
