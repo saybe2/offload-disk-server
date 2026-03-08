@@ -385,7 +385,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
     : null;
 
   try {
-    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    void bumpPreviewCount(archive.id, fileIndex, `share:${req.params.token}`).catch(() => undefined);
     if (needsTsRemux && remuxTempDir) {
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}`);
@@ -666,7 +666,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     res.setHeader("Content-Length", body.length);
     res.setHeader("Content-Disposition", inlineContentDisposition(fileName));
     res.setHeader("Cache-Control", "private, max-age=60");
-    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    void bumpPreviewCount(archive.id, fileIndex, `share:${req.params.token}`).catch(() => undefined);
     noteDownloadDone(body.length || fileSize);
     notePreviewDone();
     return res.end(body);

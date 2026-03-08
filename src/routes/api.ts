@@ -1443,7 +1443,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
     : null;
 
   try {
-    void bumpPreviewCount(archive.id, targetIndex).catch(() => undefined);
+    void bumpPreviewCount(archive.id, targetIndex, `user:${req.session.userId}`).catch(() => undefined);
     if ((needsTsRemux || needsAudioTrackRemux) && remuxTempDir) {
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${targetIndex}_${sanitizeName(fileName)}`);
@@ -1735,7 +1735,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     res.setHeader("Content-Length", body.length);
     res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodedName}`);
     res.setHeader("Cache-Control", "private, max-age=60");
-    void bumpPreviewCount(archive.id, fileIndex).catch(() => undefined);
+    void bumpPreviewCount(archive.id, fileIndex, `user:${req.session.userId}`).catch(() => undefined);
     noteDownloadDone(body.length || fileSize);
     notePreviewDone();
     return res.end(body);
