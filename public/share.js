@@ -293,7 +293,7 @@ async function openPreviewModal(item) {
   sharePreviewModal.classList.remove('hidden');
 
   const mediaKind = getMediaKind(item.name, item.detectedKind);
-  if (mediaKind && isMediaPreviewSupported(item.name, mediaKind) && item.mediaUrl) {
+  if (mediaKind && item.mediaUrl && (item.forceMediaPreview || isMediaPreviewSupported(item.name, mediaKind))) {
     sharePreviewState.classList.add('hidden');
     if (mediaKind === 'video') {
       sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
@@ -485,6 +485,7 @@ async function loadShare() {
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media` : null,
+          forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name, mediaKind)),
           subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt` : null,
           subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle-tracks` : null,
           previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}` : null
@@ -507,6 +508,7 @@ async function loadShare() {
         downloadUrl: isReady ? downloadUrl : null,
         thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
         mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
+        forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),
         subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
         subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
         previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null,
@@ -543,6 +545,7 @@ async function loadShare() {
             mediaUrl: (isReady && canPreview && mediaKind)
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media`
               : null,
+            forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name, mediaKind)),
             subtitleUrl: (isReady && canPreview && mediaKind === 'video')
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt`
               : null,
@@ -571,6 +574,7 @@ async function loadShare() {
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
+          forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),
           subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
           subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
           previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
