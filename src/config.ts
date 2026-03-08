@@ -54,8 +54,10 @@ const defaultProxyTargets = [
 ];
 
 const defaultSubtitleVideoCodecs = ["h264", "hevc", "vp9", "av1", "mpeg4", "mjpeg", "vp8", "theora", "prores"];
-const defaultTranscodeSkipVideoExt = [".mp4", ".m4v", ".webm"];
-const defaultTranscodeSkipAudioExt = [".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus"];
+const defaultTranscodeSkipVideoExt: string[] = [];
+const defaultTranscodeSkipAudioExt: string[] = [];
+const defaultTranscodeCompatibleVideoCodecs = ["h264", "hevc", "av1", "vp9"];
+const defaultTranscodeCompatibleAudioCodecs = ["aac", "mp3", "opus", "vorbis", "flac"];
 
 export const config = {
   port: toNumber(process.env.PORT, 3000),
@@ -140,6 +142,8 @@ export const config = {
   transcodeAudioBitrateKbps: Math.max(64, toNumber(process.env.TRANSCODE_AUDIO_BITRATE_KBPS, 160)),
   transcodeSkipVideoExt: toList(process.env.TRANSCODE_SKIP_VIDEO_EXT, defaultTranscodeSkipVideoExt),
   transcodeSkipAudioExt: toList(process.env.TRANSCODE_SKIP_AUDIO_EXT, defaultTranscodeSkipAudioExt),
+  transcodeCompatibleVideoCodecs: toList(process.env.TRANSCODE_COMPATIBLE_VIDEO_CODECS, defaultTranscodeCompatibleVideoCodecs),
+  transcodeCompatibleAudioCodecs: toList(process.env.TRANSCODE_COMPATIBLE_AUDIO_CODECS, defaultTranscodeCompatibleAudioCodecs),
   mediaPreviewVideoCodecs: toList(process.env.MEDIA_PREVIEW_VIDEO_CODECS, defaultSubtitleVideoCodecs),
   smbEnabled: (process.env.SMB_ENABLED || "false") === "true",
   smbMount: process.env.SMB_MOUNT || "/home/container/offload_mount",

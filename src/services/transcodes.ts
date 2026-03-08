@@ -146,6 +146,81 @@ function runFfmpeg(args: string[]) {
   });
 }
 
+type ProbedStream = {
+  codec_type?: string;
+  codec_name?: string;
+};
+
+async function probeMediaStreams(inputPath: string) {
+  return new Promise<ProbedStream[]>((resolve, reject) => {
+    const args = ["-v", "error", "-show_streams", "-of", "json", inputPath];
+    const proc = spawn("ffprobe", args, { windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (chunk) => {
+      stdout += Buffer.from(chunk).toString("utf8");
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += Buffer.from(chunk).toString("utf8");
+    });
+    proc.on("error", (err) => {
+      reject(new Error(`ffprobe_spawn_failed:${toErrorMessage(err)}`));
+    });
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffprobe_failed:${code}:${stderr.slice(-500)}`));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout || "{}") as { streams?: ProbedStream[] };
+        resolve(Array.isArray(parsed.streams) ? parsed.streams : []);
+      } catch (err) {
+        reject(new Error(`ffprobe_parse_failed:${toErrorMessage(err)}`));
+      }
+    });
+  });
+}
+
+async function evaluateCompatibility(inputPath: string, mediaKind: "video" | "audio") {
+  let streams: ProbedStream[] = [];
+  try {
+    streams = await probeMediaStreams(inputPath);
+  } catch (err) {
+    const message = toErrorMessage(err);
+    if (/invalid data found when processing input/i.test(message)) {
+      return { unsupported: true, compatible: false, reason: "unsupported_media_content" };
+    }
+    return { unsupported: false, compatible: false, reason: "" };
+  }
+
+  const videoCodecs = streams
+    .filter((stream) => String(stream.codec_type || "").toLowerCase() === "video")
+    .map((stream) => String(stream.codec_name || "").toLowerCase())
+    .filter(Boolean);
+  const audioCodecs = streams
+    .filter((stream) => String(stream.codec_type || "").toLowerCase() === "audio")
+    .map((stream) => String(stream.codec_name || "").toLowerCase())
+    .filter(Boolean);
+
+  if (mediaKind === "video") {
+    if (videoCodecs.length === 0) {
+      return { unsupported: true, compatible: false, reason: "unsupported_media_content" };
+    }
+    const videoOk = videoCodecs.every((codec) => config.transcodeCompatibleVideoCodecs.includes(codec));
+    const audioOk = audioCodecs.every((codec) => config.transcodeCompatibleAudioCodecs.includes(codec));
+    return { unsupported: false, compatible: videoOk && audioOk, reason: "already_compatible_codecs" };
+  }
+
+  if (audioCodecs.length === 0) {
+    return { unsupported: true, compatible: false, reason: "unsupported_media_content" };
+  }
+  if (videoCodecs.length > 0) {
+    return { unsupported: false, compatible: false, reason: "" };
+  }
+  const audioOnlyOk = audioCodecs.every((codec) => config.transcodeCompatibleAudioCodecs.includes(codec));
+  return { unsupported: false, compatible: audioOnlyOk, reason: "already_compatible_codecs" };
+}
+
 async function transcodeToOutput(inputPath: string, outputPath: string, mediaKind: "video" | "audio") {
   if (!ffmpegBin) {
     throw new Error("ffmpeg_missing");
@@ -229,6 +304,28 @@ async function createTranscodedArchive(
     await updateSourceTranscodeState(sourceId, fileIndex, {
       status: "skipped",
       error: "already_compatible",
+      archiveId: "",
+      size: 0,
+      contentType: ""
+    });
+    return null;
+  }
+
+  const compatibility = await evaluateCompatibility(sourcePath, mediaKind);
+  if (compatibility.unsupported) {
+    await updateSourceTranscodeState(sourceId, fileIndex, {
+      status: "skipped",
+      error: compatibility.reason || "unsupported_media_content",
+      archiveId: "",
+      size: 0,
+      contentType: ""
+    });
+    return null;
+  }
+  if (compatibility.compatible) {
+    await updateSourceTranscodeState(sourceId, fileIndex, {
+      status: "skipped",
+      error: compatibility.reason || "already_compatible_codecs",
       archiveId: "",
       size: 0,
       contentType: ""

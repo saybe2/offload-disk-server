@@ -33,6 +33,9 @@ function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
   const status = String(file?.transcode?.status || "");
   const error = String(file?.transcode?.error || "");
   const archiveId = String(file?.transcode?.archiveId || "");
+  if (status === "error" && ["unsupported_media_content", "already_compatible_codecs"].includes(error)) {
+    return false;
+  }
   if (
     status === "ready" ||
     status === "queued" ||
