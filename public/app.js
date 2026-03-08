@@ -3138,7 +3138,6 @@ function renderStorageDetails() {
   const snapshot = lastQuotaSnapshot;
   const rows = [
     { label: 'Used total', value: formatSize(snapshot.totalUsedBytes) },
-    { label: 'Usage', value: `${snapshot.usagePercent.toFixed(1)}%` },
     { label: 'Primary files', value: formatSize(snapshot.primaryBytes) },
     { label: 'Converted copies', value: formatSize(snapshot.convertedBytes) },
     {
@@ -3148,6 +3147,9 @@ function renderStorageDetails() {
         : '0.0%'
     }
   ];
+  if (snapshot.finiteQuota) {
+    rows.splice(1, 0, { label: 'Usage', value: `${snapshot.usagePercent.toFixed(1)}%` });
+  }
   if (snapshot.finiteQuota) {
     rows.push({ label: 'Free', value: formatSize(snapshot.freeBytes) });
     rows.push({ label: 'Quota', value: formatSize(snapshot.quotaBytes) });

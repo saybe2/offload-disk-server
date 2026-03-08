@@ -29,10 +29,14 @@ import {
   listArchiveSubtitleTracks,
   supportsSubtitle
 } from "../services/subtitles.js";
-import { remuxTsToMp4 } from "../services/videoPreview.js";
+import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isMediaPreviewSupported, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
-import { findReadyTranscodeArchive } from "../services/transcodes.js";
+import {
+  ensureArchiveFileTranscodeForAudioTrack,
+  findReadyTranscodeArchive,
+  findReadyTranscodeArchiveByAudioTrack
+} from "../services/transcodes.js";
 import { log } from "../logger.js";
 import {
   noteDownloadDone,
@@ -455,7 +459,33 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   }
 
   const preferTranscoded = req.query.transcoded !== "0";
-  const transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, fileIndex) : null;
+  const audioTrackRaw = req.query.audioTrack;
+  const requestedAudioTrack =
+    audioTrackRaw == null || audioTrackRaw === ""
+      ? null
+      : Number.parseInt(String(audioTrackRaw), 10);
+  if (requestedAudioTrack != null && (!Number.isInteger(requestedAudioTrack) || requestedAudioTrack < 0)) {
+    return res.status(400).json({ error: "bad_audio_track" });
+  }
+
+  let transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, fileIndex) : null;
+  if (preferTranscoded && requestedAudioTrack != null && requestedAudioTrack > 0) {
+    let variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, fileIndex, requestedAudioTrack);
+    if (!variantArchive) {
+      try {
+        await ensureArchiveFileTranscodeForAudioTrack(archive, fileIndex, requestedAudioTrack);
+        variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, fileIndex, requestedAudioTrack);
+      } catch (err) {
+        log(
+          "transcode",
+          `public audio variant fallback ${archive.id} file=${fileIndex} track=${requestedAudioTrack} ${(err as Error).message}`
+        );
+      }
+    }
+    if (variantArchive) {
+      transcodedArchive = variantArchive;
+    }
+  }
   const mediaArchive = transcodedArchive || archive;
   const mediaFile = transcodedArchive ? mediaArchive.files?.[0] : file;
   const fileName = (mediaFile?.originalName || mediaFile?.name || mediaArchive.downloadName || mediaArchive.name).replace(/[\\/]/g, "_");
@@ -469,18 +499,19 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
 
   const ext = path.extname(fileName).toLowerCase();
   const needsTsRemux = mediaKind === "video" && ext === ".ts";
+  const needsAudioTrackRemux = mediaKind === "video" && requestedAudioTrack != null && requestedAudioTrack > 0;
   const contentType = (mime.lookup(fileName) as string) || (mediaKind === "video" ? "video/mp4" : "audio/mpeg");
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
   notePreviewStarted(estimatedBytes);
-  const remuxTempDir = needsTsRemux
+  const remuxTempDir = (needsTsRemux || needsAudioTrackRemux)
     ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
 
   try {
     void bumpPreviewCount(archive.id, fileIndex, `share:${req.params.token}`).catch(() => undefined);
-    if (needsTsRemux && remuxTempDir) {
+    if ((needsTsRemux || needsAudioTrackRemux) && remuxTempDir) {
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}`);
       const mp4Path = path.join(remuxTempDir, `${fileIndex}_${sanitizeFilename(fileName)}.mp4`);
@@ -489,7 +520,12 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
       } else {
         await restoreArchiveToFile(mediaArchive, sourcePath, config.cacheDir, config.masterKey);
       }
-      const remuxed = await remuxTsToMp4(sourcePath, mp4Path);
+      const remuxed = needsAudioTrackRemux
+        ? await remuxVideoAudioTrack(sourcePath, mp4Path, requestedAudioTrack || 0)
+        : await remuxTsToMp4(sourcePath, mp4Path);
+      if (needsAudioTrackRemux && !remuxed) {
+        return res.status(404).json({ error: "audio_track_unavailable" });
+      }
       const servePath = remuxed ? mp4Path : sourcePath;
       const serveType = remuxed ? "video/mp4" : "video/mp2t";
       const stat = await fs.promises.stat(servePath);

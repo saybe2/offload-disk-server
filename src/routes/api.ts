@@ -60,7 +60,12 @@ import {
 import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
-import { findReadyTranscodeArchive, listLinkedTranscodeArchiveIds } from "../services/transcodes.js";
+import {
+  ensureArchiveFileTranscodeForAudioTrack,
+  findReadyTranscodeArchive,
+  findReadyTranscodeArchiveByAudioTrack,
+  listLinkedTranscodeArchiveIds
+} from "../services/transcodes.js";
 import {
   noteDownloadDone,
   noteDownloadError,
@@ -1398,7 +1403,34 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
     return res.status(404).json({ error: "file_not_found" });
   }
   const preferTranscoded = req.query.transcoded !== "0";
-  const transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, targetIndex) : null;
+  const audioTrackRaw = req.query.audioTrack;
+  const requestedAudioTrack =
+    audioTrackRaw == null || audioTrackRaw === ""
+      ? null
+      : Number.parseInt(String(audioTrackRaw), 10);
+  if (requestedAudioTrack != null && (!Number.isInteger(requestedAudioTrack) || requestedAudioTrack < 0)) {
+    return res.status(400).json({ error: "bad_audio_track" });
+  }
+
+  let transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, targetIndex) : null;
+  if (preferTranscoded && requestedAudioTrack != null && requestedAudioTrack > 0) {
+    let variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, targetIndex, requestedAudioTrack);
+    if (!variantArchive) {
+      try {
+        await ensureArchiveFileTranscodeForAudioTrack(archive, targetIndex, requestedAudioTrack);
+        variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, targetIndex, requestedAudioTrack);
+      } catch (err) {
+        log(
+          "transcode",
+          `audio variant fallback ${archive.id} file=${targetIndex} track=${requestedAudioTrack} ${(err as Error).message}`
+        );
+      }
+    }
+    if (variantArchive) {
+      transcodedArchive = variantArchive;
+    }
+  }
+
   const mediaArchive = transcodedArchive || archive;
   const mediaFile = transcodedArchive ? mediaArchive.files?.[0] : file;
   const fileName = (
@@ -1413,14 +1445,6 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   }
   if (!isMediaPreviewSupported(fileName, mediaKind)) {
     return res.status(415).json({ error: "unsupported_media_type" });
-  }
-  const audioTrackRaw = req.query.audioTrack;
-  const requestedAudioTrack =
-    audioTrackRaw == null || audioTrackRaw === ""
-      ? null
-      : Number.parseInt(String(audioTrackRaw), 10);
-  if (requestedAudioTrack != null && (!Number.isInteger(requestedAudioTrack) || requestedAudioTrack < 0)) {
-    return res.status(400).json({ error: "bad_audio_track" });
   }
 
   const ext = path.extname(fileName).toLowerCase();

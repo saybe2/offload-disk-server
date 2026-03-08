@@ -168,24 +168,53 @@ async function migrateArchives() {
       { archiveKind: { $exists: false } },
       { sourceArchiveId: { $exists: false } },
       { sourceFileIndex: { $exists: false } },
+      { transcodeAudioTrack: { $exists: false } },
+      { "files.transcode.variants": { $exists: false } },
       { "files.subtitleTracks": { $exists: false } }
     ]
   }).lean();
 
   for await (const doc of cursor) {
-    const files = (doc.files || []).map((f: any) => ({
-      ...f,
-      originalName: f.originalName || f.name || path.basename(f.path || "file"),
-      subtitleTracks: Array.isArray(f?.subtitleTracks) ? f.subtitleTracks : [],
-      transcode: {
-        archiveId: String(f?.transcode?.archiveId || ""),
-        status: f?.transcode?.status || null,
-        size: Number(f?.transcode?.size || 0),
-        contentType: String(f?.transcode?.contentType || ""),
-        updatedAt: f?.transcode?.updatedAt || null,
-        error: String(f?.transcode?.error || "")
+    const files = (doc.files || []).map((f: any) => {
+      const normalizedVariants = Array.isArray(f?.transcode?.variants)
+        ? f.transcode.variants
+            .map((variant: any) => ({
+              audioTrack: Number(variant?.audioTrack),
+              archiveId: String(variant?.archiveId || ""),
+              status: variant?.status || null,
+              size: Number(variant?.size || 0),
+              contentType: String(variant?.contentType || ""),
+              updatedAt: variant?.updatedAt || null,
+              error: String(variant?.error || "")
+            }))
+            .filter((variant: any) => Number.isInteger(variant.audioTrack) && variant.audioTrack >= 0)
+        : [];
+      if (normalizedVariants.length === 0 && String(f?.transcode?.archiveId || "")) {
+        normalizedVariants.push({
+          audioTrack: 0,
+          archiveId: String(f?.transcode?.archiveId || ""),
+          status: f?.transcode?.status || null,
+          size: Number(f?.transcode?.size || 0),
+          contentType: String(f?.transcode?.contentType || ""),
+          updatedAt: f?.transcode?.updatedAt || null,
+          error: String(f?.transcode?.error || "")
+        });
       }
-    }));
+      return {
+        ...f,
+        originalName: f.originalName || f.name || path.basename(f.path || "file"),
+        subtitleTracks: Array.isArray(f?.subtitleTracks) ? f.subtitleTracks : [],
+        transcode: {
+          archiveId: String(f?.transcode?.archiveId || ""),
+          status: f?.transcode?.status || null,
+          size: Number(f?.transcode?.size || 0),
+          contentType: String(f?.transcode?.contentType || ""),
+          updatedAt: f?.transcode?.updatedAt || null,
+          error: String(f?.transcode?.error || ""),
+          variants: normalizedVariants
+        }
+      };
+    });
 
     const firstName = files[0]?.originalName || doc.name || `file_${doc._id}`;
     const displayName = doc.displayName || (doc.isBundle ? `Bundle (${files.length || 1} files)` : firstName);
@@ -207,6 +236,7 @@ async function migrateArchives() {
           archiveKind: doc.archiveKind || "primary",
           sourceArchiveId: doc.sourceArchiveId || null,
           sourceFileIndex: Number.isInteger(doc.sourceFileIndex) ? doc.sourceFileIndex : null,
+          transcodeAudioTrack: Number.isInteger((doc as any).transcodeAudioTrack) ? (doc as any).transcodeAudioTrack : null,
           deleteTotalParts: doc.deleteTotalParts ?? 0,
           deletedParts: doc.deletedParts ?? 0,
           ...(partsChanged ? { parts } : {})
@@ -220,6 +250,19 @@ async function migrateUsers() {
   await User.updateMany(
     { transcodeCopiesEnabled: { $exists: false } },
     { $set: { transcodeCopiesEnabled: true } }
+  );
+}
+
+async function migrateTranscodeAudioTracks() {
+  await Archive.updateMany(
+    {
+      archiveKind: "transcoded",
+      $or: [
+        { transcodeAudioTrack: { $exists: false } },
+        { transcodeAudioTrack: null }
+      ]
+    },
+    { $set: { transcodeAudioTrack: 0 } }
   );
 }
 
@@ -282,6 +325,7 @@ async function main() {
   await migrateParts();
   await migrateFolders();
   await migrateUsers();
+  await migrateTranscodeAudioTracks();
   await initAnalyticsPersistence();
   await initMirrorSyncControl();
 
