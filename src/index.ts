@@ -318,9 +318,13 @@ async function main() {
       : "disabled"
   );
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     log("server", `listening on ${config.port}`);
   });
+  // Allow very large uploads without a 5-minute hard cut-off.
+  server.requestTimeout = 0;
+  // Keep node from killing long-lived upload sockets due inactivity timeout.
+  server.timeout = 0;
 }
 
 main().catch((err) => {
