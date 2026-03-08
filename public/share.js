@@ -309,14 +309,18 @@ async function openPreviewModal(item) {
     if (mediaKind === 'video') {
       sharePreviewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
       sharePreviewVideo.src = item.mediaUrl;
-      const tracks = await fetchShareSubtitleTracks(item.subtitleTracksUrl || '');
-      if (item.subtitleUrl) {
-        attachSubtitleTracks(sharePreviewVideo, item.subtitleUrl, tracks);
-      } else {
-        attachSubtitleTrack(sharePreviewVideo, '', 'Track 1');
-      }
       sharePreviewVideo.classList.remove('hidden');
       sharePreviewVideo.load();
+      void (async () => {
+        const tracks = await fetchShareSubtitleTracks(item.subtitleTracksUrl || '');
+        const activeSrc = sharePreviewVideo.getAttribute('src') || '';
+        if (activeSrc !== item.mediaUrl) return;
+        if (item.subtitleUrl) {
+          attachSubtitleTracks(sharePreviewVideo, item.subtitleUrl, tracks);
+        } else {
+          attachSubtitleTrack(sharePreviewVideo, '', 'Track 1');
+        }
+      })();
       return;
     }
     sharePreviewAudio.onerror = () => resetPreviewContent('Failed to load media preview');
