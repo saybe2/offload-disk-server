@@ -61,6 +61,20 @@ function nextRetryDelayMs(message: string) {
   return config.transcodeRetryMs;
 }
 
+function isPermanentTranscodeFailure(message: string) {
+  const lower = String(message || "").toLowerCase();
+  if (lower.includes("ffmpeg_failed") && lower.includes("invalid data found when processing input")) {
+    return true;
+  }
+  if (lower.includes("ffmpeg_failed") && lower.includes("error opening input file")) {
+    return true;
+  }
+  if (lower.includes("source_archive_id_missing") || lower.includes("source_user_id_missing")) {
+    return true;
+  }
+  return false;
+}
+
 export function queueArchiveTranscodes(archiveId: string) {
   if (!archiveId) return;
   const key = String(archiveId);
@@ -140,6 +154,21 @@ async function processArchive(archiveId: string) {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (isPermanentTranscodeFailure(message)) {
+        await Archive.updateOne(
+          { _id: archiveId },
+          {
+            $set: {
+              [`files.${fileIndex}.transcode.status`]: "skipped",
+              [`files.${fileIndex}.transcode.error`]: "unsupported_media_content",
+              [`files.${fileIndex}.transcode.archiveId`]: "",
+              [`files.${fileIndex}.transcode.updatedAt`]: new Date()
+            }
+          }
+        );
+        log(`skip ${archiveId} file=${fileIndex} unsupported_media_content`);
+        continue;
+      }
       log(`error ${archiveId} file=${fileIndex} ${message}`);
       retryAt.set(archiveId, Date.now() + nextRetryDelayMs(message));
       queued.add(archiveId);
