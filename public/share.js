@@ -75,6 +75,17 @@ function isMediaPreviewSupported(fileName, mediaKind) {
   return mediaKind === 'video' && fileExtension(fileName) === '.ts';
 }
 
+function hasReadyTranscode(file) {
+  const status = String(file?.transcode?.status || '');
+  const archiveId = String(file?.transcode?.archiveId || '');
+  return status === 'ready' && !!archiveId;
+}
+
+function getConvertedDownloadUrl(downloadUrl) {
+  if (!downloadUrl) return '';
+  return `${downloadUrl}${downloadUrl.includes('?') ? '&' : '?'}transcoded=1`;
+}
+
 function supportsThumb(name) {
   const ext = fileExtension(name);
   return thumbImageExt.has(ext) || thumbVideoExt.has(ext);
@@ -426,6 +437,12 @@ function addRow(item) {
     link.href = item.downloadUrl;
     link.textContent = 'Download';
     actionTd.appendChild(link);
+    if (item.convertedDownloadUrl) {
+      const convertedLink = document.createElement('a');
+      convertedLink.href = item.convertedDownloadUrl;
+      convertedLink.textContent = 'Download converted';
+      actionTd.appendChild(convertedLink);
+    }
   } else if (item.status) {
     actionTd.textContent = item.status;
   }
@@ -483,6 +500,7 @@ async function loadShare() {
           date: archive.createdAt,
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}` : null,
+          convertedDownloadUrl: (isReady && hasReadyTranscode(file)) ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/download?fileIndex=${fileIndex}`) : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media` : null,
           forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name, mediaKind)),
@@ -506,6 +524,7 @@ async function loadShare() {
         date: archive.createdAt,
         status: archive.status,
         downloadUrl: isReady ? downloadUrl : null,
+        convertedDownloadUrl: (isReady && hasReadyTranscode(file)) ? getConvertedDownloadUrl(downloadUrl) : null,
         thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
         mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
         forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),
@@ -538,6 +557,9 @@ async function loadShare() {
             status: archive.status,
             downloadUrl: isReady
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`
+              : null,
+            convertedDownloadUrl: (isReady && hasReadyTranscode(file))
+              ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`)
               : null,
             thumbUrl: isReady
               ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
@@ -572,6 +594,7 @@ async function loadShare() {
           date: archive.createdAt,
           status: archive.status,
           downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
+          convertedDownloadUrl: (isReady && hasReadyTranscode(file)) ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download`) : null,
           thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
           mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
           forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),

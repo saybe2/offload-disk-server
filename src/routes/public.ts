@@ -249,24 +249,71 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
   if (archive.status !== "ready") return res.status(409).json({ error: "not_ready" });
 
   try {
-    const estimatedBytes = estimateArchiveDownloadBytes(archive);
-    noteDownloadStarted(estimatedBytes);
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-    const canUseRange = !!rangeHeader && !archive.isBundle;
+    const wantsTranscoded = req.query.transcoded === "1";
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
       if (!file || isFileDeleted(file)) {
         return res.status(404).json({ error: "file_not_found" });
       }
-      await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
+      const transcodedArchive = wantsTranscoded ? await findReadyTranscodeArchive(archive, fileIndex as number) : null;
+      if (wantsTranscoded && !transcodedArchive) {
+        return res.status(404).json({ error: "transcoded_not_ready" });
+      }
+      const streamArchive = transcodedArchive || archive;
+      const streamFileName = transcodedArchive
+        ? (transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || file.originalName || file.name || archive.name)
+        : (file.originalName || file.name || archive.name);
+      const canUseRange = !!rangeHeader && !streamArchive.isBundle;
+      const estimatedBytes = transcodedArchive
+        ? Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0)
+        : Number(file.size || 0);
+      noteDownloadStarted(estimatedBytes);
+      if (canUseRange) {
+        await streamArchiveRangeToResponse(streamArchive, rangeHeader!, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else if (streamArchive.isBundle) {
+        await streamArchiveFileToResponse(streamArchive, fileIndex as number, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else {
+        await streamArchiveToResponse(streamArchive, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      }
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
-      noteDownloadDone(Number(file.size || 0));
+      noteDownloadDone(estimatedBytes);
       return;
     }
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
       return res.status(404).json({ error: "file_not_found" });
     }
+    if (!archive.isBundle && wantsTranscoded) {
+      const transcodedArchive = await findReadyTranscodeArchive(archive, 0);
+      if (!transcodedArchive) {
+        return res.status(404).json({ error: "transcoded_not_ready" });
+      }
+      const estimatedBytes = Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0);
+      noteDownloadStarted(estimatedBytes);
+      const streamFileName = transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || archive.downloadName || archive.name;
+      if (rangeHeader) {
+        await streamArchiveRangeToResponse(transcodedArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else {
+        await streamArchiveToResponse(transcodedArchive, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      }
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
+      noteDownloadDone(estimatedBytes);
+      return;
+    }
+    const estimatedBytes = estimateArchiveDownloadBytes(archive);
+    noteDownloadStarted(estimatedBytes);
+    const canUseRange = !!rangeHeader && !archive.isBundle;
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
     } else {
@@ -298,24 +345,71 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
   if (archive.status !== "ready") return res.status(409).json({ error: "not_ready" });
 
   try {
-    const estimatedBytes = estimateArchiveDownloadBytes(archive);
-    noteDownloadStarted(estimatedBytes);
     const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
-    const canUseRange = !!rangeHeader && !archive.isBundle;
+    const wantsTranscoded = req.query.transcoded === "1";
     const fileIndex = req.query.fileIndex ? Number(req.query.fileIndex) : null;
     if (archive.isBundle && Number.isInteger(fileIndex)) {
       const file = archive.files?.[fileIndex as number];
       if (!file || isFileDeleted(file)) {
         return res.status(404).json({ error: "file_not_found" });
       }
-      await streamArchiveFileToResponse(archive, fileIndex as number, res, config.cacheDir, config.masterKey);
+      const transcodedArchive = wantsTranscoded ? await findReadyTranscodeArchive(archive, fileIndex as number) : null;
+      if (wantsTranscoded && !transcodedArchive) {
+        return res.status(404).json({ error: "transcoded_not_ready" });
+      }
+      const streamArchive = transcodedArchive || archive;
+      const streamFileName = transcodedArchive
+        ? (transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || file.originalName || file.name || archive.name)
+        : (file.originalName || file.name || archive.name);
+      const canUseRange = !!rangeHeader && !streamArchive.isBundle;
+      const estimatedBytes = transcodedArchive
+        ? Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0)
+        : Number(file.size || 0);
+      noteDownloadStarted(estimatedBytes);
+      if (canUseRange) {
+        await streamArchiveRangeToResponse(streamArchive, rangeHeader!, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else if (streamArchive.isBundle) {
+        await streamArchiveFileToResponse(streamArchive, fileIndex as number, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else {
+        await streamArchiveToResponse(streamArchive, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      }
       await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: fileIndex as number }]);
-      noteDownloadDone(Number(file.size || 0));
+      noteDownloadDone(estimatedBytes);
       return;
     }
     if (!archive.isBundle && archive.files?.[0] && isFileDeleted(archive.files[0])) {
       return res.status(404).json({ error: "file_not_found" });
     }
+    if (!archive.isBundle && wantsTranscoded) {
+      const transcodedArchive = await findReadyTranscodeArchive(archive, 0);
+      if (!transcodedArchive) {
+        return res.status(404).json({ error: "transcoded_not_ready" });
+      }
+      const estimatedBytes = Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0);
+      noteDownloadStarted(estimatedBytes);
+      const streamFileName = transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || archive.downloadName || archive.name;
+      if (rangeHeader) {
+        await streamArchiveRangeToResponse(transcodedArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      } else {
+        await streamArchiveToResponse(transcodedArchive, res, config.cacheDir, config.masterKey, {
+          fileName: streamFileName
+        });
+      }
+      await bumpDownloadCounts([{ archiveId: archive.id, fileIndex: 0 }]);
+      noteDownloadDone(estimatedBytes);
+      return;
+    }
+    const estimatedBytes = estimateArchiveDownloadBytes(archive);
+    noteDownloadStarted(estimatedBytes);
+    const canUseRange = !!rangeHeader && !archive.isBundle;
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
     } else {
