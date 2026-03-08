@@ -1914,12 +1914,6 @@ function renderArchives() {
         link.href = getDownloadUrl(item);
         link.textContent = 'Download';
         actionTd.appendChild(link);
-        if (hasReadyTranscode(item)) {
-          const convertedLink = document.createElement('a');
-          convertedLink.href = getConvertedDownloadUrl(item);
-          convertedLink.textContent = 'Download converted';
-          actionTd.appendChild(convertedLink);
-        }
       }
       const delBtn = document.createElement('button');
       delBtn.textContent = item.isBundle ? 'Remove' : 'Delete';
