@@ -77,6 +77,9 @@ function toErrorMessage(err: unknown) {
 function resolveMediaKind(fileName: string, detectedKind?: string) {
   if (detectedKind === "video") return "video" as const;
   if (detectedKind === "audio") return "audio" as const;
+  if (detectedKind && detectedKind !== "video" && detectedKind !== "audio") {
+    return null;
+  }
   const ext = extOf(fileName);
   if (videoExt.has(ext)) return "video" as const;
   if (audioExt.has(ext)) return "audio" as const;
