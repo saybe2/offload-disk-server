@@ -25,6 +25,10 @@ const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
 const navTrash = document.getElementById('navTrash');
 const transcodeCopiesToggle = document.getElementById('transcodeCopiesToggle');
+const quotaWidget = document.getElementById('quotaWidget');
+const quotaBarPrimary = document.getElementById('quotaBarPrimary');
+const quotaBarConverted = document.getElementById('quotaBarConverted');
+const quotaBarFree = document.getElementById('quotaBarFree');
 const sidebar = document.querySelector('.sidebar');
 const listTable = document.getElementById('listTable');
 const gridView = document.getElementById('gridView');
@@ -114,6 +118,7 @@ let activeArchiveShares = new Map();
 let activeFolderShares = new Map();
 let lastStructureSignature = '';
 let transcodeToggleBusy = false;
+let lastQuotaSnapshot = null;
 if (!VIEW_MODES.has(viewMode)) {
   viewMode = 'list';
 }
@@ -159,10 +164,7 @@ async function loadMe() {
   }
   const me = await res.json();
   adminLink.style.display = me.role === 'admin' ? 'inline' : 'none';
-  const usedGb = (me.usedBytes / (1024 * 1024 * 1024)).toFixed(2);
-  const transcodeGb = ((Number(me.transcodedUsedBytes || 0)) / (1024 * 1024 * 1024)).toFixed(2);
-  const quotaGb = me.quotaBytes > 0 ? (me.quotaBytes / (1024 * 1024 * 1024)).toFixed(2) : 'unlimited';
-  quotaEl.textContent = `Used: ${usedGb} GB / Quota: ${quotaGb} GB (converted: ${transcodeGb} GB)`;
+  renderQuotaWidget(me);
   if (transcodeCopiesToggle) {
     transcodeCopiesToggle.checked = !!me.transcodeCopiesEnabled;
     transcodeCopiesToggle.disabled = transcodeToggleBusy;
@@ -214,6 +216,61 @@ function formatSize(bytes) {
     unit += 1;
   }
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 2)} ${units[unit]}`;
+}
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function renderQuotaWidget(me) {
+  const quotaBytes = Number(me?.quotaBytes || 0);
+  const accountedUsedBytes = Math.max(0, Number(me?.usedBytes || 0));
+  const convertedBytes = Math.max(0, Number(me?.transcodedUsedBytes || 0));
+  const primaryBytes = Math.max(0, accountedUsedBytes - convertedBytes);
+  const finiteQuota = quotaBytes > 0;
+  const totalUsedBytes = primaryBytes + convertedBytes;
+  const displayUsedBytes = Math.max(accountedUsedBytes, totalUsedBytes);
+  const baseBytes = finiteQuota ? quotaBytes : Math.max(totalUsedBytes, 1);
+
+  let primaryPct = 0;
+  let convertedPct = 0;
+  let freePct = 0;
+  if (finiteQuota) {
+    primaryPct = clampPercent((primaryBytes / baseBytes) * 100);
+    convertedPct = clampPercent((convertedBytes / baseBytes) * 100);
+    freePct = clampPercent(100 - primaryPct - convertedPct);
+  } else {
+    if (totalUsedBytes > 0) {
+      primaryPct = clampPercent((primaryBytes / totalUsedBytes) * 100);
+      convertedPct = clampPercent((convertedBytes / totalUsedBytes) * 100);
+      freePct = clampPercent(100 - primaryPct - convertedPct);
+    } else {
+      primaryPct = 100;
+      convertedPct = 0;
+      freePct = 0;
+    }
+  }
+
+  if (quotaBarPrimary) quotaBarPrimary.style.width = `${primaryPct}%`;
+  if (quotaBarConverted) quotaBarConverted.style.width = `${convertedPct}%`;
+  if (quotaBarFree) quotaBarFree.style.width = `${freePct}%`;
+
+  if (finiteQuota) {
+    quotaEl.textContent = `${formatSize(displayUsedBytes)} of ${formatSize(quotaBytes)}`;
+  } else {
+    quotaEl.textContent = `${formatSize(displayUsedBytes)} used / unlimited`;
+  }
+
+  const freeBytes = finiteQuota ? Math.max(0, quotaBytes - displayUsedBytes) : 0;
+  lastQuotaSnapshot = {
+    quotaBytes,
+    finiteQuota,
+    totalUsedBytes: displayUsedBytes,
+    primaryBytes,
+    convertedBytes,
+    freeBytes
+  };
 }
 
 function formatDuration(seconds) {
@@ -1291,6 +1348,18 @@ function getConvertedDownloadUrl(item) {
   return `/api/archives/${item.archive._id}/files/${item.fileIndex}/download?transcoded=1`;
 }
 
+function openDownloadChoiceMenu(item, anchorEl) {
+  const downloadUrl = getDownloadUrl(item);
+  const items = [
+    { label: 'Download original', onClick: async () => { location.href = downloadUrl; } }
+  ];
+  if (hasReadyTranscode(item)) {
+    items.push({ label: 'Download converted', onClick: async () => { location.href = getConvertedDownloadUrl(item); } });
+  }
+  const rect = anchorEl.getBoundingClientRect();
+  showContextMenu(rect.left, rect.bottom + 4, items);
+}
+
 function buildCurrentFileItems() {
   return sortFileItems(filterItems(buildFileItems(archivesCache)));
 }
@@ -1917,10 +1986,21 @@ function renderArchives() {
       actionTd.appendChild(purgeBtn);
     } else {
       if (a.status === 'ready') {
-        const link = document.createElement('a');
-        link.href = getDownloadUrl(item);
-        link.textContent = 'Download';
-        actionTd.appendChild(link);
+        if (hasReadyTranscode(item)) {
+          const downloadBtn = document.createElement('button');
+          downloadBtn.textContent = 'Download...';
+          downloadBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openDownloadChoiceMenu(item, downloadBtn);
+          });
+          actionTd.appendChild(downloadBtn);
+        } else {
+          const link = document.createElement('a');
+          link.href = getDownloadUrl(item);
+          link.textContent = 'Download';
+          actionTd.appendChild(link);
+        }
       }
       const delBtn = document.createElement('button');
       delBtn.textContent = item.isBundle ? 'Remove' : 'Delete';
@@ -3044,6 +3124,31 @@ transcodeCopiesToggle?.addEventListener('change', async () => {
   } finally {
     transcodeToggleBusy = false;
     transcodeCopiesToggle.disabled = false;
+  }
+});
+
+function openQuotaDetails() {
+  if (!lastQuotaSnapshot) return;
+  const snapshot = lastQuotaSnapshot;
+  const rows = [
+    { label: 'Used total', value: formatSize(snapshot.totalUsedBytes) },
+    { label: 'Primary files', value: formatSize(snapshot.primaryBytes) },
+    { label: 'Converted copies', value: formatSize(snapshot.convertedBytes) }
+  ];
+  if (snapshot.finiteQuota) {
+    rows.push({ label: 'Free', value: formatSize(snapshot.freeBytes) });
+    rows.push({ label: 'Quota', value: formatSize(snapshot.quotaBytes) });
+  } else {
+    rows.push({ label: 'Quota', value: 'Unlimited' });
+  }
+  showInfoModal('Storage usage', rows);
+}
+
+quotaWidget?.addEventListener('click', () => openQuotaDetails());
+quotaWidget?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openQuotaDetails();
   }
 });
 
