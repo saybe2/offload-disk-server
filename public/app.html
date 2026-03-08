@@ -24,10 +24,6 @@
         <button id="navTrash" class="nav-item">Trash</button>
       </div>
       <div class="sidebar-footer">
-        <label class="sidebar-toggle">
-          <input type="checkbox" id="transcodeCopiesToggle" />
-          <span>Transcoded copies</span>
-        </label>
         <div id="quotaWidget" class="quota-widget" role="button" tabindex="0" aria-label="Storage usage details">
           <div class="quota-bar" aria-hidden="true">
             <span id="quotaBarPrimary" class="quota-segment quota-segment-primary"></span>
@@ -174,6 +170,23 @@
         <div class="modal-actions">
           <button id="prioritySaveBtn">Save</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="storageModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="storageTitle">Storage</h3>
+        <button id="storageCloseBtn">Close</button>
+      </div>
+      <div class="modal-body">
+        <div id="storageDetails"></div>
+        <label class="sidebar-toggle storage-toggle">
+          <input type="checkbox" id="transcodeCopiesToggle" />
+          <span>Transcoded copies</span>
+        </label>
+        <div class="status-meta">If disabled, new converted copies will not be created.</div>
       </div>
     </div>
   </div>

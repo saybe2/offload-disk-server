@@ -8,6 +8,7 @@ header h1 { margin: 0; }
 .sidebar-footer { margin-top: auto; padding: 8px 4px; color: #9aa4b2; font-size: 12px; }
 .sidebar-toggle { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: #c8d1dc; }
 .sidebar-toggle input { margin: 0; }
+.storage-toggle { margin: 8px 0 0; }
 .quota { line-height: 1.4; }
 .quota-widget { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid #2b3240; border-radius: 8px; background: #11151d; cursor: pointer; }
 .quota-widget:hover { border-color: #3b4f70; }
