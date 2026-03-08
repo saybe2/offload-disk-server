@@ -86,6 +86,9 @@ export function isPermanentSubtitleFailureMessage(message: string) {
   if (message.startsWith(SUBTITLE_PERMANENT_PREFIX)) return true;
   const lower = message.toLowerCase();
   return (
+    lower.includes("no_audio_stream") ||
+    lower.includes("audio_track_not_found") ||
+    lower.includes("output file does not contain any stream") ||
     lower.includes("subtitle_unsupported") ||
     lower.includes("file_not_found") ||
     lower.includes("part_crypto_missing") ||
@@ -172,6 +175,25 @@ async function markSubtitlePermanentFailure(archiveId: string, fileIndex: number
       }
     }
   );
+}
+
+async function markSubtitleTrackPermanentFailure(
+  archiveId: string,
+  fileIndex: number,
+  audioTrack: number,
+  message: string
+) {
+  await upsertSubtitleTrackMeta(archiveId, fileIndex, audioTrack, {
+    audioTrack,
+    label: buildTrackLabel(audioTrack, "auto", ""),
+    language: "auto",
+    contentType: "text/vtt; charset=utf-8",
+    size: 0,
+    localPath: subtitleTargetPath(archiveId, fileIndex, audioTrack),
+    updatedAt: null,
+    failedAt: new Date(),
+    error: message.slice(0, 500)
+  });
 }
 
 async function refreshDiscordUrl(webhookId: string, messageId: string) {
@@ -390,7 +412,7 @@ async function listAudioTracksFromFile(filePath: string): Promise<AudioTrackInfo
         const parsed = JSON.parse(stdout || "{}") as { streams?: Array<{ tags?: Record<string, unknown> }> };
         const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
         if (streams.length === 0) {
-          resolve([{ audioTrack: 0, language: "auto", label: "Track 1" }]);
+          resolve([]);
           return;
         }
         const tracks = streams.map((stream, idx) => {
@@ -1241,8 +1263,13 @@ async function ensureSubtitleTrackFromSource(
 }
 
 async function ensureAllSubtitleTracksFromSource(archive: ArchiveDoc, fileIndex: number, fileName: string, sourcePath: string) {
-  const tracks = await listAudioTracksFromFile(sourcePath).catch(() => [{ audioTrack: 0, language: "auto", label: "Track 1" }]);
-  const primary = tracks.find((track) => track.audioTrack === 0) || tracks[0] || { audioTrack: 0, language: "auto", label: "Track 1" };
+  const tracks = await listAudioTracksFromFile(sourcePath).catch(() => [] as AudioTrackInfo[]);
+  if (tracks.length === 0) {
+    const message = "no_audio_stream";
+    await markSubtitlePermanentFailure(archive.id, fileIndex, message);
+    throw makePermanentSubtitleFailure(message);
+  }
+  const primary = tracks.find((track) => track.audioTrack === 0) || tracks[0];
   const first = await ensureSubtitleTrackFromSource(archive, fileIndex, primary.audioTrack, primary, fileName, sourcePath);
   for (const track of tracks) {
     if (track.audioTrack === primary.audioTrack) continue;
@@ -1271,12 +1298,22 @@ async function ensureArchiveSubtitleFromSourceInternal(archive: ArchiveDoc, file
   if (!file.path || !fs.existsSync(file.path)) {
     throw new Error("source_missing");
   }
-  const trackMeta = await listAudioTracksFromFile(file.path).catch(() => [{ audioTrack: 0, language: "auto", label: "Track 1" }]);
-  const selected = trackMeta.find((track) => track.audioTrack === audioTrack) || {
-    audioTrack,
-    language: "auto",
-    label: buildTrackLabel(audioTrack, "auto", "")
-  };
+  const trackMeta = await listAudioTracksFromFile(file.path).catch(() => [] as AudioTrackInfo[]);
+  if (trackMeta.length === 0) {
+    const message = "no_audio_stream";
+    if (!audioTrack) {
+      await markSubtitlePermanentFailure(archive.id, fileIndex, message);
+    } else {
+      await markSubtitleTrackPermanentFailure(archive.id, fileIndex, audioTrack, message);
+    }
+    throw makePermanentSubtitleFailure(message);
+  }
+  const selected = trackMeta.find((track) => track.audioTrack === audioTrack);
+  if (!selected) {
+    const message = `audio_track_not_found:${audioTrack}`;
+    await markSubtitleTrackPermanentFailure(archive.id, fileIndex, audioTrack, message);
+    throw makePermanentSubtitleFailure(message);
+  }
   if (allTracks && !audioTrack) {
     return ensureAllSubtitleTracksFromSource(archive, fileIndex, fileName, file.path);
   }
@@ -1366,11 +1403,17 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number, au
       return await ensureAllSubtitleTracksFromSource(archive, fileIndex, fileName, sourcePath);
     }
     const tracks = await listAudioTracksFromFile(sourcePath).catch(() => [] as AudioTrackInfo[]);
-    const selected = tracks.find((track) => track.audioTrack === audioTrack) || {
-      audioTrack,
-      language: "auto",
-      label: buildTrackLabel(audioTrack, "auto", "")
-    };
+    if (tracks.length === 0) {
+      const message = "no_audio_stream";
+      await markSubtitleTrackPermanentFailure(archive.id, fileIndex, audioTrack, message);
+      throw makePermanentSubtitleFailure(message);
+    }
+    const selected = tracks.find((track) => track.audioTrack === audioTrack);
+    if (!selected) {
+      const message = `audio_track_not_found:${audioTrack}`;
+      await markSubtitleTrackPermanentFailure(archive.id, fileIndex, audioTrack, message);
+      throw makePermanentSubtitleFailure(message);
+    }
     return await ensureSubtitleTrackFromSource(archive, fileIndex, audioTrack, selected, fileName, sourcePath);
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
@@ -1403,20 +1446,33 @@ export async function listArchiveSubtitleTracks(archive: ArchiveDoc, fileIndex: 
       // fallback to stored metadata
     }
   }
-  const tracks: AudioTrackInfo[] = [{ audioTrack: 0, language: normalizeTrackLanguage(String(file.subtitle?.language || "auto")), label: "Track 1" }];
+  const tracks: AudioTrackInfo[] = [];
+  if (file.subtitle && !file.subtitle?.failedAt) {
+    tracks.push({
+      audioTrack: 0,
+      language: normalizeTrackLanguage(String(file.subtitle?.language || "auto")),
+      label: "Track 1"
+    });
+  }
   const extra = Array.isArray((file as any).subtitleTracks) ? (file as any).subtitleTracks : [];
   for (const item of extra) {
     const audioTrack = Number(item?.audioTrack);
-    if (!Number.isInteger(audioTrack) || audioTrack <= 0) continue;
+    if (!Number.isInteger(audioTrack) || audioTrack < 0) continue;
     tracks.push({
       audioTrack,
       language: normalizeTrackLanguage(String(item?.language || "auto")),
       label: String(item?.label || buildTrackLabel(audioTrack, item?.language, ""))
     });
   }
-  tracks.sort((a, b) => a.audioTrack - b.audioTrack);
-  if (tracks.length > 1) {
-    return tracks;
+  const dedupedByTrack = new Map<number, AudioTrackInfo>();
+  for (const track of tracks) {
+    if (!dedupedByTrack.has(track.audioTrack)) {
+      dedupedByTrack.set(track.audioTrack, track);
+    }
+  }
+  const mergedTracks = Array.from(dedupedByTrack.values()).sort((a, b) => a.audioTrack - b.audioTrack);
+  if (mergedTracks.length > 1) {
+    return mergedTracks;
   }
   try {
     const probed = await probeAudioTracksFromArchive(archive, fileIndex, fileName);
@@ -1426,5 +1482,5 @@ export async function listArchiveSubtitleTracks(archive: ArchiveDoc, fileIndex: 
   } catch {
     // keep stored fallback if probe from archive is unavailable
   }
-  return tracks;
+  return mergedTracks;
 }
