@@ -2123,7 +2123,47 @@ apiRouter.get("/folders/:id/info", requireAuth, async (req, res) => {
     }
     return sum + uniqueParts(a.parts || []).length;
   }, 0);
-  res.json({ totalSize, totalArchives, totalFiles, totalParts });
+  let convertedSize = 0;
+  let convertedReadyFiles = 0;
+  let convertedPendingFiles = 0;
+  let convertedErrorFiles = 0;
+  let convertedSkippedFiles = 0;
+
+  for (const archive of archives) {
+    const indices = activeBundleFileIndices(archive);
+    for (const fileIndex of indices) {
+      const file = archive.files?.[fileIndex];
+      const transcode = file?.transcode;
+      const status = String(transcode?.status || "");
+      if (!status) continue;
+      if (status === "ready") {
+        convertedReadyFiles += 1;
+        convertedSize += Number(transcode?.size || 0);
+        continue;
+      }
+      if (status === "error") {
+        convertedErrorFiles += 1;
+        continue;
+      }
+      if (status === "skipped") {
+        convertedSkippedFiles += 1;
+        continue;
+      }
+      convertedPendingFiles += 1;
+    }
+  }
+
+  res.json({
+    totalSize,
+    totalArchives,
+    totalFiles,
+    totalParts,
+    convertedSize,
+    convertedReadyFiles,
+    convertedPendingFiles,
+    convertedErrorFiles,
+    convertedSkippedFiles
+  });
 });
 
 apiRouter.get("/folders/:id/download", requireAuth, async (req, res) => {

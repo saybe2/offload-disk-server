@@ -2353,7 +2353,12 @@ async function openFolderContextMenu(folder, x, y) {
         { label: 'Total size', value: formatSize(info.totalSize) },
         { label: 'Archives', value: String(info.totalArchives) },
         { label: 'Files', value: String(info.totalFiles) },
-        { label: 'Parts', value: String(info.totalParts || 0) }
+        { label: 'Parts', value: String(info.totalParts || 0) },
+        { label: 'Converted size', value: formatSize(info.convertedSize || 0) },
+        { label: 'Converted ready', value: String(info.convertedReadyFiles || 0) },
+        { label: 'Converted pending', value: String(info.convertedPendingFiles || 0) },
+        { label: 'Converted errors', value: String(info.convertedErrorFiles || 0) },
+        { label: 'Converted skipped', value: String(info.convertedSkippedFiles || 0) }
       ]);
     } },
     { label: 'Delete folder', onClick: async () => {
@@ -2452,13 +2457,23 @@ async function openFileContextMenu(item, x, y) {
     const partsCount = (typeof a.totalParts === 'number' && a.totalParts > 0)
       ? a.totalParts
       : (Array.isArray(a.parts) ? a.parts.length : 0);
+    const transcode = item.file?.transcode || {};
+    const convertedStatus = String(transcode.status || 'none');
+    const convertedSize = Number(transcode.size || 0);
+    const convertedType = String(transcode.contentType || '');
+    const convertedUpdated = transcode.updatedAt ? formatDate(transcode.updatedAt) : '-';
+    const convertedError = String(transcode.error || '');
     showInfoModal(`File: ${fileName}`, [
       { label: 'Type', value: getDetectedTypeLabel(item.file, fileName) },
       { label: 'Status', value: a.status },
       { label: 'Processed', value: a.status === 'ready' ? '100%' : discordProgress(a) },
       { label: 'Views', value: String((item.file && typeof item.file.previewCount === 'number') ? item.file.previewCount : 0) },
       { label: 'Downloads', value: String((item.file && typeof item.file.downloadCount === 'number') ? item.file.downloadCount : 0) },
-      { label: 'Converted copy', value: hasReadyTranscode(item) ? `ready (${formatSize(item.file?.transcode?.size || 0)})` : String(item.file?.transcode?.status || 'none') },
+      { label: 'Converted status', value: convertedStatus },
+      { label: 'Converted size', value: convertedSize > 0 ? formatSize(convertedSize) : '-' },
+      { label: 'Converted type', value: convertedType || '-' },
+      { label: 'Converted updated', value: convertedUpdated },
+      { label: 'Converted error', value: convertedError || '-' },
       { label: 'Parts', value: String(partsCount) },
       { label: 'Size', value: formatSize(item.file?.size ?? a.originalSize) },
       { label: 'Created', value: formatDate(a.createdAt) },
