@@ -80,6 +80,9 @@ th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 .modal-header h3 { margin: 0; font-size: 18px; }
 .modal-body { display: flex; flex-direction: column; gap: 8px; }
 .preview-body { min-height: 180px; }
+.preview-media-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.preview-control { display: inline-flex; align-items: center; gap: 8px; color: #9aa4b2; font-size: 12px; }
+.preview-control select { min-width: 140px; }
 .preview-markdown { max-height: 70vh; overflow: auto; background: #0f1115; border: 1px solid #2b3240; border-radius: 6px; padding: 16px; line-height: 1.5; }
 .preview-markdown h1, .preview-markdown h2, .preview-markdown h3, .preview-markdown h4, .preview-markdown h5, .preview-markdown h6 { margin: 12px 0 8px; }
 .preview-markdown p { margin: 8px 0; }

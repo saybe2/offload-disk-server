@@ -199,6 +199,16 @@
       </div>
       <div class="modal-body preview-body">
         <div id="previewState" class="status">Loading preview...</div>
+        <div id="previewMediaControls" class="preview-media-controls hidden">
+          <label class="preview-control">
+            <span>Audio</span>
+            <select id="previewAudioTrackSelect"></select>
+          </label>
+          <label class="preview-control">
+            <span>Subtitles</span>
+            <select id="previewSubtitleTrackSelect"></select>
+          </label>
+        </div>
         <div id="previewMarkdown" class="preview-markdown hidden"></div>
         <pre id="previewText" class="preview-text hidden"><code id="previewCode"></code></pre>
         <img id="previewImage" class="preview-image hidden" alt="Preview" />
