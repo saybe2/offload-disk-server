@@ -65,6 +65,15 @@ export interface ArchiveFile {
     contentType?: string;
     updatedAt?: Date | null;
     error?: string;
+    variants?: Array<{
+      audioTrack: number;
+      archiveId?: string;
+      status?: "queued" | "processing" | "ready" | "error" | "skipped" | null;
+      size?: number;
+      contentType?: string;
+      updatedAt?: Date | null;
+      error?: string;
+    }>;
   };
 }
 
@@ -99,6 +108,7 @@ export interface ArchiveDoc extends mongoose.Document {
   archiveKind?: "primary" | "transcoded";
   sourceArchiveId?: mongoose.Types.ObjectId | null;
   sourceFileIndex?: number | null;
+  transcodeAudioTrack?: number | null;
   isBundle: boolean;
   encryptionVersion?: number;
   folderId?: mongoose.Types.ObjectId | null;
@@ -197,7 +207,21 @@ const FileSchema = new Schema<ArchiveFile>(
       size: { type: Number, default: 0 },
       contentType: { type: String, default: "" },
       updatedAt: { type: Date, default: null },
-      error: { type: String, default: "" }
+      error: { type: String, default: "" },
+      variants: {
+        type: [
+          {
+            audioTrack: { type: Number, required: true },
+            archiveId: { type: String, default: "" },
+            status: { type: String, enum: ["queued", "processing", "ready", "error", "skipped"], default: null },
+            size: { type: Number, default: 0 },
+            contentType: { type: String, default: "" },
+            updatedAt: { type: Date, default: null },
+            error: { type: String, default: "" }
+          }
+        ],
+        default: []
+      }
     }
   },
   { _id: false }
@@ -238,6 +262,7 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     archiveKind: { type: String, enum: ["primary", "transcoded"], default: "primary", index: true },
     sourceArchiveId: { type: Schema.Types.ObjectId, ref: "Archive", default: null, index: true },
     sourceFileIndex: { type: Number, default: null },
+    transcodeAudioTrack: { type: Number, default: null, index: true },
     isBundle: { type: Boolean, default: false },
     encryptionVersion: { type: Number, default: 2 },
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null, index: true },
