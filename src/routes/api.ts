@@ -57,7 +57,7 @@ import {
   isPreviewContentTypeAllowed,
   resolvePreviewContentType
 } from "../services/preview.js";
-import { remuxTsToMp4 } from "../services/videoPreview.js";
+import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
 import { findReadyTranscodeArchive, listLinkedTranscodeArchiveIds } from "../services/transcodes.js";
@@ -1414,9 +1414,18 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   if (!isMediaPreviewSupported(fileName, mediaKind)) {
     return res.status(415).json({ error: "unsupported_media_type" });
   }
+  const audioTrackRaw = req.query.audioTrack;
+  const requestedAudioTrack =
+    audioTrackRaw == null || audioTrackRaw === ""
+      ? null
+      : Number.parseInt(String(audioTrackRaw), 10);
+  if (requestedAudioTrack != null && (!Number.isInteger(requestedAudioTrack) || requestedAudioTrack < 0)) {
+    return res.status(400).json({ error: "bad_audio_track" });
+  }
 
   const ext = path.extname(fileName).toLowerCase();
   const needsTsRemux = mediaKind === "video" && ext === ".ts";
+  const needsAudioTrackRemux = mediaKind === "video" && requestedAudioTrack != null && requestedAudioTrack > 0;
   const fallbackType = mediaKind === "video" ? "video/mp4" : "audio/mpeg";
   const contentType = (mime.lookup(fileName) as string) || fallbackType;
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
@@ -1426,16 +1435,16 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   log(
     "preview",
     rangeHeader
-      ? `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""} range=${rangeHeader}`
-      : `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""}`
+      ? `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""}${needsAudioTrackRemux ? ` audioTrack=${requestedAudioTrack}` : ""} range=${rangeHeader}`
+      : `media start ${archive.id} file=${targetIndex}${transcodedArchive ? " transcoded=1" : ""}${needsAudioTrackRemux ? ` audioTrack=${requestedAudioTrack}` : ""}`
   );
-  const remuxTempDir = needsTsRemux
+  const remuxTempDir = (needsTsRemux || needsAudioTrackRemux)
     ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${targetIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
 
   try {
     void bumpPreviewCount(archive.id, targetIndex).catch(() => undefined);
-    if (needsTsRemux && remuxTempDir) {
+    if ((needsTsRemux || needsAudioTrackRemux) && remuxTempDir) {
       await fs.promises.mkdir(remuxTempDir, { recursive: true });
       const sourcePath = path.join(remuxTempDir, `${targetIndex}_${sanitizeName(fileName)}`);
       const mp4Path = path.join(remuxTempDir, `${targetIndex}_${sanitizeName(fileName)}.mp4`);
@@ -1444,7 +1453,12 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
       } else {
         await restoreArchiveToFile(mediaArchive, sourcePath, config.cacheDir, config.masterKey);
       }
-      const remuxed = await remuxTsToMp4(sourcePath, mp4Path);
+      const remuxed = needsAudioTrackRemux
+        ? await remuxVideoAudioTrack(sourcePath, mp4Path, requestedAudioTrack || 0)
+        : await remuxTsToMp4(sourcePath, mp4Path);
+      if (needsAudioTrackRemux && !remuxed) {
+        return res.status(404).json({ error: "audio_track_unavailable" });
+      }
       const servePath = remuxed ? mp4Path : sourcePath;
       const serveType = remuxed ? "video/mp4" : "video/mp2t";
       const stat = await fs.promises.stat(servePath);

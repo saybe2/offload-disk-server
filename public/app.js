@@ -48,6 +48,9 @@ const previewImage = document.getElementById('previewImage');
 const previewVideo = document.getElementById('previewVideo');
 const previewAudio = document.getElementById('previewAudio');
 const previewFrame = document.getElementById('previewFrame');
+const previewMediaControls = document.getElementById('previewMediaControls');
+const previewAudioTrackSelect = document.getElementById('previewAudioTrackSelect');
+const previewSubtitleTrackSelect = document.getElementById('previewSubtitleTrackSelect');
 const previewClose = document.getElementById('previewClose');
 
 const deleteModal = document.getElementById('deleteModal');
@@ -97,6 +100,7 @@ const ROOT_DROP = '__root__';
 let dropUploadFolderId = null;
 const archiveProgress = new Map();
 let previewObjectUrl = null;
+let previewTrackContext = null;
 const thumbImageExt = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.avif', '.heic', '.heif']);
 const thumbVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob']);
 const mediaVideoExt = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.wmv', '.flv', '.mpeg', '.mpg', '.m2ts', '.3gp', '.ogv', '.vob', '.ts']);
@@ -516,10 +520,25 @@ function resetPreviewContent(message) {
   previewImage.removeAttribute('src');
   previewVideo.pause();
   previewVideo.removeAttribute('src');
+  previewVideo.dataset.baseSrc = '';
+  previewVideo.dataset.audioTrack = '0';
+  previewVideo.dataset.resumeAt = '';
   previewVideo.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   previewAudio.pause();
   previewAudio.removeAttribute('src');
   previewFrame.removeAttribute('src');
+  previewTrackContext = null;
+  if (previewMediaControls) {
+    previewMediaControls.classList.add('hidden');
+  }
+  if (previewAudioTrackSelect) {
+    previewAudioTrackSelect.innerHTML = '';
+    previewAudioTrackSelect.disabled = true;
+  }
+  if (previewSubtitleTrackSelect) {
+    previewSubtitleTrackSelect.innerHTML = '';
+    previewSubtitleTrackSelect.disabled = true;
+  }
 }
 
 function escapeHtml(value) {
@@ -773,19 +792,6 @@ function closePreviewModal() {
   resetPreviewContent('');
 }
 
-function attachSubtitleTrack(videoEl, trackUrl, label = 'Auto') {
-  videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
-  if (!trackUrl) return;
-  const track = document.createElement('track');
-  track.kind = 'subtitles';
-  track.label = label;
-  track.srclang = 'en';
-  track.src = trackUrl;
-  track.default = true;
-  track.dataset.autoSubtitle = '1';
-  videoEl.appendChild(track);
-}
-
 async function fetchSubtitleTracks(archiveId, fileIndex) {
   const url = `/api/archives/${archiveId}/files/${fileIndex}/subtitle-tracks`;
   try {
@@ -806,8 +812,31 @@ async function fetchSubtitleTracks(archiveId, fileIndex) {
   }
 }
 
+function normalizeSubtitleTrackList(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) {
+    return [{ audioTrack: 0, language: 'auto', label: 'Track 1' }];
+  }
+  const map = new Map();
+  tracks.forEach((track) => {
+    const audioTrack = Number(track?.audioTrack || 0);
+    if (!Number.isInteger(audioTrack) || audioTrack < 0) return;
+    const current = map.get(audioTrack);
+    if (!current) {
+      map.set(audioTrack, {
+        audioTrack,
+        language: String(track?.language || 'auto'),
+        label: String(track?.label || `Track ${audioTrack + 1}`)
+      });
+    }
+  });
+  if (!map.has(0)) {
+    map.set(0, { audioTrack: 0, language: 'auto', label: 'Track 1' });
+  }
+  return Array.from(map.values()).sort((a, b) => a.audioTrack - b.audioTrack);
+}
+
 function attachSubtitleTracks(videoEl, archiveId, fileIndex, tracks) {
-  const list = Array.isArray(tracks) && tracks.length > 0 ? tracks : [{ audioTrack: 0, language: 'auto', label: 'Track 1' }];
+  const list = normalizeSubtitleTrackList(tracks);
   videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
   list.forEach((item, idx) => {
     const track = document.createElement('track');
@@ -821,6 +850,97 @@ function attachSubtitleTracks(videoEl, archiveId, fileIndex, tracks) {
   });
 }
 
+function applyPreviewSubtitleSelection() {
+  if (!previewTrackContext) return;
+  const value = previewSubtitleTrackSelect?.value || 'off';
+  const selected = value === 'off' ? null : Number(value);
+  const textTracks = previewVideo.textTracks;
+  for (let i = 0; i < textTracks.length; i += 1) {
+    const textTrack = textTracks[i];
+    const expected = previewTrackContext.tracks[i];
+    const audioTrack = Number(expected?.audioTrack ?? i);
+    const active = selected != null && audioTrack === selected;
+    textTrack.mode = active ? 'showing' : 'disabled';
+  }
+}
+
+function supportsNativeAudioTrackSwitching(videoEl) {
+  const tracks = videoEl?.audioTracks;
+  return !!tracks && typeof tracks.length === 'number' && tracks.length > 0;
+}
+
+function setNativeAudioTrack(videoEl, audioTrack) {
+  const tracks = videoEl.audioTracks;
+  const total = Number(tracks?.length || 0);
+  if (!total || audioTrack < 0 || audioTrack >= total) return false;
+  for (let i = 0; i < total; i += 1) {
+    const stream = tracks[i];
+    if (stream) {
+      stream.enabled = i === audioTrack;
+    }
+  }
+  return true;
+}
+
+async function switchPreviewAudioTrack(audioTrack) {
+  if (!previewTrackContext) return;
+  const selected = Number.isInteger(audioTrack) && audioTrack >= 0 ? audioTrack : 0;
+  previewTrackContext.audioTrack = selected;
+  if (previewAudioTrackSelect && String(previewAudioTrackSelect.value) !== String(selected)) {
+    previewAudioTrackSelect.value = String(selected);
+  }
+
+  if (supportsNativeAudioTrackSwitching(previewVideo) && setNativeAudioTrack(previewVideo, selected)) {
+    applyPreviewSubtitleSelection();
+    return;
+  }
+
+  const baseSrc = String(previewTrackContext.baseSrc || '');
+  if (!baseSrc) return;
+  const nextSrc = selected > 0 ? `${baseSrc}${baseSrc.includes('?') ? '&' : '?'}audioTrack=${selected}` : baseSrc;
+  const currentSrc = previewVideo.getAttribute('src') || '';
+  if (currentSrc === nextSrc) {
+    applyPreviewSubtitleSelection();
+    return;
+  }
+  const resumeAt = Number(previewVideo.currentTime || 0);
+  const shouldPlay = !previewVideo.paused;
+  previewVideo.dataset.resumeAt = resumeAt > 0 ? String(resumeAt) : '';
+  previewVideo.src = nextSrc;
+  previewVideo.load();
+  if (shouldPlay) {
+    previewVideo.play().catch(() => undefined);
+  }
+}
+
+function showPreviewTrackControls(tracks) {
+  if (!previewMediaControls || !previewAudioTrackSelect || !previewSubtitleTrackSelect) return;
+  const list = normalizeSubtitleTrackList(tracks);
+  previewAudioTrackSelect.innerHTML = '';
+  previewSubtitleTrackSelect.innerHTML = '';
+  for (const track of list) {
+    const audioOption = document.createElement('option');
+    audioOption.value = String(track.audioTrack);
+    audioOption.textContent = track.label || `Track ${track.audioTrack + 1}`;
+    previewAudioTrackSelect.appendChild(audioOption);
+
+    const subOption = document.createElement('option');
+    subOption.value = String(track.audioTrack);
+    subOption.textContent = track.label || `Track ${track.audioTrack + 1}`;
+    previewSubtitleTrackSelect.appendChild(subOption);
+  }
+  const offOption = document.createElement('option');
+  offOption.value = 'off';
+  offOption.textContent = 'Off';
+  previewSubtitleTrackSelect.insertBefore(offOption, previewSubtitleTrackSelect.firstChild);
+
+  previewAudioTrackSelect.value = '0';
+  previewSubtitleTrackSelect.value = list.length > 0 ? '0' : 'off';
+  previewAudioTrackSelect.disabled = list.length <= 1;
+  previewSubtitleTrackSelect.disabled = false;
+  previewMediaControls.classList.remove('hidden');
+}
+
 async function openPreviewModal(item) {
   const archive = item.archive;
   const fileName = item.file?.originalName || item.file?.name || archive.displayName || archive.name;
@@ -832,20 +952,24 @@ async function openPreviewModal(item) {
   const mediaKind = getMediaKind(fileName, item.file?.detectedKind);
   if (mediaKind) {
     const mediaUrl = `/api/archives/${archive._id}/files/${targetIndex}/media`;
-    const subtitleUrl = `/api/archives/${archive._id}/files/${targetIndex}/subtitle.vtt`;
     if (item.file) {
       item.file.previewCount = (Number(item.file.previewCount || 0) + 1);
     }
     previewState.classList.add('hidden');
     if (mediaKind === 'video') {
       previewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
-      previewVideo.src = mediaUrl;
       const tracks = await fetchSubtitleTracks(archive._id, targetIndex);
-      if (tracks.length > 0) {
-        attachSubtitleTracks(previewVideo, archive._id, targetIndex, tracks);
-      } else {
-        attachSubtitleTrack(previewVideo, subtitleUrl, 'Track 1');
-      }
+      const trackList = normalizeSubtitleTrackList(tracks);
+      attachSubtitleTracks(previewVideo, archive._id, targetIndex, trackList);
+      previewTrackContext = {
+        archiveId: String(archive._id),
+        fileIndex: targetIndex,
+        baseSrc: mediaUrl,
+        tracks: trackList,
+        audioTrack: 0
+      };
+      showPreviewTrackControls(trackList);
+      previewVideo.src = mediaUrl;
       previewVideo.classList.remove('hidden');
       previewVideo.load();
       return;
@@ -2972,6 +3096,27 @@ previewModal.addEventListener('click', (e) => {
   if (e.target === previewModal) {
     closePreviewModal();
   }
+});
+previewAudioTrackSelect?.addEventListener('change', async () => {
+  const value = Number.parseInt(String(previewAudioTrackSelect.value || '0'), 10);
+  await switchPreviewAudioTrack(Number.isInteger(value) && value >= 0 ? value : 0);
+});
+previewSubtitleTrackSelect?.addEventListener('change', () => {
+  applyPreviewSubtitleSelection();
+});
+previewVideo.addEventListener('loadedmetadata', () => {
+  const resumeAt = Number.parseFloat(String(previewVideo.dataset.resumeAt || ''));
+  if (Number.isFinite(resumeAt) && resumeAt > 0) {
+    previewVideo.currentTime = resumeAt;
+  }
+  previewVideo.dataset.resumeAt = '';
+  const selectedTrack = previewTrackContext?.audioTrack;
+  if (Number.isInteger(selectedTrack) && selectedTrack >= 0) {
+    if (supportsNativeAudioTrackSwitching(previewVideo)) {
+      setNativeAudioTrack(previewVideo, selectedTrack);
+    }
+  }
+  applyPreviewSubtitleSelection();
 });
 
 deleteCancelBtn.addEventListener('click', () => closeDeleteModal(false));

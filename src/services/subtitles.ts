@@ -49,6 +49,9 @@ const subtitleAudioExt = new Set([
   ".aiff"
 ]);
 const inFlight = new Map<string, Promise<SubtitleResult>>();
+const trackProbeInFlight = new Map<string, Promise<AudioTrackInfo[]>>();
+const trackProbeCache = new Map<string, { tracks: AudioTrackInfo[]; expiresAt: number }>();
+const TRACK_PROBE_CACHE_MS = 6 * 60 * 60 * 1000;
 const SUBTITLE_PERMANENT_PREFIX = "subtitle_permanent_failure:";
 
 export interface SubtitleResult {
@@ -406,6 +409,54 @@ async function listAudioTracksFromFile(filePath: string): Promise<AudioTrackInfo
       }
     });
   });
+}
+
+async function probeAudioTracksFromArchive(archive: ArchiveDoc, fileIndex: number, fileName: string): Promise<AudioTrackInfo[]> {
+  const key = `${archive.id}:${fileIndex}`;
+  const cached = trackProbeCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.tracks;
+  }
+  const existing = trackProbeInFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+  const run = (async () => {
+    const file = archive.files?.[fileIndex];
+    if (!file) {
+      return [{ audioTrack: 0, language: "auto", label: "Track 1" }];
+    }
+    const tmpDir = path.join(
+      config.cacheDir,
+      "subtitle_probe_work",
+      `${archive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    );
+    await fs.promises.mkdir(tmpDir, { recursive: true });
+    const restoreName = (file.name || file.originalName || fileName || `file_${fileIndex}`).replace(/[\\/]/g, "_");
+    const sourcePath = path.join(tmpDir, restoreName);
+    try {
+      if (archive.isBundle) {
+        await restoreArchiveFileToFile(archive, fileIndex, sourcePath, config.cacheDir, config.masterKey);
+      } else {
+        await restoreArchiveToFile(archive, sourcePath, config.cacheDir, config.masterKey);
+      }
+      return await listAudioTracksFromFile(sourcePath);
+    } finally {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  })()
+    .then((tracks) => {
+      trackProbeCache.set(key, {
+        tracks,
+        expiresAt: Date.now() + TRACK_PROBE_CACHE_MS
+      });
+      return tracks;
+    })
+    .finally(() => {
+      trackProbeInFlight.delete(key);
+    });
+  trackProbeInFlight.set(key, run);
+  return run;
 }
 
 function sanitizeAsrBaseName(sourceName: string) {
@@ -1341,7 +1392,8 @@ export async function ensureArchiveSubtitle(archive: ArchiveDoc, fileIndex: numb
 
 export async function listArchiveSubtitleTracks(archive: ArchiveDoc, fileIndex: number) {
   const file = archive.files?.[fileIndex];
-  if (!file || !supportsSubtitle(file.originalName || file.name || "", file.detectedKind)) {
+  const fileName = file?.originalName || file?.name || "";
+  if (!file || !supportsSubtitle(fileName, file.detectedKind)) {
     return [] as AudioTrackInfo[];
   }
   if (file.path && fs.existsSync(file.path)) {
@@ -1363,5 +1415,16 @@ export async function listArchiveSubtitleTracks(archive: ArchiveDoc, fileIndex: 
     });
   }
   tracks.sort((a, b) => a.audioTrack - b.audioTrack);
+  if (tracks.length > 1) {
+    return tracks;
+  }
+  try {
+    const probed = await probeAudioTracksFromArchive(archive, fileIndex, fileName);
+    if (Array.isArray(probed) && probed.length > 0) {
+      return probed.sort((a, b) => a.audioTrack - b.audioTrack);
+    }
+  } catch {
+    // keep stored fallback if probe from archive is unavailable
+  }
   return tracks;
 }
