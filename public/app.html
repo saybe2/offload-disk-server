@@ -28,7 +28,14 @@
           <input type="checkbox" id="transcodeCopiesToggle" />
           <span>Transcoded copies</span>
         </label>
-        <div id="quota" class="quota"></div>
+        <div id="quotaWidget" class="quota-widget" role="button" tabindex="0" aria-label="Storage usage details">
+          <div class="quota-bar" aria-hidden="true">
+            <span id="quotaBarPrimary" class="quota-segment quota-segment-primary"></span>
+            <span id="quotaBarConverted" class="quota-segment quota-segment-converted"></span>
+            <span id="quotaBarFree" class="quota-segment quota-segment-free"></span>
+          </div>
+          <div id="quota" class="quota"></div>
+        </div>
       </div>
     </aside>
 
