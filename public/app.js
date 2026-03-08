@@ -959,22 +959,29 @@ async function openPreviewModal(item) {
     previewState.classList.add('hidden');
     if (mediaKind === 'video') {
       previewVideo.onerror = () => resetPreviewContent('Failed to load media preview');
-      const tracks = await fetchSubtitleTracks(archive._id, targetIndex);
-      const trackList = normalizeSubtitleTrackList(tracks);
-      attachSubtitleTracks(previewVideo, archive._id, targetIndex, trackList);
       previewTrackContext = {
         archiveId: String(archive._id),
         fileIndex: targetIndex,
         baseSrc: mediaUrl,
-        tracks: trackList,
+        tracks: [],
         audioTrack: 0
       };
-      if (trackList.length > 0) {
-        showPreviewTrackControls(trackList);
-      }
       previewVideo.src = mediaUrl;
       previewVideo.classList.remove('hidden');
       previewVideo.load();
+      void (async () => {
+        const tracks = await fetchSubtitleTracks(archive._id, targetIndex);
+        const trackList = normalizeSubtitleTrackList(tracks);
+        const activeSrc = previewVideo.getAttribute('src') || '';
+        if (activeSrc !== mediaUrl) return;
+        attachSubtitleTracks(previewVideo, archive._id, targetIndex, trackList);
+        if (previewTrackContext && previewTrackContext.baseSrc === mediaUrl) {
+          previewTrackContext.tracks = trackList;
+          if (trackList.length > 0) {
+            showPreviewTrackControls(trackList);
+          }
+        }
+      })();
       return;
     }
     previewAudio.onerror = () => resetPreviewContent('Failed to load media preview');
