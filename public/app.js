@@ -814,7 +814,7 @@ async function fetchSubtitleTracks(archiveId, fileIndex) {
 
 function normalizeSubtitleTrackList(tracks) {
   if (!Array.isArray(tracks) || tracks.length === 0) {
-    return [{ audioTrack: 0, language: 'auto', label: 'Track 1' }];
+    return [];
   }
   const map = new Map();
   tracks.forEach((track) => {
@@ -838,6 +838,7 @@ function normalizeSubtitleTrackList(tracks) {
 function attachSubtitleTracks(videoEl, archiveId, fileIndex, tracks) {
   const list = normalizeSubtitleTrackList(tracks);
   videoEl.querySelectorAll('track[data-auto-subtitle="1"]').forEach((track) => track.remove());
+  if (list.length === 0) return;
   list.forEach((item, idx) => {
     const track = document.createElement('track');
     track.kind = 'subtitles';
@@ -934,7 +935,7 @@ function showPreviewTrackControls(tracks) {
   offOption.textContent = 'Off';
   previewSubtitleTrackSelect.insertBefore(offOption, previewSubtitleTrackSelect.firstChild);
 
-  previewAudioTrackSelect.value = '0';
+  previewAudioTrackSelect.value = list.length > 0 ? '0' : '';
   previewSubtitleTrackSelect.value = list.length > 0 ? '0' : 'off';
   previewAudioTrackSelect.disabled = list.length <= 1;
   previewSubtitleTrackSelect.disabled = false;
@@ -968,7 +969,9 @@ async function openPreviewModal(item) {
         tracks: trackList,
         audioTrack: 0
       };
-      showPreviewTrackControls(trackList);
+      if (trackList.length > 0) {
+        showPreviewTrackControls(trackList);
+      }
       previewVideo.src = mediaUrl;
       previewVideo.classList.remove('hidden');
       previewVideo.load();
