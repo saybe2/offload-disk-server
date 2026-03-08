@@ -43,7 +43,6 @@ import { queueArchiveThumbnails } from "../services/thumbnailWorker.js";
 import {
   ensureArchiveSubtitle,
   ensureArchiveSubtitleFromSource,
-  getMediaKind,
   isPermanentSubtitleFailureMessage,
   listArchiveSubtitleTracks,
   supportsSubtitle
@@ -61,6 +60,12 @@ import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js"
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
 import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
+import {
+  getPreviewMediaKind,
+  isClientStreamAbortError,
+  isFileDeleted,
+  isPreviewSupportedForFile
+} from "../services/mediaPreviewSupport.js";
 import {
   findReadyTranscodeArchive,
   listLinkedTranscodeArchiveIds
@@ -87,20 +92,6 @@ export const apiRouter = Router();
 
 function sanitizeName(name: string) {
   return sanitizeFilename(name);
-}
-
-function isClientStreamAbortError(err: unknown) {
-  const message = err instanceof Error ? err.message : String(err || "");
-  const code = typeof err === "object" && err ? String((err as any).code || "") : "";
-  const lower = message.toLowerCase();
-  return (
-    lower.includes("premature close") ||
-    lower.includes("aborted") ||
-    lower.includes("econnreset") ||
-    lower.includes("err_stream_premature_close") ||
-    code === "ECONNRESET" ||
-    code === "ERR_STREAM_PREMATURE_CLOSE"
-  );
 }
 
 const CP1252_MAP: Record<number, number> = {
@@ -255,39 +246,6 @@ function splitUploads<T extends { size: number }>(files: T[]) {
   }
 
   return groups;
-}
-
-function isFileDeleted(file: any) {
-  return !!file?.deletedAt;
-}
-
-function getPreviewMediaKind(fileName: string, file: any) {
-  const direct = getMediaKind(fileName, file?.detectedKind);
-  if (direct) return direct;
-  const ext = path.extname(fileName).toLowerCase();
-  const label = String(file?.detectedTypeLabel || "").toLowerCase();
-  const size = Number(file?.size || 0);
-  if (ext === ".ts" && (label.includes("video") || size > 512 * 1024)) {
-    return "video" as const;
-  }
-  return null;
-}
-
-function isPreviewSupportedForFile(archive: any, file: any) {
-  if (!file || isFileDeleted(file)) return false;
-  if (String(file?.transcode?.status || "") === "ready" && String(file?.transcode?.archiveId || "")) {
-    return true;
-  }
-  const fileName = file.originalName || file.name || archive?.displayName || archive?.name || "";
-  const mediaKind = getPreviewMediaKind(fileName, file);
-  if (mediaKind) {
-    return isMediaPreviewSupported(fileName, mediaKind);
-  }
-  const fileSize = Number(file.size || 0);
-  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
-  if (fileSize > previewMaxBytes) return false;
-  const contentType = (mime.lookup(fileName) as string) || "";
-  return isPreviewAllowedForFile(fileName, contentType);
 }
 
 function withPreviewSupport(archive: any) {
