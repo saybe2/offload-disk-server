@@ -554,45 +554,25 @@ export async function ensureArchiveFileTranscodeFromSource(
     if (String(sourceArchive.archiveKind || "primary") === "transcoded") return null;
     const enabled = await ensureSourceUserEnabled(userId);
     if (!enabled) {
-      if (audioTrack > 0) {
-        await upsertSourceTranscodeVariantState(sourceId, fileIndex, audioTrack, {
-          status: "skipped",
-          error: "disabled_by_user",
-          archiveId: "",
-          size: 0,
-          contentType: ""
-        });
-      } else {
-        await updateSourceTranscodeState(sourceId, fileIndex, {
-          status: "skipped",
-          error: "disabled_by_user",
-          archiveId: "",
-          size: 0,
-          contentType: ""
-        });
-      }
+      await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
+        status: "skipped",
+        error: "disabled_by_user",
+        archiveId: "",
+        size: 0,
+        contentType: ""
+      });
       return null;
     }
 
     const sourceName = file.originalName || file.name || `file_${fileIndex}`;
     if (!supportsTranscodeCopy(sourceName, file.detectedKind)) {
-      if (audioTrack > 0) {
-        await upsertSourceTranscodeVariantState(sourceId, fileIndex, audioTrack, {
-          status: "skipped",
-          error: "unsupported_media_type",
-          archiveId: "",
-          size: 0,
-          contentType: ""
-        });
-      } else {
-        await updateSourceTranscodeState(sourceId, fileIndex, {
-          status: "skipped",
-          error: "unsupported_media_type",
-          archiveId: "",
-          size: 0,
-          contentType: ""
-        });
-      }
+      await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
+        status: "skipped",
+        error: "unsupported_media_type",
+        archiveId: "",
+        size: 0,
+        contentType: ""
+      });
       return null;
     }
 
@@ -601,36 +581,18 @@ export async function ensureArchiveFileTranscodeFromSource(
       throw new Error("source_missing");
     }
 
-    if (audioTrack > 0) {
-      await upsertSourceTranscodeVariantState(sourceId, fileIndex, audioTrack, {
-        status: "processing",
-        error: ""
-      });
-    } else {
-      await updateSourceTranscodeState(sourceId, fileIndex, {
-        status: "processing",
-        error: ""
-      });
-      await upsertSourceTranscodeVariantState(sourceId, fileIndex, 0, {
-        status: "processing",
-        error: ""
-      });
-    }
+    await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
+      status: "processing",
+      error: ""
+    });
     return await createTranscodedArchive(sourceArchive, fileIndex, sourcePath, sourceName, file.detectedKind, audioTrack);
   })()
     .catch(async (err) => {
       const message = toErrorMessage(err);
-      if (audioTrack > 0) {
-        await upsertSourceTranscodeVariantState(sourceId, fileIndex, audioTrack, {
-          status: "error",
-          error: message.slice(0, 500)
-        });
-      } else {
-        await updateSourceTranscodeState(sourceId, fileIndex, {
-          status: "error",
-          error: message.slice(0, 500)
-        });
-      }
+      await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
+        status: "error",
+        error: message.slice(0, 500)
+      });
       throw err;
     })
     .finally(() => {
@@ -641,7 +603,44 @@ export async function ensureArchiveFileTranscodeFromSource(
   return run;
 }
 
-export async function ensureArchiveFileTranscode(sourceArchive: ArchiveDoc | any, fileIndex: number) {
+async function withRestoredSourceArchive(
+  sourceArchive: ArchiveDoc | any,
+  fileIndex: number,
+  sourceId: string,
+  sourceName: string,
+  run: (restoredArchive: any) => Promise<string | null>
+) {
+  const workDir = transcodeWorkDir(sourceId, fileIndex);
+  await fs.promises.mkdir(workDir, { recursive: true });
+  const restoredPath = path.join(workDir, `${fileIndex}_${sanitizeFilename(sourceName)}`);
+  try {
+    if (sourceArchive.isBundle) {
+      await restoreArchiveFileToFile(sourceArchive, fileIndex, restoredPath, config.cacheDir, config.masterKey);
+    } else {
+      await restoreArchiveToFile(sourceArchive, restoredPath, config.cacheDir, config.masterKey);
+    }
+    const sourceObject =
+      sourceArchive && typeof (sourceArchive as any).toObject === "function"
+        ? (sourceArchive as any).toObject()
+        : sourceArchive;
+    const restoredArchive = {
+      ...sourceObject,
+      _id: sourceObject?._id || sourceId,
+      userId: sourceObject?.userId || sourceArchive?.userId,
+      files: [...(sourceObject?.files || [])]
+    };
+    restoredArchive.files[fileIndex] = { ...restoredArchive.files[fileIndex], path: restoredPath };
+    return await run(restoredArchive);
+  } finally {
+    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function ensureArchiveFileTranscodeInternal(
+  sourceArchive: ArchiveDoc | any,
+  fileIndex: number,
+  audioTrack: number
+) {
   const file = sourceArchive.files?.[fileIndex];
   if (!file || file.deletedAt) return null;
   const sourceId = sourceArchiveId(sourceArchive);
@@ -652,33 +651,16 @@ export async function ensureArchiveFileTranscode(sourceArchive: ArchiveDoc | any
   const sourcePath = String(file.path || "");
   const sourceExists = sourcePath ? await fs.promises.stat(sourcePath).catch(() => null) : null;
   if (sourceExists) {
-    return ensureArchiveFileTranscodeFromSource(sourceArchive, fileIndex, 0);
+    return ensureArchiveFileTranscodeFromSource(sourceArchive, fileIndex, audioTrack);
   }
 
-  const workDir = transcodeWorkDir(sourceId, fileIndex);
-  await fs.promises.mkdir(workDir, { recursive: true });
-  const restoredPath = path.join(workDir, `${fileIndex}_${sanitizeFilename(sourceName)}`);
-  try {
-    if (sourceArchive.isBundle) {
-      await restoreArchiveFileToFile(sourceArchive, fileIndex, restoredPath, config.cacheDir, config.masterKey);
-    } else {
-      await restoreArchiveToFile(sourceArchive, restoredPath, config.cacheDir, config.masterKey);
-    }
-    const sourceObject =
-      sourceArchive && typeof (sourceArchive as any).toObject === "function"
-        ? (sourceArchive as any).toObject()
-        : sourceArchive;
-    const restoredArchive = {
-      ...sourceObject,
-      _id: sourceObject?._id || sourceId,
-      userId: sourceObject?.userId || sourceArchive?.userId,
-      files: [...(sourceObject?.files || [])]
-    };
-    restoredArchive.files[fileIndex] = { ...restoredArchive.files[fileIndex], path: restoredPath };
-    return await ensureArchiveFileTranscodeFromSource(restoredArchive, fileIndex, 0);
-  } finally {
-    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  return withRestoredSourceArchive(sourceArchive, fileIndex, sourceId, sourceName, (restoredArchive) =>
+    ensureArchiveFileTranscodeFromSource(restoredArchive, fileIndex, audioTrack)
+  );
+}
+
+export async function ensureArchiveFileTranscode(sourceArchive: ArchiveDoc | any, fileIndex: number) {
+  return ensureArchiveFileTranscodeInternal(sourceArchive, fileIndex, 0);
 }
 
 export async function ensureArchiveFileTranscodeForAudioTrack(
@@ -689,41 +671,7 @@ export async function ensureArchiveFileTranscodeForAudioTrack(
   if (!Number.isInteger(audioTrack) || audioTrack <= 0) {
     return ensureArchiveFileTranscode(sourceArchive, fileIndex);
   }
-  const file = sourceArchive.files?.[fileIndex];
-  if (!file || file.deletedAt) return null;
-  const sourceId = sourceArchiveId(sourceArchive);
-  if (!sourceId) throw new Error("source_archive_id_missing");
-  const sourceName = file.originalName || file.name || `file_${fileIndex}`;
-  const sourcePath = String(file.path || "");
-  const sourceExists = sourcePath ? await fs.promises.stat(sourcePath).catch(() => null) : null;
-  if (sourceExists) {
-    return ensureArchiveFileTranscodeFromSource(sourceArchive, fileIndex, audioTrack);
-  }
-
-  const workDir = transcodeWorkDir(sourceId, fileIndex);
-  await fs.promises.mkdir(workDir, { recursive: true });
-  const restoredPath = path.join(workDir, `${fileIndex}_${sanitizeFilename(sourceName)}`);
-  try {
-    if (sourceArchive.isBundle) {
-      await restoreArchiveFileToFile(sourceArchive, fileIndex, restoredPath, config.cacheDir, config.masterKey);
-    } else {
-      await restoreArchiveToFile(sourceArchive, restoredPath, config.cacheDir, config.masterKey);
-    }
-    const sourceObject =
-      sourceArchive && typeof (sourceArchive as any).toObject === "function"
-        ? (sourceArchive as any).toObject()
-        : sourceArchive;
-    const restoredArchive = {
-      ...sourceObject,
-      _id: sourceObject?._id || sourceId,
-      userId: sourceObject?.userId || sourceArchive?.userId,
-      files: [...(sourceObject?.files || [])]
-    };
-    restoredArchive.files[fileIndex] = { ...restoredArchive.files[fileIndex], path: restoredPath };
-    return await ensureArchiveFileTranscodeFromSource(restoredArchive, fileIndex, audioTrack);
-  } finally {
-    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  return ensureArchiveFileTranscodeInternal(sourceArchive, fileIndex, audioTrack);
 }
 
 export async function findReadyTranscodeArchive(sourceArchive: ArchiveDoc | any, fileIndex: number) {
