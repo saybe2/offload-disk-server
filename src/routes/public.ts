@@ -32,11 +32,8 @@ import {
 import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { isMediaPreviewSupported, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
-import {
-  ensureArchiveFileTranscodeForAudioTrack,
-  findReadyTranscodeArchive,
-  findReadyTranscodeArchiveByAudioTrack
-} from "../services/transcodes.js";
+import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
+import { findReadyTranscodeArchive } from "../services/transcodes.js";
 import { log } from "../logger.js";
 import {
   noteDownloadDone,
@@ -459,33 +456,19 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   }
 
   const preferTranscoded = req.query.transcoded !== "0";
-  const audioTrackRaw = req.query.audioTrack;
-  const requestedAudioTrack =
-    audioTrackRaw == null || audioTrackRaw === ""
-      ? null
-      : Number.parseInt(String(audioTrackRaw), 10);
-  if (requestedAudioTrack != null && (!Number.isInteger(requestedAudioTrack) || requestedAudioTrack < 0)) {
+  const parsedAudioTrack = parseAudioTrackQuery(req.query.audioTrack);
+  if (!parsedAudioTrack.ok) {
     return res.status(400).json({ error: "bad_audio_track" });
   }
+  const requestedAudioTrack = parsedAudioTrack.value;
 
-  let transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, fileIndex) : null;
-  if (preferTranscoded && requestedAudioTrack != null && requestedAudioTrack > 0) {
-    let variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, fileIndex, requestedAudioTrack);
-    if (!variantArchive) {
-      try {
-        await ensureArchiveFileTranscodeForAudioTrack(archive, fileIndex, requestedAudioTrack);
-        variantArchive = await findReadyTranscodeArchiveByAudioTrack(archive, fileIndex, requestedAudioTrack);
-      } catch (err) {
-        log(
-          "transcode",
-          `public audio variant fallback ${archive.id} file=${fileIndex} track=${requestedAudioTrack} ${(err as Error).message}`
-        );
-      }
-    }
-    if (variantArchive) {
-      transcodedArchive = variantArchive;
-    }
-  }
+  const transcodedArchive = await resolvePreferredTranscodedArchiveForMedia(
+    archive,
+    fileIndex,
+    preferTranscoded,
+    requestedAudioTrack,
+    "public audio variant fallback"
+  );
   const mediaArchive = transcodedArchive || archive;
   const mediaFile = transcodedArchive ? mediaArchive.files?.[0] : file;
   const fileName = (mediaFile?.originalName || mediaFile?.name || mediaArchive.downloadName || mediaArchive.name).replace(/[\\/]/g, "_");
