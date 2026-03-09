@@ -444,7 +444,7 @@ async function createTranscodedArchive(
     const transcodeDurationMs = Date.now() - startedAt;
     const stat = await fs.promises.stat(outputPath);
     if (!stat.size) {
-      noteTranscodeError();
+      noteTranscodeError("transcode_output_empty");
       finished = true;
       throw new Error("transcode_output_empty");
     }
@@ -454,7 +454,7 @@ async function createTranscodedArchive(
       throw new Error("user_not_found");
     }
     if (user.quotaBytes > 0 && user.usedBytes + stat.size > user.quotaBytes) {
-      noteTranscodeError();
+      noteTranscodeError("quota_exceeded");
       finished = true;
       await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
         status: "error",
@@ -520,7 +520,7 @@ async function createTranscodedArchive(
     return archive.id;
   } catch (err) {
     if (!finished) {
-      noteTranscodeError();
+      noteTranscodeError(toErrorMessage(err));
       finished = true;
     }
     throw err;

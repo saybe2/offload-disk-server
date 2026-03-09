@@ -267,6 +267,12 @@ const gauges = {
     help: "Average transcode job duration in ms",
     registers: [registry]
   }),
+  transcodeErrorByType: new client.Gauge({
+    name: "offload_transcode_error_by_type_total",
+    help: "Transcode error totals by normalized type since process start",
+    labelNames: ["type"] as const,
+    registers: [registry]
+  }),
   deleteJobsStarted: new client.Gauge({
     name: "offload_delete_jobs_started_total",
     help: "Total delete jobs started since process start",
@@ -522,6 +528,11 @@ async function refreshMetrics() {
   gauges.transcodeBytesOut.set(transcode.bytesOut || 0);
   gauges.transcodeRate.set(transcode.rateBps60s || 0);
   gauges.transcodeAvgMs.set(transcode.avgJobMs || 0);
+  gauges.transcodeErrorByType.reset();
+  const transcodeErrorTypes = Object.entries(transcode.errorTypes || {});
+  for (const [type, count] of transcodeErrorTypes) {
+    gauges.transcodeErrorByType.labels(String(type || "unknown")).set(Number(count || 0));
+  }
   gauges.deleteJobsStarted.set(deletion.jobsStarted || 0);
   gauges.deleteJobsDone.set(deletion.jobsDone || 0);
   gauges.deleteJobsError.set(deletion.jobsError || 0);
