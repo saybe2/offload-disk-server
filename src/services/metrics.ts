@@ -11,6 +11,7 @@ import { getSubtitleWorkerState } from "./subtitleWorker.js";
 import { getTranscodeWorkerState } from "./transcodeWorker.js";
 import { getOutboundProxyRuntimeStatus } from "./outbound.js";
 import { getSmbRuntimeState } from "../smb/fuse.js";
+import { config } from "../config.js";
 
 const registry = new client.Registry();
 client.collectDefaultMetrics({ register: registry, prefix: "offload_node_" });
@@ -581,6 +582,20 @@ async function refreshMetrics() {
   gauges.proxyState.labels("degraded_routes").set(proxyState.degradedRoutes || 0);
   gauges.proxyState.labels("bypassed_routes").set(proxyState.bypassedRoutes || 0);
 
+  const transcodePendingOr: Record<string, unknown>[] = [
+    { "transcode.status": { $exists: false } },
+    { "transcode.status": { $in: ["error", ""] } },
+    { "transcode.status": "skipped", "transcode.error": "disabled_by_user" },
+    { "transcode.archiveId": { $exists: false } },
+    { "transcode.archiveId": "" }
+  ];
+  if (config.transcodeForceAll) {
+    transcodePendingOr.push(
+      { "transcode.status": "skipped", "transcode.error": "already_compatible_codecs" },
+      { "transcode.status": "error", "transcode.error": "already_compatible_codecs" }
+    );
+  }
+
   try {
     const [
       statusBuckets,
@@ -640,13 +655,7 @@ async function refreshMetrics() {
             $and: [
               { $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }] },
               {
-                $or: [
-                  { "transcode.status": { $exists: false } },
-                  { "transcode.status": { $in: ["error", ""] } },
-                  { "transcode.status": "skipped", "transcode.error": "disabled_by_user" },
-                  { "transcode.archiveId": { $exists: false } },
-                  { "transcode.archiveId": "" }
-                ]
+                $or: transcodePendingOr
               }
             ]
           }

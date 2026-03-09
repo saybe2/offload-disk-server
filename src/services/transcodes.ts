@@ -401,7 +401,7 @@ async function createTranscodedArchive(
     });
     return null;
   }
-  if (compatibility.compatible) {
+  if (compatibility.compatible && !config.transcodeForceAll) {
     await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
       status: "skipped",
       error: compatibility.reason || "already_compatible_codecs",
