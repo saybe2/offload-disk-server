@@ -49,7 +49,7 @@ const totals = {
       local: { attempted: 0, failed: 0 }
     }
   },
-  transcode: { jobsStarted: 0, jobsDone: 0, jobsError: 0, bytesIn: 0, bytesOut: 0, durationMs: 0 },
+  transcode: { jobsStarted: 0, jobsDone: 0, jobsError: 0, bytesIn: 0, bytesOut: 0, durationMs: 0, errorTypes: {} as Record<string, number> },
   deletion: { jobsStarted: 0, jobsDone: 0, jobsError: 0, partsDone: 0, bytesFreed: 0, durationMs: 0 },
   smb: { readOpens: 0, writeOpens: 0, readOps: 0, writeOps: 0, readBytes: 0, writeBytes: 0, errors: 0 }
 };
@@ -229,6 +229,14 @@ export async function initAnalyticsPersistence() {
   totals.transcode.bytesIn = Number((doc as any).transcode?.bytesIn || 0);
   totals.transcode.bytesOut = Number((doc as any).transcode?.bytesOut || 0);
   totals.transcode.durationMs = Number((doc as any).transcode?.durationMs || 0);
+  const rawTranscodeErrorTypes = (doc as any).transcode?.errorTypes;
+  const transcodeErrorEntries =
+    rawTranscodeErrorTypes instanceof Map
+      ? [...rawTranscodeErrorTypes.entries()]
+      : Object.entries(rawTranscodeErrorTypes || {});
+  totals.transcode.errorTypes = Object.fromEntries(
+    transcodeErrorEntries.map(([key, value]) => [String(key), Number(value || 0)])
+  );
 
   totals.deletion.jobsStarted = Number((doc as any).deletion?.jobsStarted || 0);
   totals.deletion.jobsDone = Number((doc as any).deletion?.jobsDone || 0);
@@ -468,9 +476,31 @@ export function noteTranscodeDone(bytesOut: number, durationMs: number) {
   });
 }
 
-export function noteTranscodeError() {
+function normalizeTranscodeErrorType(reason?: string) {
+  const msg = String(reason || "").toLowerCase();
+  if (!msg) return "unknown";
+  if (msg.includes("quota_exceeded")) return "quota_exceeded";
+  if (msg.includes("source_missing")) return "source_missing";
+  if (msg.includes("unsupported_media_content")) return "unsupported_media_content";
+  if (msg.includes("already_compatible_codecs")) return "already_compatible_codecs";
+  if (msg.includes("transcode_output_empty")) return "output_empty";
+  if (msg.includes("ffmpeg_failed") && msg.includes("invalid data found when processing input")) return "ffmpeg_invalid_input";
+  if (msg.includes("ffmpeg_failed") && msg.includes("does not contain any stream")) return "ffmpeg_no_stream";
+  if (msg.includes("ffmpeg_missing")) return "ffmpeg_missing";
+  if (msg.includes("user_not_found")) return "user_not_found";
+  if (msg.includes("source_archive_id_missing")) return "source_archive_id_missing";
+  if (msg.includes("source_user_id_missing")) return "source_user_id_missing";
+  return "unknown";
+}
+
+export function noteTranscodeError(reason?: string) {
+  const type = normalizeTranscodeErrorType(reason);
   totals.transcode.jobsError += 1;
-  addPendingInc({ "transcode.jobsError": 1 });
+  totals.transcode.errorTypes[type] = (totals.transcode.errorTypes[type] || 0) + 1;
+  addPendingInc({
+    "transcode.jobsError": 1,
+    [`transcode.errorTypes.${type}`]: 1
+  });
 }
 
 export function noteDeleteStarted() {
@@ -578,6 +608,7 @@ export function getAnalyticsSnapshot() {
     },
     transcode: {
       ...totals.transcode,
+      errorTypes: { ...totals.transcode.errorTypes },
       avgJobMs: avg(totals.transcode.durationMs, totals.transcode.jobsDone),
       rateBps60s: Math.round(sumRate("transcodeOutBytes"))
     },

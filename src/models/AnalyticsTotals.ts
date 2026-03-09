@@ -77,6 +77,7 @@ interface AnalyticsTotalsDoc {
     bytesIn: number;
     bytesOut: number;
     durationMs: number;
+    errorTypes?: Record<string, number>;
   };
   deletion: {
     jobsStarted: number;
@@ -180,7 +181,8 @@ const AnalyticsTotalsSchema = new Schema<AnalyticsTotalsDoc>(
       jobsError: { type: Number, default: 0 },
       bytesIn: { type: Number, default: 0 },
       bytesOut: { type: Number, default: 0 },
-      durationMs: { type: Number, default: 0 }
+      durationMs: { type: Number, default: 0 },
+      errorTypes: { type: Map, of: Number, default: {} }
     },
     deletion: {
       jobsStarted: { type: Number, default: 0 },
