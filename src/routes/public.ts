@@ -32,6 +32,7 @@ import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js"
 import { sanitizeFilename } from "../utils/names.js";
 import { isMediaPreviewSupported, isPreviewAllowedForFile, resolvePreviewContentType } from "../services/preview.js";
 import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
+import { activeBundleFileIndices, isTranscodedArchive } from "../services/archiveFiles.js";
 import {
   getPreviewMediaKind,
   isClientStreamAbortError,
@@ -68,21 +69,6 @@ function parsePreviewIndex(rawValue: unknown) {
   if (rawValue === undefined || rawValue === null || rawValue === "") return 0;
   const value = Number(rawValue);
   return Number.isInteger(value) && value >= 0 ? value : -1;
-}
-
-function isTranscodedArchive(archive: any) {
-  return String(archive?.archiveKind || "primary") === "transcoded";
-}
-
-function activeBundleFileIndices(archive: any) {
-  const indices: number[] = [];
-  const files = Array.isArray(archive?.files) ? archive.files : [];
-  for (let i = 0; i < files.length; i += 1) {
-    if (!isFileDeleted(files[i])) {
-      indices.push(i);
-    }
-  }
-  return indices;
 }
 
 function estimateArchiveDownloadBytes(archive: any) {

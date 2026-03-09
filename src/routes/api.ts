@@ -60,6 +60,7 @@ import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js"
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
 import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
+import { activeBundleFileIndices, hasActiveFiles, isTranscodedArchive } from "../services/archiveFiles.js";
 import {
   getPreviewMediaKind,
   isClientStreamAbortError,
@@ -256,26 +257,6 @@ function withPreviewSupport(archive: any) {
       }))
     : [];
   return { ...archive, files };
-}
-
-function activeBundleFileIndices(archive: any) {
-  const indices: number[] = [];
-  const files = Array.isArray(archive?.files) ? archive.files : [];
-  for (let i = 0; i < files.length; i += 1) {
-    if (!isFileDeleted(files[i])) {
-      indices.push(i);
-    }
-  }
-  return indices;
-}
-
-function hasActiveFiles(archive: any) {
-  if (!Array.isArray(archive?.files) || archive.files.length === 0) return false;
-  return archive.files.some((file: any) => !isFileDeleted(file));
-}
-
-function isTranscodedArchive(archive: any) {
-  return String(archive?.archiveKind || "primary") === "transcoded";
 }
 
 function ensurePrimaryArchive(archive: any, res: Response) {
