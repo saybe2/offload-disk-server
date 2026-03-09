@@ -18,7 +18,6 @@ import {
 } from "./partProvider.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
-import { ensureArchiveSubtitleFromSource, supportsSubtitle } from "./subtitles.js";
 import { queueArchiveSubtitles } from "./subtitleWorker.js";
 import { queueArchiveTranscodes } from "./transcodeWorker.js";
 import { isTelegramReady } from "./telegram.js";
@@ -190,31 +189,6 @@ async function generateLocalThumbnails(archive: any) {
   }
   if (generated > 0) {
     log(`thumb ready ${archive.id} generated=${generated}`);
-  }
-}
-
-async function generateLocalSubtitles(archive: any) {
-  if (!archive?.files?.length) return;
-  log(`subtitle start ${archive.id} files=${archive.files.length}`);
-  let generated = 0;
-  for (let fileIndex = 0; fileIndex < archive.files.length; fileIndex += 1) {
-    const file = archive.files[fileIndex];
-    if (file?.deletedAt) continue;
-    const fileName = file?.originalName || file?.name || "";
-    if (!supportsSubtitle(fileName, file?.detectedKind)) continue;
-    try {
-      log(`subtitle file start ${archive.id} file=${fileIndex}`);
-      await ensureArchiveSubtitleFromSource(archive, fileIndex);
-      log(`subtitle file ready ${archive.id} file=${fileIndex}`);
-      generated += 1;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`subtitle skip ${archive.id} file=${fileIndex} ${message}`);
-      queueArchiveSubtitles(archive.id);
-    }
-  }
-  if (generated > 0) {
-    log(`subtitle ready ${archive.id} generated=${generated}`);
   }
 }
 
@@ -615,7 +589,8 @@ async function processNextArchive() {
 
     if (!isTranscodedArchive) {
       await generateLocalThumbnails(archive);
-      await generateLocalSubtitles(archive);
+      // Keep upload completion fast: subtitles are handled asynchronously by subtitle-worker.
+      queueArchiveSubtitles(archive.id);
     }
     await Archive.updateOne({ _id: archive.id }, { $set: { status: "ready", error: "" } });
     if (isTranscodedArchive) {
