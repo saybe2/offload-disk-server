@@ -231,6 +231,19 @@ function renderQuotaWidget(me) {
   const quotaBytes = Number(me?.quotaBytes || 0);
   const accountedUsedBytes = Math.max(0, Number(me?.usedBytes || 0));
   const convertedBytes = Math.max(0, Number(me?.transcodedUsedBytes || 0));
+  const legacyConvertedBytesRaw = Math.max(0, Number(me?.transcodedLegacyBytes || 0));
+  const modernConvertedBytesRaw = Math.max(0, Number(me?.transcodedModernBytes || 0));
+  const legacyConvertedCount = Math.max(0, Number(me?.transcodedLegacyCount || 0));
+  const modernConvertedCount = Math.max(0, Number(me?.transcodedModernCount || 0));
+  let legacyConvertedBytes = legacyConvertedBytesRaw;
+  let modernConvertedBytes = modernConvertedBytesRaw;
+  if (legacyConvertedBytes + modernConvertedBytes === 0 && convertedBytes > 0) {
+    modernConvertedBytes = convertedBytes;
+  }
+  if (legacyConvertedBytes + modernConvertedBytes !== convertedBytes && convertedBytes > 0) {
+    legacyConvertedBytes = Math.min(legacyConvertedBytes, convertedBytes);
+    modernConvertedBytes = Math.max(0, convertedBytes - legacyConvertedBytes);
+  }
   const primaryBytes = Math.max(0, accountedUsedBytes - convertedBytes);
   const finiteQuota = quotaBytes > 0;
   const totalUsedBytes = primaryBytes + convertedBytes;
@@ -273,6 +286,10 @@ function renderQuotaWidget(me) {
     totalUsedBytes: displayUsedBytes,
     primaryBytes,
     convertedBytes,
+    legacyConvertedBytes,
+    modernConvertedBytes,
+    legacyConvertedCount,
+    modernConvertedCount,
     freeBytes,
     usagePercent: finiteQuota ? clampPercent((displayUsedBytes / Math.max(1, quotaBytes)) * 100) : 100,
     transcodeCopiesEnabled: !!me?.transcodeCopiesEnabled
@@ -3140,6 +3157,14 @@ function renderStorageDetails() {
     { label: 'Used total', value: formatSize(snapshot.totalUsedBytes) },
     { label: 'Primary files', value: formatSize(snapshot.primaryBytes) },
     { label: 'Converted copies', value: formatSize(snapshot.convertedBytes) },
+    {
+      label: 'Converted (old pipeline)',
+      value: `${formatSize(snapshot.legacyConvertedBytes)} (${snapshot.legacyConvertedCount})`
+    },
+    {
+      label: 'Converted (new pipeline)',
+      value: `${formatSize(snapshot.modernConvertedBytes)} (${snapshot.modernConvertedCount})`
+    },
     {
       label: 'Converted share',
       value: snapshot.totalUsedBytes > 0
