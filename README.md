@@ -5,7 +5,7 @@ Discord-backed storage server with encryption, chunking, web UI, share links, tr
 ## Project status
 - Server is the primary product.
 - Desktop client is considered archived/frozen.
-- Recommended download flow: web UI links + Free Download Manager (FDM).
+- Recommended download flow: use direct links from the web UI.
 
 ## Features
 - AES-256-GCM encryption.
@@ -135,9 +135,9 @@ docker compose -f docker-compose.monitoring.yml logs -f loki
 ## Download + resume behavior
 - HTTP resume (Range) is implemented for `v2` non-bundle files.
 - For bundle extraction routes, byte-range resume is not guaranteed.
-- FDM should use direct file links from the web UI.
+- Use direct file links from the web UI.
 
-## Recommended FDM settings
+## Recommended download client settings
 - Connections per download: `4-8`
 - Retry count: `10`
 - Retry interval: `5s`
