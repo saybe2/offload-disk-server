@@ -1053,6 +1053,65 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   return res.json({ archives: archives.map((archive) => withPreviewSupport(archive)) });
 });
 
+apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
+  const baseFilter = req.session.role === "admin" ? {} : { userId: req.session.userId };
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
+  const statusFilter = statusRaw === "ready" || statusRaw === "processing" || statusRaw === "error" || statusRaw === "skipped"
+    ? statusRaw
+    : null;
+
+  const archives = await Archive.find({
+    ...baseFilter,
+    archiveKind: { $ne: "transcoded" },
+    deletedAt: null,
+    trashedAt: null
+  })
+    .select("_id folderId status isBundle priority displayName name originalSize contentModifiedAt createdAt files")
+    .sort({ updatedAt: -1 })
+    .lean();
+
+  const items: any[] = [];
+  for (const archive of archives) {
+    const files = Array.isArray(archive.files) ? archive.files : [];
+    const activeFiles = files.filter((file: any) => !isFileDeleted(file));
+    const bundleMode = !!archive.isBundle && activeFiles.length > 1;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      if (!file || isFileDeleted(file)) continue;
+      const transcodeStatus = String(file?.transcode?.status || "").toLowerCase();
+      if (!transcodeStatus) continue;
+      if (statusFilter && transcodeStatus !== statusFilter) continue;
+      const previewSupported = isPreviewSupportedForFile(archive, file);
+      items.push({
+        archive: {
+          _id: archive._id,
+          folderId: archive.folderId || null,
+          status: archive.status,
+          isBundle: !!archive.isBundle,
+          priority: archive.priority,
+          displayName: archive.displayName,
+          name: archive.name,
+          originalSize: archive.originalSize,
+          contentModifiedAt: archive.contentModifiedAt,
+          createdAt: archive.createdAt
+        },
+        file: {
+          ...file,
+          previewSupported
+        },
+        fileIndex: index,
+        isBundle: bundleMode
+      });
+    }
+  }
+
+  return res.json({
+    items,
+    total: items.length
+  });
+});
+
 apiRouter.get("/search/global", requireAuth, async (req, res) => {
   const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const limitInput = Number.parseInt(String(req.query.limit || ""), 10);

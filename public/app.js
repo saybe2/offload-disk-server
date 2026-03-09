@@ -24,6 +24,7 @@ const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
 const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
 const navFiles = document.getElementById('navFiles');
 const navShared = document.getElementById('navShared');
+const navConverted = document.getElementById('navConverted');
 const navTrash = document.getElementById('navTrash');
 const transcodeCopiesToggle = document.getElementById('transcodeCopiesToggle');
 const quotaWidget = document.getElementById('quotaWidget');
@@ -83,7 +84,7 @@ const prioritySaveBtn = document.getElementById('prioritySaveBtn');
 const priorityCloseBtn = document.getElementById('priorityCloseBtn');
 
 let currentFolderId = null;
-let currentView = 'files'; // files | trash | shared
+let currentView = 'files'; // files | trash | shared | converted
 let STREAM_UPLOADS_ENABLED = false;
 let STREAM_SINGLE_MIN_MIB = 8;
 let PREVIEW_MAX_MIB = 5;
@@ -404,6 +405,8 @@ function updateTitle() {
     listTitle.textContent = 'Trash';
   } else if (currentView === 'shared') {
     listTitle.textContent = 'Shared';
+  } else if (currentView === 'converted') {
+    listTitle.textContent = 'Converted';
   } else if (isGlobalSearchActive()) {
     listTitle.textContent = `Files / Global search: ${searchTerm}`;
   } else {
@@ -1194,6 +1197,7 @@ async function copyText(text) {
 function setActiveNav() {
   navFiles.classList.toggle('active', currentView === 'files');
   navShared.classList.toggle('active', currentView === 'shared');
+  navConverted?.classList.toggle('active', currentView === 'converted');
   navTrash.classList.toggle('active', currentView === 'trash');
   if (currentView !== 'files') {
     folderPriorityWrap.style.display = 'none';
@@ -1312,6 +1316,20 @@ function renderHead() {
         <th>Type</th>
         <th>Date modified</th>
         <th>Size</th>
+        <th>Actions</th>
+      </tr>
+    `;
+    return;
+  }
+  if (currentView === 'converted') {
+    listHead.innerHTML = `
+      <tr>
+        <th>Name</th>
+        <th>Path</th>
+        <th>Converted status</th>
+        <th>Converted size</th>
+        <th>Original size</th>
+        <th>Date modified</th>
         <th>Actions</th>
       </tr>
     `;
@@ -1659,6 +1677,10 @@ async function loadArchives() {
     await loadShared();
     return;
   }
+  if (currentView === 'converted') {
+    await loadConverted();
+    return;
+  }
 
   if (isGlobalSearchActive()) {
     await loadGlobalSearchResults();
@@ -1795,6 +1817,20 @@ function folderParentPath(folder) {
 }
 
 async function openFolderFromGlobal(folderId) {
+  currentView = 'files';
+  currentFolderId = folderId || null;
+  setSearchScope('folder');
+  searchTerm = '';
+  searchInput.value = '';
+  selectedItems.clear();
+  lastSelectedIndex = null;
+  setActiveNav();
+  updateTitle();
+  await loadFolders();
+  await loadArchives();
+}
+
+async function openFolderFromConverted(folderId) {
   currentView = 'files';
   currentFolderId = folderId || null;
   setSearchScope('folder');
@@ -2751,6 +2787,9 @@ function updateViewVisibility() {
   if (viewModeSelect) {
     viewModeSelect.disabled = currentView !== 'files' || globalMode;
   }
+  if (searchScopeSelect) {
+    searchScopeSelect.disabled = currentView !== 'files';
+  }
 }
 
 function handleRowSelection(item, key, index, event) {
@@ -3219,6 +3258,147 @@ async function createShareLink() {
   }
 }
 
+function convertedStatusLabel(item) {
+  const status = String(item?.file?.transcode?.status || 'unknown');
+  if (status === 'ready') return 'ready';
+  if (status === 'processing' || status === 'queued') return 'processing';
+  if (status === 'error') return 'error';
+  if (status === 'skipped') return 'skipped';
+  return status;
+}
+
+async function loadConverted() {
+  listTable.classList.remove('hidden');
+  gridView.classList.add('hidden');
+  gridView.innerHTML = '';
+  const res = await fetch('/api/archives/converted');
+  const data = await res.json();
+  await loadActiveSharesMap();
+  archiveList.innerHTML = '';
+  renderHead();
+  updateSelectionUI();
+
+  const itemsRaw = Array.isArray(data.items) ? data.items : [];
+  const items = sortFileItems(filterItems(itemsRaw));
+  lastRenderedItems = items;
+
+  for (const [index, item] of items.entries()) {
+    const a = item.archive;
+    const key = `${a._id}:${item.fileIndex}`;
+    const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+
+    const tr = document.createElement('tr');
+    tr.dataset.archiveId = a._id;
+    tr.dataset.fileIndex = String(item.fileIndex ?? 0);
+    if (selectedItems.has(key)) {
+      tr.classList.add('row-selected');
+    }
+    tr.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openFileContextMenu(item, event.clientX, event.clientY);
+    });
+    tr.addEventListener('click', (event) => {
+      if (event.target.closest('a,button,select')) return;
+      handleRowSelection(item, key, index, event);
+    });
+
+    const nameTd = document.createElement('td');
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'name-cell';
+    const iconEl = createFileIconElement();
+    const nameText = document.createElement('span');
+    nameText.textContent = fileName;
+    nameWrap.appendChild(iconEl);
+    nameWrap.appendChild(nameText);
+    if (item.isBundle) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'bundle';
+      nameWrap.appendChild(pill);
+    }
+    if (listArchiveShares(a._id).length > 0) {
+      nameWrap.appendChild(createSharedIndicatorButton(() => {
+        openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
+      }));
+    }
+    nameTd.appendChild(nameWrap);
+
+    const pathTd = document.createElement('td');
+    pathTd.className = 'global-path';
+    pathTd.textContent = buildFolderPath(a.folderId ? String(a.folderId) : null);
+
+    const statusTd = document.createElement('td');
+    statusTd.textContent = convertedStatusLabel(item);
+
+    const convertedSizeTd = document.createElement('td');
+    convertedSizeTd.textContent = formatSize(Number(item?.file?.transcode?.size || 0));
+
+    const originalSizeTd = document.createElement('td');
+    originalSizeTd.textContent = formatSize(item.file?.size ?? a.originalSize);
+
+    const dateTd = document.createElement('td');
+    dateTd.textContent = formatDate(itemModifiedAt(item));
+
+    const actionTd = document.createElement('td');
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open folder';
+    openBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await openFolderFromConverted(a.folderId ? String(a.folderId) : null);
+    });
+    actionTd.appendChild(openBtn);
+
+    if (a.status === 'ready') {
+      const originalLink = document.createElement('a');
+      originalLink.href = getDownloadUrl(item);
+      originalLink.textContent = 'Download';
+      actionTd.appendChild(originalLink);
+
+      if (hasReadyTranscode(item)) {
+        const convertedBtn = document.createElement('button');
+        convertedBtn.textContent = 'Download converted';
+        convertedBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          location.href = getConvertedDownloadUrl(item);
+        });
+        actionTd.appendChild(convertedBtn);
+      }
+
+      if (canPreviewItem(item)) {
+        const previewBtn = document.createElement('button');
+        previewBtn.textContent = 'Preview';
+        previewBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await openPreviewModal(item);
+        });
+        actionTd.appendChild(previewBtn);
+      }
+    }
+
+    tr.appendChild(nameTd);
+    tr.appendChild(pathTd);
+    tr.appendChild(statusTd);
+    tr.appendChild(convertedSizeTd);
+    tr.appendChild(originalSizeTd);
+    tr.appendChild(dateTd);
+    tr.appendChild(actionTd);
+    archiveList.appendChild(tr);
+  }
+
+  if (items.length === 0) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 7;
+    td.className = 'status-meta';
+    td.textContent = searchTerm ? `No converted files for "${searchTerm}"` : 'No converted files yet';
+    tr.appendChild(td);
+    archiveList.appendChild(tr);
+  }
+}
+
 async function loadShared() {
   listTable.classList.remove('hidden');
   gridView.classList.add('hidden');
@@ -3385,6 +3565,15 @@ navFiles.addEventListener('click', () => {
 
 navShared.addEventListener('click', () => {
   currentView = 'shared';
+  currentFolderId = null;
+  selectedItems.clear();
+  setActiveNav();
+  updateTitle();
+  loadArchives();
+});
+
+navConverted?.addEventListener('click', () => {
+  currentView = 'converted';
   currentFolderId = null;
   selectedItems.clear();
   setActiveNav();
@@ -3609,6 +3798,10 @@ searchInput.addEventListener('input', () => {
   }
   updateUrl();
   updateTitle();
+  if (currentView !== 'files') {
+    loadArchives();
+    return;
+  }
   if (isGlobalSearchActive()) {
     scheduleGlobalSearchReload();
     return;
@@ -3630,8 +3823,8 @@ searchScopeSelect?.addEventListener('change', () => {
 sortFieldSelect?.addEventListener('change', () => {
   sortField = sortFieldSelect.value || 'name';
   updateUrl();
-  if (currentView === 'shared') {
-    loadShared();
+  if (currentView === 'shared' || currentView === 'converted') {
+    loadArchives();
     return;
   }
   renderArchives();
@@ -3640,8 +3833,8 @@ sortFieldSelect?.addEventListener('change', () => {
 sortDirSelect?.addEventListener('change', () => {
   sortDir = sortDirSelect.value === 'desc' ? 'desc' : 'asc';
   updateUrl();
-  if (currentView === 'shared') {
-    loadShared();
+  if (currentView === 'shared' || currentView === 'converted') {
+    loadArchives();
     return;
   }
   renderArchives();
@@ -3786,7 +3979,7 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   const scope = params.get('scope');
   const sort = params.get('sort');
   const dir = params.get('dir');
-  if (view === 'trash' || view === 'shared' || view === 'files') {
+  if (view === 'trash' || view === 'shared' || view === 'files' || view === 'converted') {
     currentView = view;
   }
   if (currentView === 'files' && folder) {
