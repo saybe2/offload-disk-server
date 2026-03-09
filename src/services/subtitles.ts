@@ -713,12 +713,137 @@ function cuesToVtt(cues: SubtitleCue[]) {
   return out.join("\n");
 }
 
+function splitTextToSubtitleBlocks(rawText: string, targetMaxChars = 140) {
+  const normalized = String(rawText || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!normalized) return [] as string[];
+
+  const baseParts = normalized
+    .split(/(?<=[.!?…])\s+|\n+/g)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const parts = baseParts.length > 0 ? baseParts : [normalized];
+
+  const maxChars = Math.max(60, targetMaxChars);
+  const blocks: string[] = [];
+  let current = "";
+  const flush = () => {
+    const value = current.trim();
+    if (value) blocks.push(value);
+    current = "";
+  };
+
+  const pushPart = (text: string) => {
+    const value = text.trim();
+    if (!value) return;
+    if (value.length > maxChars * 1.5) {
+      const words = value.split(/\s+/).filter(Boolean);
+      let piece = "";
+      for (const word of words) {
+        const candidate = piece ? `${piece} ${word}` : word;
+        if (candidate.length <= maxChars) {
+          piece = candidate;
+          continue;
+        }
+        if (piece) {
+          pushPart(piece);
+        }
+        piece = word;
+      }
+      if (piece) {
+        pushPart(piece);
+      }
+      return;
+    }
+    const combined = current ? `${current} ${value}` : value;
+    if (!current || combined.length <= maxChars) {
+      current = combined;
+      return;
+    }
+    flush();
+    current = value;
+  };
+
+  for (const part of parts) {
+    pushPart(part);
+  }
+  flush();
+  return blocks;
+}
+
+function plainTranscriptToTimedCues(rawText: string, durationSec: number) {
+  const blocks = splitTextToSubtitleBlocks(rawText);
+  if (blocks.length === 0) {
+    throw new Error("subtitle_empty");
+  }
+  const effectiveDuration =
+    Number.isFinite(durationSec) && durationSec > 0
+      ? durationSec
+      : Math.max(10, Math.ceil(String(rawText || "").trim().length / 14));
+  const weights = blocks.map((block) => Math.max(1, block.length));
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0);
+  const minCueSec = Math.max(0.15, Math.min(1, effectiveDuration / Math.max(1, blocks.length * 3)));
+  const durations = blocks.map((_, idx) => Math.max(minCueSec, (effectiveDuration * weights[idx]) / Math.max(1, totalWeight)));
+  const durationSum = durations.reduce((sum, value) => sum + value, 0);
+  const scale = durationSum > 0 ? effectiveDuration / durationSum : 1;
+
+  const cues: SubtitleCue[] = [];
+  let cursor = 0;
+  for (let i = 0; i < blocks.length; i += 1) {
+    const start = cursor;
+    const chunk = Math.max(0.1, durations[i] * scale);
+    const end = i === blocks.length - 1 ? effectiveDuration : Math.min(effectiveDuration, start + chunk);
+    const safeEnd = Math.max(start + 0.05, end);
+    cues.push({ start, end: safeEnd, text: blocks[i] });
+    cursor = safeEnd;
+  }
+  return cues;
+}
+
+function rawContainsTiming(rawText: string) {
+  const text = String(rawText || "").trim();
+  if (!text) return false;
+  if (text.startsWith("WEBVTT") || text.includes("-->") || looksLikeSrt(text)) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(text) as { segments?: Array<{ start?: unknown; end?: unknown }> };
+    if (!Array.isArray(parsed.segments) || parsed.segments.length === 0) return false;
+    return parsed.segments.some((segment) => {
+      const start = Number(segment?.start);
+      const end = Number(segment?.end);
+      return Number.isFinite(start) && Number.isFinite(end) && end > start;
+    });
+  } catch {
+    return false;
+  }
+}
+
 function extractTextFromApiBody(bodyText: string) {
   if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
     return bodyText;
   }
   try {
-    const parsed = JSON.parse(bodyText) as { text?: string; vtt?: string };
+    const parsed = JSON.parse(bodyText) as {
+      text?: string;
+      vtt?: string;
+      segments?: Array<{ start?: number; end?: number; text?: string }>;
+    };
+    if (Array.isArray(parsed.segments) && parsed.segments.length > 0) {
+      const cues = parsed.segments
+        .map((segment) => ({
+          start: Number(segment?.start),
+          end: Number(segment?.end),
+          text: String(segment?.text || "").trim()
+        }))
+        .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
+      if (cues.length > 0) {
+        return cuesToVtt(cues as SubtitleCue[]);
+      }
+    }
     const fromJson = parsed.vtt || parsed.text || "";
     if (!fromJson) {
       throw new Error("missing_text");
@@ -730,14 +855,17 @@ function extractTextFromApiBody(bodyText: string) {
 }
 
 function transcriptToChunkCues(raw: string, chunkDurationSec: number) {
-  const normalized = normalizeVtt(raw);
+  const text = String(raw || "").trim();
+  if (!text) {
+    throw new Error("subtitle_empty");
+  }
+  if (!rawContainsTiming(text)) {
+    return plainTranscriptToTimedCues(text, chunkDurationSec);
+  }
+  const normalized = normalizeVtt(text);
   const parsed = parseVttCues(normalized);
   if (parsed.length === 0) {
-    const text = String(raw || "").trim();
-    if (!text) {
-      throw new Error("subtitle_empty");
-    }
-    return [{ start: 0, end: Math.max(1, chunkDurationSec), text }];
+    return plainTranscriptToTimedCues(text, chunkDurationSec);
   }
   return parsed.map((cue) => ({
     start: Math.max(0, Math.min(chunkDurationSec, cue.start)),
@@ -1037,7 +1165,13 @@ async function generateSubtitleVtt(sourcePath: string, fileName: string, outputP
     throw new Error(`subtitle_all_providers_failed:${failures.join(" | ").slice(0, 800)}`);
   }
 
-  const normalized = normalizeVtt(raw);
+  let normalized = "";
+  if (rawContainsTiming(raw)) {
+    normalized = normalizeVtt(raw);
+  } else {
+    const sourceDuration = await runFfprobeDuration(sourcePath).catch(() => 0);
+    normalized = cuesToVtt(plainTranscriptToTimedCues(raw, sourceDuration));
+  }
   await fs.promises.writeFile(outputPath, normalized, "utf8");
   return normalized;
 }
