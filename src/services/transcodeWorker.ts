@@ -6,17 +6,23 @@ import fs from "fs";
 import path from "path";
 
 const queued = new Set<string>();
+const backfillQueued = new Set<string>();
 const active = new Set<string>();
+const activeSource = new Map<string, "queued" | "backfill">();
 const retryAt = new Map<string, number>();
 let ticker: NodeJS.Timeout | null = null;
 let tickRunning = false;
 let backfillOffset = 0;
+const backfillQueueTarget = 2;
 
 export function getTranscodeWorkerState() {
   return {
     enabled: config.transcodeWorkerEnabled,
-    queued: queued.size,
+    queued: queued.size + backfillQueued.size,
+    queuedImmediate: queued.size,
+    queuedBackfill: backfillQueued.size,
     active: active.size,
+    activeBackfill: [...active].filter((id) => activeSource.get(id) === "backfill").length,
     retryScheduled: retryAt.size,
     tickRunning
   };
@@ -84,10 +90,13 @@ export function queueArchiveTranscodes(archiveId: string) {
   const waitUntil = retryAt.get(key) || 0;
   if (waitUntil > Date.now()) return;
   queued.add(key);
+  backfillQueued.delete(key);
+  void tick();
 }
 
 async function refillQueue() {
-  if (queued.size >= config.transcodeWorkerConcurrency * 4) return;
+  if (queued.size > 0) return;
+  if (backfillQueued.size >= backfillQueueTarget) return;
   const baseQuery = {
     archiveKind: { $ne: "transcoded" },
     status: "ready",
@@ -112,17 +121,18 @@ async function refillQueue() {
 
   let queuedNow = 0;
   for (const archive of candidates) {
-    if (queued.size >= config.transcodeWorkerConcurrency * 6) break;
+    if (backfillQueued.size >= backfillQueueTarget) break;
     if (!archiveNeedsTranscodeWork(archive)) continue;
     const id = archive._id.toString();
     if (active.has(id)) continue;
+    if (queued.has(id) || backfillQueued.has(id)) continue;
     const waitUntil = retryAt.get(id) || 0;
     if (waitUntil > Date.now()) continue;
-    queued.add(id);
+    backfillQueued.add(id);
     queuedNow += 1;
   }
   if (queuedNow > 0) {
-    log(`queue +${queuedNow} total=${queued.size}`);
+    log(`backfill queue +${queuedNow} total=${backfillQueued.size}`);
   }
 
   if (candidates.length < config.transcodeBackfillScanLimit) {
@@ -132,7 +142,7 @@ async function refillQueue() {
   }
 }
 
-async function processArchive(archiveId: string) {
+async function processArchive(archiveId: string, source: "queued" | "backfill") {
   const archive = await Archive.findById(archiveId);
   if (!archive) return;
   if (archive.deletedAt || archive.trashedAt) return;
@@ -174,7 +184,11 @@ async function processArchive(archiveId: string) {
       }
       log(`error ${archiveId} file=${fileIndex} ${message}`);
       retryAt.set(archiveId, Date.now() + nextRetryDelayMs(message));
-      queued.add(archiveId);
+      if (source === "queued") {
+        queued.add(archiveId);
+      } else {
+        backfillQueued.add(archiveId);
+      }
       return;
     }
   }
@@ -206,18 +220,32 @@ async function tick() {
   tickRunning = true;
   try {
     await refillQueue();
-    while (active.size < config.transcodeWorkerConcurrency && queued.size > 0) {
-      const next = queued.values().next().value as string | undefined;
+    const activeBackfill = [...active].filter((id) => activeSource.get(id) === "backfill").length;
+    let maxSlots = config.transcodeWorkerConcurrency;
+    if (queued.size > 0 && activeBackfill > 0 && active.size >= config.transcodeWorkerConcurrency) {
+      maxSlots += 1;
+    }
+    while (active.size < maxSlots && (queued.size > 0 || backfillQueued.size > 0)) {
+      const hasImmediate = queued.size > 0;
+      const next = (hasImmediate ? queued : backfillQueued).values().next().value as string | undefined;
       if (!next) break;
-      queued.delete(next);
+      const source = hasImmediate ? "queued" : "backfill";
+      if (source === "queued") {
+        queued.delete(next);
+      } else {
+        backfillQueued.delete(next);
+      }
       const waitUntil = retryAt.get(next) || 0;
       if (waitUntil > Date.now()) continue;
       active.add(next);
+      activeSource.set(next, source);
       (async () => {
         try {
-          await processArchive(next);
+          await processArchive(next, source);
         } finally {
           active.delete(next);
+          activeSource.delete(next);
+          void tick();
         }
       })();
     }
