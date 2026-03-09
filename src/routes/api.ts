@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
+import { Types } from "mongoose";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import archiver from "archiver";
@@ -173,6 +174,32 @@ function makeDisplayName(names: string[]) {
     return normalizeFilename(names[0]).replace(/[\\/]/g, "_");
   }
   return `Bundle (${names.length} files)`;
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function searchRank(value: string, queryLower: string) {
+  const normalized = String(value || "").toLowerCase();
+  if (!normalized) return 100;
+  if (normalized === queryLower) return 0;
+  if (normalized.startsWith(queryLower)) return 1;
+  const index = normalized.indexOf(queryLower);
+  if (index < 0) return 99;
+  if (index > 0) {
+    const boundary = normalized[index - 1];
+    if (boundary === " " || boundary === "." || boundary === "_" || boundary === "-" || boundary === "/" || boundary === "\\") {
+      return 2;
+    }
+  }
+  return 3;
+}
+
+function compareSearchNames(left: string, right: string, queryLower: string) {
+  const rankDiff = searchRank(left, queryLower) - searchRank(right, queryLower);
+  if (rankDiff !== 0) return rankDiff;
+  return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
 }
 
 function isTransientError(err: unknown) {
@@ -1024,6 +1051,132 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   }
   const archives = await Archive.find(filter).sort({ createdAt: -1 }).lean();
   return res.json({ archives: archives.map((archive) => withPreviewSupport(archive)) });
+});
+
+apiRouter.get("/search/global", requireAuth, async (req, res) => {
+  const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const limitInput = Number.parseInt(String(req.query.limit || ""), 10);
+  const perTypeLimit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 10), 500) : 200;
+  if (!queryRaw) {
+    return res.json({
+      query: "",
+      folders: [],
+      files: [],
+      total: 0,
+      truncated: false,
+      folderTruncated: false,
+      fileTruncated: false
+    });
+  }
+
+  const queryLower = queryRaw.toLowerCase();
+  const needle = new RegExp(escapeRegex(queryRaw), "i");
+  const userMatch = req.session.role === "admin"
+    ? {}
+    : { userId: new Types.ObjectId(req.session.userId) };
+
+  const folderRows = await Folder.find({ ...userMatch, name: needle })
+    .select("_id name parentId priority createdAt updatedAt")
+    .sort({ updatedAt: -1 })
+    .limit(perTypeLimit + 1)
+    .lean();
+
+  const folderTruncated = folderRows.length > perTypeLimit;
+  const folders = folderRows
+    .slice(0, perTypeLimit)
+    .sort((left: any, right: any) => compareSearchNames(left?.name || "", right?.name || "", queryLower));
+
+  const candidateLimit = Math.min(Math.max(perTypeLimit * 8, perTypeLimit + 20), 2000);
+  const fileRows = await Archive.aggregate([
+    {
+      $match: {
+        ...userMatch,
+        archiveKind: { $ne: "transcoded" },
+        deletedAt: null,
+        trashedAt: null
+      }
+    },
+    { $unwind: { path: "$files", includeArrayIndex: "fileIndex" } },
+    {
+      $match: {
+        $and: [
+          { $or: [{ "files.deletedAt": null }, { "files.deletedAt": { $exists: false } }] },
+          { $or: [{ "files.originalName": needle }, { "files.name": needle }] }
+        ]
+      }
+    },
+    {
+      $project: {
+        _id: 1,
+        folderId: 1,
+        status: 1,
+        isBundle: 1,
+        priority: 1,
+        displayName: 1,
+        name: 1,
+        originalSize: 1,
+        contentModifiedAt: 1,
+        createdAt: 1,
+        fileIndex: 1,
+        file: {
+          path: "$files.path",
+          name: "$files.name",
+          originalName: "$files.originalName",
+          size: "$files.size",
+          contentModifiedAt: "$files.contentModifiedAt",
+          downloadCount: "$files.downloadCount",
+          previewCount: "$files.previewCount",
+          detectedKind: "$files.detectedKind",
+          detectedTypeLabel: "$files.detectedTypeLabel",
+          deletedAt: "$files.deletedAt",
+          transcode: "$files.transcode"
+        }
+      }
+    },
+    { $limit: candidateLimit }
+  ]);
+
+  const sortedFileRows = fileRows
+    .slice()
+    .sort((left: any, right: any) => {
+      const leftName = left?.file?.originalName || left?.file?.name || "";
+      const rightName = right?.file?.originalName || right?.file?.name || "";
+      return compareSearchNames(leftName, rightName, queryLower);
+    });
+
+  const fileTruncated = sortedFileRows.length > perTypeLimit;
+  const files = sortedFileRows.slice(0, perTypeLimit).map((entry: any) => {
+    const archive = {
+      _id: entry._id,
+      folderId: entry.folderId || null,
+      status: entry.status,
+      isBundle: !!entry.isBundle,
+      priority: entry.priority,
+      displayName: entry.displayName,
+      name: entry.name,
+      originalSize: entry.originalSize,
+      contentModifiedAt: entry.contentModifiedAt,
+      createdAt: entry.createdAt
+    };
+    const file = { ...(entry.file || {}) };
+    file.previewSupported = isPreviewSupportedForFile(archive, file);
+    return {
+      archive,
+      file,
+      fileIndex: Number(entry.fileIndex || 0),
+      isBundle: !!entry.isBundle
+    };
+  });
+
+  return res.json({
+    query: queryRaw,
+    folders,
+    files,
+    total: folders.length + files.length,
+    truncated: folderTruncated || fileTruncated,
+    folderTruncated,
+    fileTruncated
+  });
 });
 
 apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
