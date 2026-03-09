@@ -39,14 +39,23 @@ function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
   const status = String(file?.transcode?.status || "");
   const error = String(file?.transcode?.error || "");
   const archiveId = String(file?.transcode?.archiveId || "");
-  if (status === "error" && ["unsupported_media_content", "already_compatible_codecs"].includes(error)) {
+  const isCompatibleSkip = error === "already_compatible_codecs";
+  if (status === "error" && (error === "unsupported_media_content" || (!config.transcodeForceAll && isCompatibleSkip))) {
     return false;
+  }
+  if (status === "skipped") {
+    if (config.transcodeForceAll && isCompatibleSkip) {
+      // Re-queue legacy "already compatible" skips when force-all mode is enabled.
+    } else if (allowRetryDisabledSkip && error === "disabled_by_user") {
+      // User can re-enable copies later; allow retry path in worker scan.
+    } else {
+      return false;
+    }
   }
   if (
     status === "ready" ||
     status === "queued" ||
-    status === "processing" ||
-    (status === "skipped" && !(allowRetryDisabledSkip && error === "disabled_by_user"))
+    status === "processing"
   ) {
     return false;
   }

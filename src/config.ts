@@ -137,6 +137,7 @@ export const config = {
   transcodeWorkerPollMs: Math.max(1000, toNumber(process.env.TRANSCODE_WORKER_POLL_MS, 9000)),
   transcodeBackfillScanLimit: Math.max(20, toNumber(process.env.TRANSCODE_BACKFILL_SCAN_LIMIT, 160)),
   transcodeRetryMs: Math.max(5000, toNumber(process.env.TRANSCODE_RETRY_MS, 120000)),
+  transcodeForceAll: (process.env.TRANSCODE_FORCE_ALL || "true") === "true",
   transcodeVideoCrf: Math.max(16, Math.min(32, toNumber(process.env.TRANSCODE_VIDEO_CRF, 23))),
   transcodeVideoPreset: (process.env.TRANSCODE_VIDEO_PRESET || "veryfast").trim() || "veryfast",
   transcodeAudioBitrateKbps: Math.max(64, toNumber(process.env.TRANSCODE_AUDIO_BITRATE_KBPS, 160)),
