@@ -53,6 +53,7 @@ const trackProbeInFlight = new Map<string, Promise<AudioTrackInfo[]>>();
 const trackProbeCache = new Map<string, { tracks: AudioTrackInfo[]; expiresAt: number }>();
 const TRACK_PROBE_CACHE_MS = 6 * 60 * 60 * 1000;
 const SUBTITLE_PERMANENT_PREFIX = "subtitle_permanent_failure:";
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.trunc(ms || 0))));
 
 export interface SubtitleResult {
   filePath: string;
@@ -680,6 +681,28 @@ function dedupeCues(cues: SubtitleCue[]) {
   return out;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  requestedConcurrency: number,
+  handler: (item: T, index: number) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  if (items.length === 0) return results;
+  const concurrency =
+    requestedConcurrency <= 0 ? items.length : Math.max(1, Math.min(items.length, Math.floor(requestedConcurrency)));
+  let cursor = 0;
+  const workers = new Array(concurrency).fill(0).map(async () => {
+    while (true) {
+      const idx = cursor;
+      cursor += 1;
+      if (idx >= items.length) return;
+      results[idx] = await handler(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function cuesToVtt(cues: SubtitleCue[]) {
   const out: string[] = ["WEBVTT", ""];
   for (const cue of cues) {
@@ -788,7 +811,13 @@ async function transcribeViaOpenAiChunked(preparedPath: string, preparedName: st
     )}s chunks=${ranges.length} chunkSec=${effectiveChunkSec} overlap=${overlapSec}`
   );
 
-  const merged: SubtitleCue[] = [];
+  const chunkJobs: Array<{
+    index: number;
+    range: { start: number; end: number };
+    duration: number;
+    chunkPath: string;
+    uploadName: string;
+  }> = [];
   try {
     for (let i = 0; i < ranges.length; i += 1) {
       const range = ranges[i];
@@ -821,33 +850,113 @@ async function transcribeViaOpenAiChunked(preparedPath: string, preparedName: st
       if (chunkStat.size > config.subtitleAsrMaxBytes) {
         throw new Error(`subtitle_chunk_too_large:${i + 1}:${chunkStat.size}`);
       }
-      log("subtitle", `asr chunk start file=${path.basename(sourceName || preparedName)} part=${i + 1}/${ranges.length}`);
-      const raw = await transcribeViaAsrHttp(
+      chunkJobs.push({
+        index: i,
+        range,
+        duration,
         chunkPath,
-        `${sanitizeAsrBaseName(preparedName)}_part_${String(i + 1).padStart(3, "0")}.mp3`,
-        sourceName
-      );
-      let cues = transcriptToChunkCues(raw, duration);
-      if (i > 0 && overlapSec > 0) {
+        uploadName: `${sanitizeAsrBaseName(preparedName)}_part_${String(i + 1).padStart(3, "0")}.mp3`
+      });
+    }
+
+    const apiRetries = Math.max(1, Math.trunc(config.subtitleAsrChunkApiRetries || 1));
+    const apiRetryMs = Math.max(250, Math.trunc(config.subtitleAsrChunkApiRetryMs || 1000));
+    const apiConcurrencyRaw = Math.trunc(config.subtitleAsrChunkApiConcurrency || 0);
+    const apiConcurrency = apiConcurrencyRaw <= 0 ? chunkJobs.length : Math.max(1, apiConcurrencyRaw);
+    let localChain = Promise.resolve();
+
+    const transcribeChunkViaApiWithRetries = async (job: (typeof chunkJobs)[number]) => {
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= apiRetries; attempt += 1) {
+        log(
+          "subtitle",
+          `asr chunk start file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length} attempt=${attempt}`
+        );
+        try {
+          const raw = await transcribeViaAsrHttp(job.chunkPath, job.uploadName, sourceName);
+          log(
+            "subtitle",
+            `asr chunk done file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length} provider=asr`
+          );
+          return raw;
+        } catch (err) {
+          lastErr = err;
+          const message = toMessage(err);
+          if (attempt < apiRetries) {
+            log(
+              "subtitle",
+              `asr chunk retry file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length} in=${apiRetryMs * attempt}ms err=${message.slice(0, 120)}`
+            );
+            await sleep(apiRetryMs * attempt);
+            continue;
+          }
+        }
+      }
+      throw (lastErr instanceof Error ? lastErr : new Error(String(lastErr || "subtitle_chunk_api_failed")));
+    };
+
+    const transcribeChunkViaLocalSequential = (job: (typeof chunkJobs)[number]) => {
+      const run = localChain.then(async () => {
+        const localOut = path.join(chunkDir, `part_${String(job.index + 1).padStart(3, "0")}.vtt`);
+        log(
+          "subtitle",
+          `local chunk start file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length}`
+        );
+        const raw = await transcribeViaLocalCommand(job.chunkPath, localOut);
+        log(
+          "subtitle",
+          `local chunk done file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length}`
+        );
+        return raw;
+      });
+      localChain = run.then(() => undefined).catch(() => undefined);
+      return run;
+    };
+
+    const chunkCueLists = await mapWithConcurrency(chunkJobs, apiConcurrency, async (job) => {
+      let raw = "";
+      try {
+        raw = await transcribeChunkViaApiWithRetries(job);
+      } catch (apiErr) {
+        const apiMessage = toMessage(apiErr);
+        if (!config.subtitleLocalCommand) {
+          throw apiErr;
+        }
+        log(
+          "subtitle",
+          `asr chunk fallback local file=${path.basename(sourceName || preparedName)} part=${job.index + 1}/${chunkJobs.length} err=${apiMessage.slice(0, 140)}`
+        );
+        raw = await transcribeChunkViaLocalSequential(job);
+      }
+
+      let cues = transcriptToChunkCues(raw, job.duration);
+      if (job.index > 0 && overlapSec > 0) {
         cues = cues.filter((cue) => cue.end > overlapSec);
       }
+
+      const shifted: SubtitleCue[] = [];
       for (const cue of cues) {
-        const shiftedStart = Math.max(0, cue.start + range.start);
-        const shiftedEnd = Math.min(durationSec, cue.end + range.start);
+        const shiftedStart = Math.max(0, cue.start + job.range.start);
+        const shiftedEnd = Math.min(durationSec, cue.end + job.range.start);
         if (shiftedEnd <= shiftedStart + 0.01) continue;
-        merged.push({ start: shiftedStart, end: shiftedEnd, text: cue.text });
+        shifted.push({ start: shiftedStart, end: shiftedEnd, text: cue.text });
       }
-      log("subtitle", `asr chunk done file=${path.basename(sourceName || preparedName)} part=${i + 1}/${ranges.length}`);
+      return shifted;
+    });
+
+    const merged: SubtitleCue[] = [];
+    for (const cues of chunkCueLists) {
+      merged.push(...cues);
     }
+
+    const deduped = dedupeCues(merged);
+    if (deduped.length === 0) {
+      throw new Error("subtitle_empty");
+    }
+    return cuesToVtt(deduped);
   } finally {
     await fs.promises.rm(chunkDir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  const deduped = dedupeCues(merged);
-  if (deduped.length === 0) {
-    throw new Error("subtitle_empty");
-  }
-  return cuesToVtt(deduped);
 }
 
 async function transcribeViaOpenAi(inputPath: string, sourceName: string, audioTrack = 0) {

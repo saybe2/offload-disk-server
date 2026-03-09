@@ -430,6 +430,10 @@ async function processNextArchive() {
     if (webhooks.length === 0 && !telegramReady) {
       throw new Error("no_storage_provider_configured");
     }
+    if (!isTranscodedArchive) {
+      // Start subtitle generation as early as possible while source files are still on disk.
+      queueArchiveSubtitles(archive.id);
+    }
 
     const uploadedParts = uniqueParts(archive.parts || []);
     const uploadedIndex = new Set(uploadedParts.map((p) => p.index));
