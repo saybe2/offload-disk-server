@@ -257,7 +257,7 @@ ASR provider:
 - `SUBTITLE_ASR_URL` (`https://api.openai.com/v1/audio/transcriptions`) - ASR endpoint.
 - `SUBTITLE_ASR_MODEL` (`whisper-1`) - model name sent in multipart request.
 - `SUBTITLE_ASR_API_KEY` - bearer token for ASR provider.
-- `SUBTITLE_ASR_RESPONSE_FORMAT` (empty) - optional response format override; keep empty for minimal payload.
+- `SUBTITLE_ASR_RESPONSE_FORMAT` (empty) - optional response format. For Whisper-compatible APIs, `verbose_json` is recommended; this server converts returned `segments` to timed subtitles locally. Avoid `srt`/`vtt` if provider does not support them reliably.
 - `SUBTITLE_ASR_MAX_BYTES` (`25165824`) - max upload size per ASR request.
 - `SUBTITLE_ASR_CHUNK_API_CONCURRENCY` (`0`) - parallel ASR chunk requests (`0` = no explicit limit, all chunks).
 - `SUBTITLE_ASR_CHUNK_API_RETRIES` (`3`) - retries per ASR chunk before fallback.
