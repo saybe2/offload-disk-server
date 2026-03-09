@@ -15,6 +15,7 @@ const folderPriorityWrap = document.getElementById('folderPriorityWrap');
 const folderPrioritySelect = document.getElementById('folderPrioritySelect');
 const folderPrioritySave = document.getElementById('folderPrioritySave');
 const searchInput = document.getElementById('searchInput');
+const searchScopeSelect = document.getElementById('searchScopeSelect');
 const sortFieldSelect = document.getElementById('sortFieldSelect');
 const sortDirSelect = document.getElementById('sortDirSelect');
 const viewModeSelect = document.getElementById('viewModeSelect');
@@ -95,6 +96,7 @@ let foldersById = {};
 let foldersCache = [];
 let archivesCache = [];
 let searchTerm = '';
+let searchScope = 'folder';
 let sortField = 'name';
 let sortDir = 'asc';
 let viewMode = localStorage.getItem('filesViewMode') || 'list';
@@ -121,6 +123,19 @@ const VIEW_MODES = new Set(['list', 'tile', 'large']);
 let activeArchiveShares = new Map();
 let activeFolderShares = new Map();
 let lastStructureSignature = '';
+let lastGlobalSignature = '';
+let globalSearchAbortController = null;
+let globalSearchDebounceTimer = null;
+let globalSearchResults = {
+  query: '',
+  folders: [],
+  files: [],
+  total: 0,
+  truncated: false,
+  folderTruncated: false,
+  fileTruncated: false,
+  loading: false
+};
 let transcodeToggleBusy = false;
 let lastQuotaSnapshot = null;
 if (!VIEW_MODES.has(viewMode)) {
@@ -135,6 +150,22 @@ const priorities = [
   { value: 4, label: 'maximum' }
 ];
 
+function normalizeSearchScope(value) {
+  return value === 'global' ? 'global' : 'folder';
+}
+
+function isGlobalSearchActive() {
+  return currentView === 'files' && searchScope === 'global' && !!searchTerm;
+}
+
+function setSearchScope(value) {
+  searchScope = normalizeSearchScope(value);
+  if (searchScopeSelect) {
+    searchScopeSelect.value = searchScope;
+  }
+  searchInput.placeholder = searchScope === 'global' ? 'Search across all folders...' : 'Search files...';
+}
+
 function updateUrl() {
   const params = new URLSearchParams();
   if (currentView !== 'files') {
@@ -148,6 +179,9 @@ function updateUrl() {
   }
   if (searchTerm) {
     params.set('search', searchTerm);
+  }
+  if (searchScope === 'global') {
+    params.set('scope', 'global');
   }
   if (sortField !== 'name') {
     params.set('sort', sortField);
@@ -370,6 +404,8 @@ function updateTitle() {
     listTitle.textContent = 'Trash';
   } else if (currentView === 'shared') {
     listTitle.textContent = 'Shared';
+  } else if (isGlobalSearchActive()) {
+    listTitle.textContent = `Files / Global search: ${searchTerm}`;
   } else {
     listTitle.textContent = buildFolderPath(currentFolderId);
   }
@@ -1268,6 +1304,20 @@ function sortShares(shares) {
 }
 
 function renderHead() {
+  if (isGlobalSearchActive()) {
+    listHead.innerHTML = `
+      <tr>
+        <th>Name</th>
+        <th>Path</th>
+        <th>Type</th>
+        <th>Date modified</th>
+        <th>Size</th>
+        <th>Actions</th>
+      </tr>
+    `;
+    return;
+  }
+
   if (currentView === 'shared') {
     listHead.innerHTML = `
       <tr>
@@ -1515,12 +1565,107 @@ function updateVisibleDynamicFields(items) {
   lastRenderedItems = items;
 }
 
+function resetGlobalSearchState() {
+  globalSearchResults = {
+    query: '',
+    folders: [],
+    files: [],
+    total: 0,
+    truncated: false,
+    folderTruncated: false,
+    fileTruncated: false,
+    loading: false
+  };
+  lastGlobalSignature = '';
+}
+
+function buildGlobalSearchSignature(data) {
+  const folderBits = (data.folders || [])
+    .map((folder) => `${folder._id}|${folder.name}|${folder.parentId || ''}|${folder.updatedAt || folder.createdAt || ''}`)
+    .join('~');
+  const fileBits = (data.files || [])
+    .map((item) => {
+      const archive = item.archive || {};
+      const file = item.file || {};
+      return [
+        archive._id || '',
+        item.fileIndex ?? 0,
+        file.originalName || file.name || '',
+        file.size || 0,
+        file.previewCount || 0,
+        file.downloadCount || 0,
+        archive.status || '',
+        archive.contentModifiedAt || archive.createdAt || ''
+      ].join('|');
+    })
+    .join('~');
+  return `${data.query || ''}|${folderBits}|${fileBits}|${data.total || 0}|${data.truncated ? 1 : 0}`;
+}
+
+async function loadGlobalSearchResults() {
+  if (!isGlobalSearchActive()) {
+    resetGlobalSearchState();
+    return;
+  }
+  if (globalSearchAbortController) {
+    globalSearchAbortController.abort();
+  }
+  const controller = new AbortController();
+  globalSearchAbortController = controller;
+  const params = new URLSearchParams();
+  params.set('q', searchTerm);
+  params.set('limit', '250');
+  try {
+    globalSearchResults.loading = true;
+    const res = await fetch(`/api/search/global?${params.toString()}`, { signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`search_failed_${res.status}`);
+    }
+    const data = await res.json();
+    if (controller.signal.aborted) return;
+    globalSearchResults = {
+      query: data.query || searchTerm,
+      folders: Array.isArray(data.folders) ? data.folders : [],
+      files: Array.isArray(data.files) ? data.files : [],
+      total: Number(data.total || 0),
+      truncated: !!data.truncated,
+      folderTruncated: !!data.folderTruncated,
+      fileTruncated: !!data.fileTruncated,
+      loading: false
+    };
+    const signature = buildGlobalSearchSignature(globalSearchResults);
+    if (signature === lastGlobalSignature) {
+      return;
+    }
+    lastGlobalSignature = signature;
+    renderArchives();
+  } catch (err) {
+    if (controller.signal.aborted) return;
+    console.error(err);
+    globalSearchResults.loading = false;
+    globalSearchResults.folders = [];
+    globalSearchResults.files = [];
+    globalSearchResults.total = 0;
+    renderArchives();
+  } finally {
+    if (globalSearchAbortController === controller) {
+      globalSearchAbortController = null;
+    }
+  }
+}
+
 async function loadArchives() {
   if (currentView === 'shared') {
     await loadShared();
     return;
   }
 
+  if (isGlobalSearchActive()) {
+    await loadGlobalSearchResults();
+    return;
+  }
+
+  resetGlobalSearchState();
   const params = new URLSearchParams();
   if (currentView === 'trash') {
     params.set('trash', '1');
@@ -1644,6 +1789,221 @@ function renderFoldersInList() {
   return children;
 }
 
+function folderParentPath(folder) {
+  const parentId = folder?.parentId ? String(folder.parentId) : null;
+  return buildFolderPath(parentId);
+}
+
+async function openFolderFromGlobal(folderId) {
+  currentView = 'files';
+  currentFolderId = folderId || null;
+  setSearchScope('folder');
+  searchTerm = '';
+  searchInput.value = '';
+  selectedItems.clear();
+  lastSelectedIndex = null;
+  setActiveNav();
+  updateTitle();
+  await loadFolders();
+  await loadArchives();
+}
+
+function renderGlobalSearchResults() {
+  archiveList.innerHTML = '';
+  gridView.innerHTML = '';
+  listTable.classList.remove('hidden');
+  gridView.classList.add('hidden');
+  lastRenderedItems = globalSearchResults.files || [];
+
+  const folders = sortFolders(globalSearchResults.folders || []);
+  for (const folder of folders) {
+    const tr = document.createElement('tr');
+    tr.className = 'folder-row-item global-result-row';
+    tr.addEventListener('click', async () => {
+      await openFolderFromGlobal(folder._id);
+    });
+    tr.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openFolderContextMenu(folder, event.clientX, event.clientY);
+    });
+
+    const nameTd = document.createElement('td');
+    const wrap = document.createElement('div');
+    wrap.className = 'folder-row';
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    const text = document.createElement('span');
+    text.textContent = folder.name;
+    wrap.appendChild(icon);
+    wrap.appendChild(text);
+    if (listFolderShares(folder._id).length > 0) {
+      wrap.appendChild(createSharedIndicatorButton(() => {
+        openShareLinksModal({ type: 'folder', id: folder._id, name: folder.name });
+      }));
+    }
+    nameTd.appendChild(wrap);
+
+    const pathTd = document.createElement('td');
+    pathTd.className = 'global-path';
+    pathTd.textContent = folderParentPath(folder);
+
+    const typeTd = document.createElement('td');
+    typeTd.textContent = 'folder';
+
+    const dateTd = document.createElement('td');
+    dateTd.textContent = formatDate(folder.updatedAt || folder.createdAt);
+
+    const sizeTd = document.createElement('td');
+    sizeTd.textContent = '';
+
+    const actionTd = document.createElement('td');
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open';
+    openBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await openFolderFromGlobal(folder._id);
+    });
+    actionTd.appendChild(openBtn);
+
+    tr.appendChild(nameTd);
+    tr.appendChild(pathTd);
+    tr.appendChild(typeTd);
+    tr.appendChild(dateTd);
+    tr.appendChild(sizeTd);
+    tr.appendChild(actionTd);
+    archiveList.appendChild(tr);
+  }
+
+  const items = sortFileItems(globalSearchResults.files || []);
+  lastRenderedItems = items;
+  for (const [index, item] of items.entries()) {
+    const a = item.archive;
+    const key = `${a._id}:${item.fileIndex}`;
+    const fileName = item.file?.originalName || item.file?.name || a.displayName || a.name;
+    const tr = document.createElement('tr');
+    tr.className = 'global-result-row';
+    tr.dataset.archiveId = a._id;
+    tr.dataset.fileIndex = String(item.fileIndex ?? 0);
+    if (selectedItems.has(key)) {
+      tr.classList.add('row-selected');
+    }
+    tr.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openFileContextMenu(item, event.clientX, event.clientY);
+    });
+    tr.addEventListener('click', (event) => {
+      if (event.target.closest('a,button,select')) return;
+      handleRowSelection(item, key, index, event);
+    });
+
+    const nameTd = document.createElement('td');
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'name-cell';
+    const icon = createFileIconElement();
+    const nameText = document.createElement('span');
+    nameText.textContent = fileName;
+    nameWrap.appendChild(icon);
+    nameWrap.appendChild(nameText);
+    if (item.isBundle) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'bundle';
+      nameWrap.appendChild(pill);
+    }
+    if (listArchiveShares(a._id).length > 0) {
+      nameWrap.appendChild(createSharedIndicatorButton(() => {
+        openShareLinksModal({ type: 'archive', id: a._id, name: fileName });
+      }));
+    }
+    nameTd.appendChild(nameWrap);
+
+    const pathTd = document.createElement('td');
+    pathTd.className = 'global-path';
+    pathTd.textContent = buildFolderPath(a.folderId ? String(a.folderId) : null);
+
+    const typeTd = document.createElement('td');
+    typeTd.textContent = fileTypeByName(fileName, item.file);
+
+    const dateTd = document.createElement('td');
+    dateTd.textContent = formatDate(itemModifiedAt(item));
+
+    const sizeTd = document.createElement('td');
+    sizeTd.textContent = formatSize(item.file?.size ?? a.originalSize);
+
+    const actionTd = document.createElement('td');
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open folder';
+    openBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await openFolderFromGlobal(a.folderId ? String(a.folderId) : null);
+    });
+    actionTd.appendChild(openBtn);
+
+    if (a.status === 'ready') {
+      if (hasReadyTranscode(item)) {
+        const downloadBtn = document.createElement('button');
+        downloadBtn.textContent = 'Download...';
+        downloadBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openDownloadChoiceMenu(item, downloadBtn);
+        });
+        actionTd.appendChild(downloadBtn);
+      } else {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = getDownloadUrl(item);
+        downloadLink.textContent = 'Download';
+        actionTd.appendChild(downloadLink);
+      }
+      if (canPreviewItem(item)) {
+        const previewBtn = document.createElement('button');
+        previewBtn.textContent = 'Preview';
+        previewBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          await openPreviewModal(item);
+        });
+        actionTd.appendChild(previewBtn);
+      }
+    } else {
+      const statusSpan = document.createElement('span');
+      statusSpan.className = 'status-meta';
+      statusSpan.textContent = a.status || 'processing';
+      actionTd.appendChild(statusSpan);
+    }
+
+    tr.appendChild(nameTd);
+    tr.appendChild(pathTd);
+    tr.appendChild(typeTd);
+    tr.appendChild(dateTd);
+    tr.appendChild(sizeTd);
+    tr.appendChild(actionTd);
+    archiveList.appendChild(tr);
+  }
+
+  if ((folders.length === 0) && (items.length === 0)) {
+    const empty = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'status-meta';
+    td.textContent = globalSearchResults.loading
+      ? 'Searching...'
+      : `No results for "${searchTerm}"`;
+    empty.appendChild(td);
+    archiveList.appendChild(empty);
+  } else if (globalSearchResults.truncated) {
+    const more = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'status-meta';
+    td.textContent = `Showing first ${globalSearchResults.total} results. Refine search to narrow down.`;
+    more.appendChild(td);
+    archiveList.appendChild(more);
+  }
+}
+
 function renderArchives() {
   archiveList.innerHTML = '';
   gridView.innerHTML = '';
@@ -1657,6 +2017,11 @@ function renderArchives() {
     listTable.classList.remove('hidden');
     gridView.classList.add('hidden');
     lastStructureSignature = buildStructureSignature();
+    return;
+  }
+
+  if (isGlobalSearchActive()) {
+    renderGlobalSearchResults();
     return;
   }
 
@@ -2380,10 +2745,11 @@ function applySelectionVisuals() {
 }
 
 function updateViewVisibility() {
+  const globalMode = isGlobalSearchActive();
   uploadArea.classList.toggle('hidden', currentView !== 'files');
-  folderPriorityWrap.style.display = currentView === 'files' && currentFolderId ? 'flex' : 'none';
+  folderPriorityWrap.style.display = currentView === 'files' && currentFolderId && !globalMode ? 'flex' : 'none';
   if (viewModeSelect) {
-    viewModeSelect.disabled = currentView !== 'files';
+    viewModeSelect.disabled = currentView !== 'files' || globalMode;
   }
 }
 
@@ -3225,9 +3591,39 @@ logoutBtn.addEventListener('click', async () => {
   location.href = '/';
 });
 
+function scheduleGlobalSearchReload() {
+  if (globalSearchDebounceTimer) {
+    clearTimeout(globalSearchDebounceTimer);
+  }
+  globalSearchDebounceTimer = setTimeout(() => {
+    globalSearchDebounceTimer = null;
+    loadArchives();
+  }, 180);
+}
+
 searchInput.addEventListener('input', () => {
   searchTerm = searchInput.value.trim();
+  if (!searchTerm && globalSearchAbortController) {
+    globalSearchAbortController.abort();
+    globalSearchAbortController = null;
+  }
   updateUrl();
+  updateTitle();
+  if (isGlobalSearchActive()) {
+    scheduleGlobalSearchReload();
+    return;
+  }
+  renderArchives();
+});
+
+searchScopeSelect?.addEventListener('change', () => {
+  setSearchScope(searchScopeSelect.value);
+  resetGlobalSearchState();
+  updateTitle();
+  if (isGlobalSearchActive()) {
+    scheduleGlobalSearchReload();
+    return;
+  }
   renderArchives();
 });
 
@@ -3387,6 +3783,7 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   const folder = params.get('folder');
   const layout = params.get('layout');
   const search = params.get('search');
+  const scope = params.get('scope');
   const sort = params.get('sort');
   const dir = params.get('dir');
   if (view === 'trash' || view === 'shared' || view === 'files') {
@@ -3398,6 +3795,7 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   if (layout) {
     viewMode = normalizeViewMode(layout);
   }
+  setSearchScope(scope);
   if (search) {
     searchTerm = search;
     searchInput.value = search;
@@ -3423,6 +3821,9 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   }
   if (viewModeSelect) {
     viewModeSelect.value = normalizeViewMode(viewMode);
+  }
+  if (searchScopeSelect) {
+    searchScopeSelect.value = searchScope;
   }
   setActiveNav();
   updateTitle();
