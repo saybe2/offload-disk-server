@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
-import { getUserTranscodeUsageBytes } from "../services/transcodes.js";
+import { getUserTranscodeUsageStats } from "../services/transcodes.js";
 
 export const authRouter = Router();
 
@@ -37,14 +37,18 @@ authRouter.get("/me", async (req, res) => {
   if (!user) {
     return res.status(401).json({ error: "auth_required" });
   }
-  const transcodedUsedBytes = await getUserTranscodeUsageBytes(user.id);
+  const transcodeStats = await getUserTranscodeUsageStats(user.id);
   return res.json({
     id: user.id,
     username: user.username,
     role: user.role,
     quotaBytes: user.quotaBytes,
     usedBytes: user.usedBytes,
-    transcodedUsedBytes,
+    transcodedUsedBytes: transcodeStats.totalBytes,
+    transcodedLegacyBytes: transcodeStats.legacyBytes,
+    transcodedLegacyCount: transcodeStats.legacyCount,
+    transcodedModernBytes: transcodeStats.modernBytes,
+    transcodedModernCount: transcodeStats.modernCount,
     transcodeCopiesEnabled: !!user.transcodeCopiesEnabled
   });
 });
