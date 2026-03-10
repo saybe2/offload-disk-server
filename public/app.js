@@ -91,6 +91,7 @@ let PREVIEW_MAX_MIB = 5;
 let UI_REFRESH_MS = 5000;
 let UI_ETA_WINDOW_MS = 120000;
 let UI_ETA_MAX_SAMPLES = 30;
+let UPLOAD_RESPONSE_TIMEOUT_MS = 120000;
 let dragArchiveId = null;
 let dragFolderId = null;
 let foldersById = {};
@@ -2882,7 +2883,8 @@ async function uploadFiles(fileList, targetFolderId) {
     let maxPct = 0;
     let uploadBodySent = false;
     let gotProgress = false;
-    let abortedByWatchdog = false;
+    let abortReason = '';
+    let responseWaitWatchdog = null;
 
     uploadStatus.textContent = attempt > 0 ? `Retrying upload (${attempt + 1}/2)...` : 'Uploading to server...';
     serverProgress.value = 0;
@@ -2894,10 +2896,30 @@ async function uploadFiles(fileList, targetFolderId) {
 
     const noProgressWatchdog = setTimeout(() => {
       if (!gotProgress && xhr.readyState !== XMLHttpRequest.DONE) {
-        abortedByWatchdog = true;
+        abortReason = 'no_progress';
         xhr.abort();
       }
     }, 25000);
+
+    const clearResponseWaitWatchdog = () => {
+      if (responseWaitWatchdog) {
+        clearTimeout(responseWaitWatchdog);
+        responseWaitWatchdog = null;
+      }
+    };
+
+    const armResponseWaitWatchdog = () => {
+      if (responseWaitWatchdog || xhr.readyState === XMLHttpRequest.DONE) {
+        return;
+      }
+      responseWaitWatchdog = setTimeout(() => {
+        if (xhr.readyState === XMLHttpRequest.DONE) {
+          return;
+        }
+        abortReason = 'response_wait_timeout';
+        xhr.abort();
+      }, Math.max(30000, Number(UPLOAD_RESPONSE_TIMEOUT_MS) || 120000));
+    };
 
     xhr.upload.onloadstart = () => {
       uploadEta.textContent = 'Connecting...';
@@ -2912,6 +2934,7 @@ async function uploadFiles(fileList, targetFolderId) {
         maxTotal = Math.max(maxTotal, event.total || 0);
         if (maxTotal > 0 && maxLoaded >= maxTotal) {
           uploadBodySent = true;
+          armResponseWaitWatchdog();
         }
         const rawPct = maxTotal > 0 ? Math.floor((maxLoaded / maxTotal) * 100) : 0;
         const pct = uploadBodySent ? 100 : Math.max(maxPct, rawPct);
@@ -2936,8 +2959,17 @@ async function uploadFiles(fileList, targetFolderId) {
       }
     };
 
+    xhr.upload.onloadend = () => {
+      if (!uploadBodySent) {
+        uploadBodySent = true;
+      }
+      uploadEta.textContent = 'Waiting for server response...';
+      armResponseWaitWatchdog();
+    };
+
     xhr.onload = () => {
       clearTimeout(noProgressWatchdog);
+      clearResponseWaitWatchdog();
       resolve({
         ok: xhr.status >= 200 && xhr.status < 300,
         status: xhr.status,
@@ -2948,6 +2980,7 @@ async function uploadFiles(fileList, targetFolderId) {
 
     xhr.onerror = () => {
       clearTimeout(noProgressWatchdog);
+      clearResponseWaitWatchdog();
       resolve({
         ok: false,
         status: 0,
@@ -2958,11 +2991,12 @@ async function uploadFiles(fileList, targetFolderId) {
 
     xhr.onabort = () => {
       clearTimeout(noProgressWatchdog);
+      clearResponseWaitWatchdog();
       resolve({
         ok: false,
         status: 0,
         responseText: '',
-        reason: abortedByWatchdog ? 'no_progress' : 'aborted'
+        reason: abortReason || 'aborted'
       });
     };
 
@@ -3000,6 +3034,8 @@ async function uploadFiles(fileList, targetFolderId) {
     } catch (e) {}
   } else if (finalResult?.reason === 'no_progress') {
     err = 'no_progress_from_browser';
+  } else if (finalResult?.reason === 'response_wait_timeout') {
+    err = 'server_response_timeout_refresh_before_retry';
   } else if (finalResult?.reason === 'network') {
     err = 'network_error';
   }
