@@ -2824,40 +2824,24 @@ function handleRowSelection(item, key, index, event) {
   updateSelectionUI();
 }
 
+let activeUploadXhr = null;
+
 async function uploadFiles(fileList, targetFolderId) {
   if (!fileList || fileList.length === 0) return;
-  uploadStatus.textContent = 'Uploading to server...';
-  serverProgress.value = 0;
-  uploadEta.textContent = '';
-  let startTime = 0;
-  let lastTime = 0;
-  let lastLoaded = 0;
-  let lastSpeed = 0;
-  let maxLoaded = 0;
-  let maxTotal = 0;
-  let maxPct = 0;
-  let uploadBodySent = false;
+  if (activeUploadXhr && activeUploadXhr.readyState !== XMLHttpRequest.DONE) {
+    uploadStatus.textContent = 'Upload already in progress';
+    return;
+  }
 
-  const data = new FormData();
+  const fileEntries = Array.from(fileList);
+  const hasRelative = fileEntries.some((file) => file.webkitRelativePath);
   let folderId = targetFolderId === undefined ? currentFolderId : targetFolderId;
   if (!folderId && currentView === 'files') {
     const params = new URLSearchParams(location.search);
     folderId = params.get('folder');
   }
-  if (folderId) {
-    data.append('folderId', folderId);
-  }
-  const fileEntries = Array.from(fileList);
-  const hasRelative = fileEntries.some((file) => file.webkitRelativePath);
-  for (const file of fileEntries) {
-    data.append('files', file);
-    data.append('names', file.name);
-    if (hasRelative && file.webkitRelativePath) {
-      data.append('paths', file.webkitRelativePath);
-    }
-  }
 
-  const streamSingle = STREAM_UPLOADS_ENABLED && fileList.length === 1 && fileList[0].size >= (STREAM_SINGLE_MIN_MIB * 1024 * 1024);
+  const streamSingle = STREAM_UPLOADS_ENABLED && fileEntries.length === 1 && fileEntries[0].size >= (STREAM_SINGLE_MIN_MIB * 1024 * 1024);
   let uploadUrl = streamSingle ? '/api/upload-stream' : '/api/upload';
   if (streamSingle) {
     const params = new URLSearchParams();
@@ -2873,65 +2857,154 @@ async function uploadFiles(fileList, targetFolderId) {
     }
   }
 
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', uploadUrl);
-  xhr.upload.onprogress = (event) => {
-    if (event.lengthComputable) {
-      const now = Date.now();
-      if (!startTime) startTime = now;
-      maxLoaded = Math.max(maxLoaded, event.loaded || 0);
-      maxTotal = Math.max(maxTotal, event.total || 0);
-      if (maxTotal > 0 && maxLoaded >= maxTotal) {
-        uploadBodySent = true;
-      }
-      const rawPct = maxTotal > 0 ? Math.floor((maxLoaded / maxTotal) * 100) : 0;
-      const pct = uploadBodySent ? 100 : Math.max(maxPct, rawPct);
-      maxPct = pct;
-      serverProgress.value = pct;
-      const deltaBytes = maxLoaded - lastLoaded;
-      const deltaTime = (now - (lastTime || now)) / 1000;
-      if (deltaTime > 0 && deltaBytes >= 0) {
-        const instant = deltaBytes / deltaTime;
-        lastSpeed = lastSpeed ? (lastSpeed * 0.7 + instant * 0.3) : instant;
-      }
-      lastLoaded = maxLoaded;
-      lastTime = now;
-      const avgSpeed = maxLoaded / Math.max(1, (now - startTime) / 1000);
-      const speed = lastSpeed || avgSpeed;
-      const remaining = uploadBodySent ? 0 : Math.max(0, maxTotal - maxLoaded);
-      const eta = speed > 0 ? formatDuration(remaining / speed) : '';
-      const displayLoaded = uploadBodySent ? maxTotal : maxLoaded;
-      uploadStatus.textContent = `Uploading to server... ${pct}% (${formatSize(displayLoaded)} / ${formatSize(maxTotal)})`;
-      uploadEta.textContent = uploadBodySent ? 'Waiting for server response...' : (eta ? `ETA ${eta}` : '');
+  const buildFormData = () => {
+    const data = new FormData();
+    if (folderId) {
+      data.append('folderId', folderId);
     }
+    for (const file of fileEntries) {
+      data.append('files', file);
+      data.append('names', file.name);
+      if (hasRelative && file.webkitRelativePath) {
+        data.append('paths', file.webkitRelativePath);
+      }
+    }
+    return data;
   };
 
-  xhr.onload = async () => {
-    if (xhr.status >= 200 && xhr.status < 300) {
-      uploadStatus.textContent = 'Queued for processing';
-      serverProgress.value = 100;
-      uploadEta.textContent = '';
-      uploadForm.reset();
-      await loadMe();
-      await loadFolders();
-      await loadArchives();
-    } else {
-      let err = 'upload_failed';
-      try {
-        const data = JSON.parse(xhr.responseText);
-        err = data.error || err;
-      } catch (e) {}
-      uploadStatus.textContent = `Error: ${err}`;
-      uploadEta.textContent = '';
-    }
-  };
+  const runAttempt = (attempt) => new Promise((resolve) => {
+    let startTime = 0;
+    let lastTime = 0;
+    let lastLoaded = 0;
+    let lastSpeed = 0;
+    let maxLoaded = 0;
+    let maxTotal = 0;
+    let maxPct = 0;
+    let uploadBodySent = false;
+    let gotProgress = false;
+    let abortedByWatchdog = false;
 
-  xhr.onerror = () => {
-    uploadStatus.textContent = 'Upload failed';
+    uploadStatus.textContent = attempt > 0 ? `Retrying upload (${attempt + 1}/2)...` : 'Uploading to server...';
+    serverProgress.value = 0;
+    uploadEta.textContent = 'Preparing request...';
+
+    const xhr = new XMLHttpRequest();
+    activeUploadXhr = xhr;
+    xhr.open('POST', uploadUrl);
+
+    const noProgressWatchdog = setTimeout(() => {
+      if (!gotProgress && xhr.readyState !== XMLHttpRequest.DONE) {
+        abortedByWatchdog = true;
+        xhr.abort();
+      }
+    }, 25000);
+
+    xhr.upload.onloadstart = () => {
+      uploadEta.textContent = 'Connecting...';
+    };
+
+    xhr.upload.onprogress = (event) => {
+      gotProgress = true;
+      if (event.lengthComputable) {
+        const now = Date.now();
+        if (!startTime) startTime = now;
+        maxLoaded = Math.max(maxLoaded, event.loaded || 0);
+        maxTotal = Math.max(maxTotal, event.total || 0);
+        if (maxTotal > 0 && maxLoaded >= maxTotal) {
+          uploadBodySent = true;
+        }
+        const rawPct = maxTotal > 0 ? Math.floor((maxLoaded / maxTotal) * 100) : 0;
+        const pct = uploadBodySent ? 100 : Math.max(maxPct, rawPct);
+        maxPct = pct;
+        serverProgress.value = pct;
+
+        const deltaBytes = maxLoaded - lastLoaded;
+        const deltaTime = (now - (lastTime || now)) / 1000;
+        if (deltaTime > 0 && deltaBytes >= 0) {
+          const instant = deltaBytes / deltaTime;
+          lastSpeed = lastSpeed ? (lastSpeed * 0.7 + instant * 0.3) : instant;
+        }
+        lastLoaded = maxLoaded;
+        lastTime = now;
+        const avgSpeed = maxLoaded / Math.max(1, (now - startTime) / 1000);
+        const speed = lastSpeed || avgSpeed;
+        const remaining = uploadBodySent ? 0 : Math.max(0, maxTotal - maxLoaded);
+        const eta = speed > 0 ? formatDuration(remaining / speed) : '';
+        const displayLoaded = uploadBodySent ? maxTotal : maxLoaded;
+        uploadStatus.textContent = `Uploading to server... ${pct}% (${formatSize(displayLoaded)} / ${formatSize(maxTotal)})`;
+        uploadEta.textContent = uploadBodySent ? 'Waiting for server response...' : (eta ? `ETA ${eta}` : '');
+      }
+    };
+
+    xhr.onload = () => {
+      clearTimeout(noProgressWatchdog);
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        responseText: xhr.responseText || '',
+        reason: 'http'
+      });
+    };
+
+    xhr.onerror = () => {
+      clearTimeout(noProgressWatchdog);
+      resolve({
+        ok: false,
+        status: 0,
+        responseText: '',
+        reason: 'network'
+      });
+    };
+
+    xhr.onabort = () => {
+      clearTimeout(noProgressWatchdog);
+      resolve({
+        ok: false,
+        status: 0,
+        responseText: '',
+        reason: abortedByWatchdog ? 'no_progress' : 'aborted'
+      });
+    };
+
+    xhr.send(buildFormData());
+  });
+
+  let finalResult = null;
+  for (let attempt = 0; attempt <= 1; attempt += 1) {
+    finalResult = await runAttempt(attempt);
+    if (finalResult.ok) break;
+    const shouldRetry = finalResult.reason === 'no_progress' || finalResult.reason === 'network';
+    if (!shouldRetry || attempt >= 1) break;
+    uploadStatus.textContent = 'Upload stalled, retrying...';
     uploadEta.textContent = '';
-  };
+  }
 
-  xhr.send(data);
+  activeUploadXhr = null;
+
+  if (finalResult?.ok) {
+    uploadStatus.textContent = 'Queued for processing';
+    serverProgress.value = 100;
+    uploadEta.textContent = '';
+    uploadForm.reset();
+    await loadMe();
+    await loadFolders();
+    await loadArchives();
+    return;
+  }
+
+  let err = 'upload_failed';
+  if (finalResult?.responseText) {
+    try {
+      const payload = JSON.parse(finalResult.responseText);
+      err = payload.error || err;
+    } catch (e) {}
+  } else if (finalResult?.reason === 'no_progress') {
+    err = 'no_progress_from_browser';
+  } else if (finalResult?.reason === 'network') {
+    err = 'network_error';
+  }
+  uploadStatus.textContent = `Error: ${err}`;
+  uploadEta.textContent = '';
 }
 
 async function setArchivePriority(archiveId, value) {
