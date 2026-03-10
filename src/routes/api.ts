@@ -73,6 +73,7 @@ import {
   listLinkedTranscodeArchiveIds
 } from "../services/transcodes.js";
 import {
+  attachDownloadByteTracker,
   noteDownloadDone,
   noteDownloadError,
   noteDownloadStarted,
@@ -1256,6 +1257,7 @@ apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {
     const canUseRange = !!rangeHeader && !archive.isBundle;
     const estimatedBytes = estimateArchiveDownloadBytes(archive);
     noteDownloadStarted(estimatedBytes);
+    attachDownloadByteTracker(res);
     log("download", canUseRange ? `start ${archive.id} range=${rangeHeader}` : `start ${archive.id}`);
     if (archive.isBundle) {
       const activeIndices = activeBundleFileIndices(archive);
@@ -1384,6 +1386,7 @@ apiRouter.post("/archives/download-zip", requireAuth, async (req, res) => {
     return sum + Number(file.size || 0);
   }, 0);
   noteDownloadStarted(estimatedBytes);
+  attachDownloadByteTracker(res);
 
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", `attachment; filename=\"selection_${Date.now()}.zip\"`);
@@ -1492,6 +1495,7 @@ apiRouter.get("/archives/:id/files/:index/download", requireAuth, async (req, re
         ? Number(targetFile?.size || 0)
         : Number(archive.originalSize || archive.files?.[0]?.size || 0);
     noteDownloadStarted(estimatedBytes);
+    attachDownloadByteTracker(res);
     log(
       "download",
       canUseRange
@@ -1591,6 +1595,7 @@ apiRouter.get("/archives/:id/files/:index/media", requireAuth, async (req, res) 
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
+  attachDownloadByteTracker(res);
   notePreviewStarted(estimatedBytes);
   log(
     "preview",
@@ -1868,6 +1873,7 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
   noteDownloadStarted(fileSize);
+  attachDownloadByteTracker(res);
   notePreviewStarted(fileSize);
 
   const tempDir = path.join(config.cacheDir, "preview", `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);

@@ -42,6 +42,7 @@ import {
 import { findReadyTranscodeArchive } from "../services/transcodes.js";
 import { log } from "../logger.js";
 import {
+  attachDownloadByteTracker,
   noteDownloadDone,
   noteDownloadError,
   noteDownloadStarted,
@@ -219,6 +220,7 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
         ? Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0)
         : Number(file.size || 0);
       noteDownloadStarted(estimatedBytes);
+      attachDownloadByteTracker(res);
       if (canUseRange) {
         await streamArchiveRangeToResponse(streamArchive, rangeHeader!, res, config.cacheDir, config.masterKey, {
           fileName: streamFileName
@@ -246,6 +248,7 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
       }
       const estimatedBytes = Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0);
       noteDownloadStarted(estimatedBytes);
+      attachDownloadByteTracker(res);
       const streamFileName = transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || archive.downloadName || archive.name;
       if (rangeHeader) {
         await streamArchiveRangeToResponse(transcodedArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
@@ -262,6 +265,7 @@ publicRouter.get("/api/public/shares/:token/download", async (req, res) => {
     }
     const estimatedBytes = estimateArchiveDownloadBytes(archive);
     noteDownloadStarted(estimatedBytes);
+    attachDownloadByteTracker(res);
     const canUseRange = !!rangeHeader && !archive.isBundle;
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
@@ -315,6 +319,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
         ? Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0)
         : Number(file.size || 0);
       noteDownloadStarted(estimatedBytes);
+      attachDownloadByteTracker(res);
       if (canUseRange) {
         await streamArchiveRangeToResponse(streamArchive, rangeHeader!, res, config.cacheDir, config.masterKey, {
           fileName: streamFileName
@@ -342,6 +347,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
       }
       const estimatedBytes = Number(transcodedArchive.originalSize || transcodedArchive.files?.[0]?.size || 0);
       noteDownloadStarted(estimatedBytes);
+      attachDownloadByteTracker(res);
       const streamFileName = transcodedArchive.files?.[0]?.originalName || transcodedArchive.downloadName || archive.downloadName || archive.name;
       if (rangeHeader) {
         await streamArchiveRangeToResponse(transcodedArchive, rangeHeader, res, config.cacheDir, config.masterKey, {
@@ -358,6 +364,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/download", async 
     }
     const estimatedBytes = estimateArchiveDownloadBytes(archive);
     noteDownloadStarted(estimatedBytes);
+    attachDownloadByteTracker(res);
     const canUseRange = !!rangeHeader && !archive.isBundle;
     if (canUseRange) {
       await streamArchiveRangeToResponse(archive, rangeHeader!, res, config.cacheDir, config.masterKey);
@@ -435,6 +442,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
   const rangeHeader = typeof req.headers.range === "string" ? req.headers.range : null;
   const estimatedBytes = Number(mediaFile?.size || mediaArchive.originalSize || 0);
   noteDownloadStarted(estimatedBytes);
+  attachDownloadByteTracker(res);
   notePreviewStarted(estimatedBytes);
   const remuxTempDir = (needsTsRemux || needsAudioTrackRemux)
     ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
@@ -697,6 +705,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
   }
   let contentType = resolvePreviewContentType(fileName, detectedType);
   noteDownloadStarted(fileSize);
+  attachDownloadByteTracker(res);
   notePreviewStarted(fileSize);
 
   const tempDir = path.join(

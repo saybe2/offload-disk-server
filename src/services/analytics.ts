@@ -1,4 +1,5 @@
 import { AnalyticsTotals } from "../models/AnalyticsTotals.js";
+import type { Response } from "express";
 
 type CounterBucket = {
   ts: number;
@@ -58,6 +59,7 @@ const buckets: CounterBucket[] = [];
 const pendingInc: Record<string, number> = {};
 let flushTimer: NodeJS.Timeout | null = null;
 let flushInProgress = false;
+const DOWNLOAD_TRACKER_KEY = "__offloadDownloadTrackerAttached";
 
 function now() {
   return Date.now();
@@ -327,15 +329,55 @@ export function noteDownloadStarted(bytes: number) {
 }
 
 export function noteDownloadDone(bytes: number) {
-  const amount = Math.max(0, Math.trunc(bytes || 0));
   totals.download.done += 1;
-  getCurrentBucket().downloadBytes += amount;
   addPendingInc({ "download.done": 1 });
 }
 
 export function noteDownloadError() {
   totals.download.error += 1;
   addPendingInc({ "download.error": 1 });
+}
+
+export function noteDownloadBytes(bytes: number) {
+  const amount = Math.max(0, Math.trunc(bytes || 0));
+  if (!amount) return;
+  getCurrentBucket().downloadBytes += amount;
+}
+
+function chunkByteLength(chunk: unknown, encoding?: BufferEncoding) {
+  if (typeof chunk === "string") {
+    return Buffer.byteLength(chunk, encoding);
+  }
+  if (Buffer.isBuffer(chunk)) {
+    return chunk.length;
+  }
+  if (chunk instanceof Uint8Array) {
+    return chunk.byteLength;
+  }
+  return 0;
+}
+
+export function attachDownloadByteTracker(res: Response) {
+  const trackerTarget = res as Response & Record<string, unknown>;
+  if (trackerTarget[DOWNLOAD_TRACKER_KEY]) return;
+  trackerTarget[DOWNLOAD_TRACKER_KEY] = true;
+
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+
+  (res as any).write = ((chunk: any, encoding?: any, cb?: any) => {
+    const bufferEncoding = typeof encoding === "string" ? (encoding as BufferEncoding) : undefined;
+    noteDownloadBytes(chunkByteLength(chunk, bufferEncoding));
+    return originalWrite(chunk, encoding, cb);
+  }) as typeof res.write;
+
+  (res as any).end = ((chunk?: any, encoding?: any, cb?: any) => {
+    if (chunk != null) {
+      const bufferEncoding = typeof encoding === "string" ? (encoding as BufferEncoding) : undefined;
+      noteDownloadBytes(chunkByteLength(chunk, bufferEncoding));
+    }
+    return originalEnd(chunk as any, encoding as any, cb as any);
+  }) as typeof res.end;
 }
 
 export function noteRestoreJobStarted() {
