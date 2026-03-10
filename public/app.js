@@ -2833,6 +2833,10 @@ async function uploadFiles(fileList, targetFolderId) {
   let lastTime = 0;
   let lastLoaded = 0;
   let lastSpeed = 0;
+  let maxLoaded = 0;
+  let maxTotal = 0;
+  let maxPct = 0;
+  let uploadBodySent = false;
 
   const data = new FormData();
   let folderId = targetFolderId === undefined ? currentFolderId : targetFolderId;
@@ -2875,22 +2879,30 @@ async function uploadFiles(fileList, targetFolderId) {
     if (event.lengthComputable) {
       const now = Date.now();
       if (!startTime) startTime = now;
-      const pct = Math.floor((event.loaded / event.total) * 100);
+      maxLoaded = Math.max(maxLoaded, event.loaded || 0);
+      maxTotal = Math.max(maxTotal, event.total || 0);
+      if (maxTotal > 0 && maxLoaded >= maxTotal) {
+        uploadBodySent = true;
+      }
+      const rawPct = maxTotal > 0 ? Math.floor((maxLoaded / maxTotal) * 100) : 0;
+      const pct = uploadBodySent ? 100 : Math.max(maxPct, rawPct);
+      maxPct = pct;
       serverProgress.value = pct;
-      const deltaBytes = event.loaded - lastLoaded;
+      const deltaBytes = maxLoaded - lastLoaded;
       const deltaTime = (now - (lastTime || now)) / 1000;
       if (deltaTime > 0 && deltaBytes >= 0) {
         const instant = deltaBytes / deltaTime;
         lastSpeed = lastSpeed ? (lastSpeed * 0.7 + instant * 0.3) : instant;
       }
-      lastLoaded = event.loaded;
+      lastLoaded = maxLoaded;
       lastTime = now;
-      const avgSpeed = event.loaded / Math.max(1, (now - startTime) / 1000);
+      const avgSpeed = maxLoaded / Math.max(1, (now - startTime) / 1000);
       const speed = lastSpeed || avgSpeed;
-      const remaining = Math.max(0, event.total - event.loaded);
+      const remaining = uploadBodySent ? 0 : Math.max(0, maxTotal - maxLoaded);
       const eta = speed > 0 ? formatDuration(remaining / speed) : '';
-      uploadStatus.textContent = `Uploading to server... ${pct}% (${formatSize(event.loaded)} / ${formatSize(event.total)})`;
-      uploadEta.textContent = eta ? `ETA ${eta}` : '';
+      const displayLoaded = uploadBodySent ? maxTotal : maxLoaded;
+      uploadStatus.textContent = `Uploading to server... ${pct}% (${formatSize(displayLoaded)} / ${formatSize(maxTotal)})`;
+      uploadEta.textContent = uploadBodySent ? 'Waiting for server response...' : (eta ? `ETA ${eta}` : '');
     }
   };
 
