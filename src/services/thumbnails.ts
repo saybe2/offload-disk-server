@@ -15,6 +15,8 @@ const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv
 const inFlight = new Map<string, Promise<ThumbnailResult>>();
 const require = createRequire(import.meta.url);
 const ffmpegPath: string | null = require("ffmpeg-static");
+const sharpFormats = (sharp as any).format || {};
+const heifInputSupported = !!sharpFormats.heif?.input;
 
 export interface ThumbnailResult {
   filePath: string;
@@ -41,6 +43,9 @@ export function isPermanentThumbnailFailureMessage(message: string) {
     lower.includes("vipsjpeg: invalid sos parameters") ||
     lower.includes("invalid sos parameters") ||
     lower.includes("input file contains unsupported image format") ||
+    lower.includes("heif: error while loading plugin") ||
+    lower.includes("support for this compression format has not been built in") ||
+    lower.includes("thumbnail_heif_unsupported_runtime") ||
     lower.includes("corrupt jpeg") ||
     lower.includes("invalid data found when processing input")
   );
@@ -56,7 +61,13 @@ function extOf(fileName: string) {
   return dot >= 0 ? lower.slice(dot) : "";
 }
 
+function isHeif(fileName: string) {
+  const ext = extOf(fileName);
+  return ext === ".heic" || ext === ".heif";
+}
+
 function isImage(fileName: string) {
+  if (isHeif(fileName) && !heifInputSupported) return false;
   return imageExt.has(extOf(fileName));
 }
 
@@ -69,6 +80,7 @@ function isVideo(fileName: string, detectedKind?: string) {
 }
 
 export function supportsThumbnail(fileName: string, detectedKind?: string) {
+  if (isHeif(fileName) && !heifInputSupported) return false;
   if (detectedKind === "image") return true;
   if (detectedKind === "video") return true;
   if (detectedKind && detectedKind !== "image" && detectedKind !== "video") return false;
@@ -198,6 +210,9 @@ async function spawnFfmpegFrame(inputPath: string) {
 async function generateThumbFromFile(sourcePath: string, fileName: string, outPath: string, detectedKind?: string) {
   const size = Math.max(64, config.thumbnailSizePx);
   const quality = Math.max(30, Math.min(95, config.thumbnailQuality));
+  if (isHeif(fileName) && !heifInputSupported) {
+    throw new Error("thumbnail_heif_unsupported_runtime");
+  }
   if (detectedKind === "image" || isImage(fileName)) {
     await sharp(sourcePath).rotate().resize(size, size, { fit: "inside", withoutEnlargement: true }).webp({ quality }).toFile(outPath);
     return;
