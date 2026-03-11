@@ -92,6 +92,7 @@ let UI_REFRESH_MS = 5000;
 let UI_ETA_WINDOW_MS = 120000;
 let UI_ETA_MAX_SAMPLES = 30;
 let UPLOAD_RESPONSE_TIMEOUT_MS = 120000;
+let ARCHIVES_PAGE_SIZE = 120;
 let dragArchiveId = null;
 let dragFolderId = null;
 let foldersById = {};
@@ -127,7 +128,12 @@ let activeFolderShares = new Map();
 let lastStructureSignature = '';
 let lastGlobalSignature = '';
 let globalSearchAbortController = null;
-let globalSearchDebounceTimer = null;
+let archivesHasMore = false;
+let archivesTotal = 0;
+let archivesLoading = false;
+let archivesQueryKey = '';
+let archivesRequestSeq = 0;
+let archivesDebounceTimer = null;
 let globalSearchResults = {
   query: '',
   folders: [],
@@ -158,6 +164,39 @@ function normalizeSearchScope(value) {
 
 function isGlobalSearchActive() {
   return currentView === 'files' && searchScope === 'global' && !!searchTerm;
+}
+
+function isFolderSearchActive() {
+  return currentView === 'files' && searchScope === 'folder' && !!searchTerm;
+}
+
+function buildArchivesQueryKey() {
+  return [
+    currentView,
+    currentFolderId || '',
+    isFolderSearchActive() ? searchTerm.toLowerCase() : ''
+  ].join('|');
+}
+
+function buildArchivesParams(offset, limit) {
+  const params = new URLSearchParams();
+  if (currentView === 'trash') {
+    params.set('trash', '1');
+  } else if (!currentFolderId) {
+    params.set('root', '1');
+  } else {
+    params.set('folderId', currentFolderId);
+  }
+  if (isFolderSearchActive()) {
+    params.set('q', searchTerm);
+  }
+  if (offset > 0) {
+    params.set('offset', String(offset));
+  }
+  if (limit > 0) {
+    params.set('limit', String(limit));
+  }
+  return params;
 }
 
 function setSearchScope(value) {
@@ -1415,6 +1454,7 @@ function buildFileItems(archives) {
 }
 
 function filterItems(items) {
+  if (isFolderSearchActive()) return items;
   if (!searchTerm) return items;
   const query = searchTerm.toLowerCase();
   return items.filter((item) => {
@@ -1513,7 +1553,9 @@ function buildStructureSignature() {
     folderBits,
     archiveBits,
     shareBits,
-    folderShareBits
+    folderShareBits,
+    archivesHasMore ? 1 : 0,
+    archivesTotal || 0
   ].join('||');
 }
 
@@ -1673,7 +1715,9 @@ async function loadGlobalSearchResults() {
   }
 }
 
-async function loadArchives() {
+async function loadArchives(options = {}) {
+  const append = !!options.append;
+  const preserveCount = !!options.preserveCount && !append;
   if (currentView === 'shared') {
     await loadShared();
     return;
@@ -1689,17 +1733,44 @@ async function loadArchives() {
   }
 
   resetGlobalSearchState();
-  const params = new URLSearchParams();
-  if (currentView === 'trash') {
-    params.set('trash', '1');
-  } else if (!currentFolderId) {
-    params.set('root', '1');
-  } else if (currentFolderId) {
-    params.set('folderId', currentFolderId);
+  const queryKey = buildArchivesQueryKey();
+  if (!append && queryKey !== archivesQueryKey) {
+    archivesQueryKey = queryKey;
+    archivesCache = [];
+    archivesHasMore = false;
+    archivesTotal = 0;
   }
-  const res = await fetch(`/api/archives?${params.toString()}`);
-  const data = await res.json();
-  archivesCache = data.archives || [];
+  if (append && queryKey !== archivesQueryKey) {
+    return;
+  }
+  if (archivesLoading) {
+    return;
+  }
+
+  const offset = append ? archivesCache.length : 0;
+  const limit = append
+    ? ARCHIVES_PAGE_SIZE
+    : Math.max(ARCHIVES_PAGE_SIZE, preserveCount ? archivesCache.length : 0);
+
+  archivesLoading = true;
+  const requestSeq = ++archivesRequestSeq;
+  const params = buildArchivesParams(offset, limit);
+  try {
+    const res = await fetch(`/api/archives?${params.toString()}`);
+    const data = await res.json();
+    if (requestSeq !== archivesRequestSeq) {
+      return;
+    }
+    const page = Array.isArray(data.archives) ? data.archives : [];
+    archivesCache = append ? archivesCache.concat(page) : page;
+    archivesHasMore = !!data.hasMore;
+    archivesTotal = Number(data.total || archivesCache.length);
+  } finally {
+    if (requestSeq === archivesRequestSeq) {
+      archivesLoading = false;
+    }
+  }
+
   if (currentView === 'files') {
     await loadActiveSharesMap();
   } else {
@@ -1716,6 +1787,7 @@ async function loadArchives() {
   }
   lastStructureSignature = structureSignature;
   renderArchives();
+  void maybeLoadMoreArchives();
 }
 
 async function loadActiveSharesMap() {
@@ -2458,6 +2530,20 @@ function renderArchives() {
 
     archiveList.appendChild(tr);
   }
+
+  if ((archivesHasMore || archivesLoading) && (currentView === 'files' || currentView === 'trash')) {
+    const more = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 9;
+    td.className = 'status-meta';
+    if (archivesLoading && archivesCache.length > 0) {
+      td.textContent = `Loading items... (${archivesCache.length}/${archivesTotal || archivesCache.length})`;
+    } else if (archivesHasMore) {
+      td.textContent = `Scroll down to load more (${archivesCache.length}/${archivesTotal || archivesCache.length})`;
+    }
+    more.appendChild(td);
+    archiveList.appendChild(more);
+  }
   lastStructureSignature = buildStructureSignature();
 }
 
@@ -2761,6 +2847,18 @@ function renderArchivesGrid() {
 
     card.appendChild(content);
     gridView.appendChild(card);
+  }
+
+  if ((archivesHasMore || archivesLoading) && (currentView === 'files' || currentView === 'trash')) {
+    const hint = document.createElement('div');
+    hint.className = 'status-meta';
+    hint.style.gridColumn = '1 / -1';
+    if (archivesLoading && archivesCache.length > 0) {
+      hint.textContent = `Loading items... (${archivesCache.length}/${archivesTotal || archivesCache.length})`;
+    } else if (archivesHasMore) {
+      hint.textContent = `Scroll down to load more (${archivesCache.length}/${archivesTotal || archivesCache.length})`;
+    }
+    gridView.appendChild(hint);
   }
 }
 
@@ -3901,14 +3999,29 @@ logoutBtn.addEventListener('click', async () => {
   location.href = '/';
 });
 
-function scheduleGlobalSearchReload() {
-  if (globalSearchDebounceTimer) {
-    clearTimeout(globalSearchDebounceTimer);
+function scheduleArchivesReload() {
+  if (archivesDebounceTimer) {
+    clearTimeout(archivesDebounceTimer);
   }
-  globalSearchDebounceTimer = setTimeout(() => {
-    globalSearchDebounceTimer = null;
+  archivesDebounceTimer = setTimeout(() => {
+    archivesDebounceTimer = null;
     loadArchives();
   }, 180);
+}
+
+function shouldAutoLoadMoreArchives() {
+  if (archivesLoading || !archivesHasMore) return false;
+  if (currentView !== 'files' && currentView !== 'trash') return false;
+  if (currentView === 'files' && isGlobalSearchActive()) return false;
+  return true;
+}
+
+async function maybeLoadMoreArchives() {
+  if (!shouldAutoLoadMoreArchives()) return;
+  const scrollElement = document.scrollingElement || document.documentElement;
+  const remain = scrollElement.scrollHeight - (scrollElement.scrollTop + window.innerHeight);
+  if (remain > 480) return;
+  await loadArchives({ append: true });
 }
 
 searchInput.addEventListener('input', () => {
@@ -3923,22 +4036,14 @@ searchInput.addEventListener('input', () => {
     loadArchives();
     return;
   }
-  if (isGlobalSearchActive()) {
-    scheduleGlobalSearchReload();
-    return;
-  }
-  renderArchives();
+  scheduleArchivesReload();
 });
 
 searchScopeSelect?.addEventListener('change', () => {
   setSearchScope(searchScopeSelect.value);
   resetGlobalSearchState();
   updateTitle();
-  if (isGlobalSearchActive()) {
-    scheduleGlobalSearchReload();
-    return;
-  }
-  renderArchives();
+  scheduleArchivesReload();
 });
 
 sortFieldSelect?.addEventListener('change', () => {
@@ -4065,7 +4170,10 @@ window.addEventListener('resize', () => {
   hideContextMenu();
   syncSidebarHeight();
 });
-window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
+window.addEventListener('scroll', () => {
+  syncSidebarHeight();
+  void maybeLoadMoreArchives();
+}, { passive: true });
 
 (async () => {
   try {
@@ -4089,6 +4197,9 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
       }
       if (typeof cfg.etaMaxSamples === 'number') {
         UI_ETA_MAX_SAMPLES = cfg.etaMaxSamples;
+      }
+      if (typeof cfg.archivesPageSize === 'number') {
+        ARCHIVES_PAGE_SIZE = Math.max(40, Math.min(500, Math.floor(cfg.archivesPageSize)));
       }
     }
   } catch (err) {}
@@ -4144,6 +4255,13 @@ window.addEventListener('scroll', () => syncSidebarHeight(), { passive: true });
   await loadMe();
   await loadFolders();
   await loadArchives();
+  await maybeLoadMoreArchives();
   syncSidebarHeight();
-  setInterval(loadArchives, UI_REFRESH_MS);
+  setInterval(() => {
+    if (currentView === 'files' || currentView === 'trash') {
+      void loadArchives({ preserveCount: true });
+      return;
+    }
+    void loadArchives();
+  }, UI_REFRESH_MS);
 })();
