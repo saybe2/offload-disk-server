@@ -27,6 +27,7 @@ import { getOutboundProxyStatus } from "./services/outbound.js";
 import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
 import { initAnalyticsPersistence } from "./services/analytics.js";
+import { initRealtimeServer } from "./services/realtime.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -52,14 +53,14 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-app.use(
-  session({
-    secret: config.sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({ mongoUrl: config.mongoUri, dbName: config.mongoDb })
-  })
-);
+const sessionMiddleware = session({
+  secret: config.sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  store: MongoStore.create({ mongoUrl: config.mongoUri, dbName: config.mongoDb })
+});
+
+app.use(sessionMiddleware);
 
 app.get("/api/ui-config", (_req, res) => {
   res.json({
@@ -365,6 +366,7 @@ async function main() {
   const server = app.listen(config.port, () => {
     log("server", `listening on ${config.port}`);
   });
+  initRealtimeServer(server, sessionMiddleware);
   // Allow very large uploads without a 5-minute hard cut-off.
   server.requestTimeout = 0;
   // Keep node from killing long-lived upload sockets due inactivity timeout.
