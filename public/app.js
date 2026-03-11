@@ -1718,6 +1718,9 @@ async function loadGlobalSearchResults() {
 async function loadArchives(options = {}) {
   const append = !!options.append;
   const preserveCount = !!options.preserveCount && !append;
+  const preserveScroll = append || preserveCount;
+  const scrollElement = document.scrollingElement || document.documentElement;
+  const beforeScrollTop = preserveScroll ? Number(scrollElement.scrollTop || 0) : 0;
   if (currentView === 'shared') {
     await loadShared();
     return;
@@ -1787,6 +1790,12 @@ async function loadArchives(options = {}) {
   }
   lastStructureSignature = structureSignature;
   renderArchives();
+  if (preserveScroll) {
+    requestAnimationFrame(() => {
+      const maxTop = Math.max(0, scrollElement.scrollHeight - window.innerHeight);
+      scrollElement.scrollTop = Math.min(beforeScrollTop, maxTop);
+    });
+  }
   void maybeLoadMoreArchives();
 }
 
