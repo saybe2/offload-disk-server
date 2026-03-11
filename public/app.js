@@ -134,6 +134,11 @@ let archivesLoading = false;
 let archivesQueryKey = '';
 let archivesRequestSeq = 0;
 let archivesDebounceTimer = null;
+let realtimeSocket = null;
+let realtimeConnected = false;
+let realtimeReconnectTimer = null;
+let realtimeReconnectMs = 1000;
+let realtimeArchivesSubKey = '';
 let globalSearchResults = {
   query: '',
   folders: [],
@@ -157,6 +162,7 @@ const priorities = [
   { value: 3, label: 'high' },
   { value: 4, label: 'maximum' }
 ];
+const REALTIME_WS_PATH = '/ws';
 
 function normalizeSearchScope(value) {
   return value === 'global' ? 'global' : 'folder';
@@ -197,6 +203,165 @@ function buildArchivesParams(offset, limit) {
     params.set('limit', String(limit));
   }
   return params;
+}
+
+function getRealtimeUrl() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}${REALTIME_WS_PATH}`;
+}
+
+function isRealtimeArchivesView() {
+  if (currentView !== 'files' && currentView !== 'trash') return false;
+  if (currentView === 'files' && isGlobalSearchActive()) return false;
+  return true;
+}
+
+function buildRealtimeArchivesSubscription() {
+  if (!isRealtimeArchivesView()) {
+    return null;
+  }
+  const limit = Math.max(ARCHIVES_PAGE_SIZE, archivesCache.length || 0);
+  return {
+    type: 'subscribe_archives',
+    queryKey: buildArchivesQueryKey(),
+    view: currentView,
+    folderId: currentView === 'files' ? (currentFolderId || null) : null,
+    rootOnly: currentView === 'files' && !currentFolderId,
+    query: isFolderSearchActive() ? searchTerm : '',
+    limit
+  };
+}
+
+function sendRealtimeMessage(payload) {
+  if (!realtimeSocket || realtimeSocket.readyState !== WebSocket.OPEN) return;
+  realtimeSocket.send(JSON.stringify(payload));
+}
+
+function scheduleRealtimeReconnect() {
+  if (realtimeReconnectTimer) return;
+  realtimeReconnectTimer = setTimeout(() => {
+    realtimeReconnectTimer = null;
+    connectRealtimeSocket();
+  }, realtimeReconnectMs);
+  realtimeReconnectMs = Math.min(realtimeReconnectMs * 2, 15000);
+}
+
+async function applyRealtimeArchivesPatch(message) {
+  if (!message || typeof message !== 'object') return;
+  if (!isRealtimeArchivesView()) return;
+  const queryKey = typeof message.queryKey === 'string' ? message.queryKey : '';
+  if (!queryKey || queryKey !== buildArchivesQueryKey()) return;
+
+  const byId = new Map(archivesCache.map((archive) => [String(archive._id), archive]));
+  const removedIds = Array.isArray(message.removedIds) ? message.removedIds : [];
+  for (const id of removedIds) {
+    byId.delete(String(id));
+  }
+
+  const upserts = Array.isArray(message.upserts) ? message.upserts : [];
+  for (const archive of upserts) {
+    const id = String(archive?._id || '');
+    if (!id) continue;
+    byId.set(id, archive);
+  }
+
+  const orderedIds = Array.isArray(message.orderedIds) ? message.orderedIds : [];
+  const nextCache = [];
+  const seen = new Set();
+  for (const idRaw of orderedIds) {
+    const id = String(idRaw || '');
+    if (!id || seen.has(id)) continue;
+    const archive = byId.get(id);
+    if (!archive) continue;
+    seen.add(id);
+    nextCache.push(archive);
+  }
+  for (const [id, archive] of byId.entries()) {
+    if (seen.has(id)) continue;
+    nextCache.push(archive);
+  }
+
+  archivesCache = nextCache;
+  archivesHasMore = !!message.hasMore;
+  const total = Number(message.total);
+  archivesTotal = Number.isFinite(total) && total > 0 ? total : archivesCache.length;
+
+  if (currentView === 'files') {
+    await loadActiveSharesMap();
+  } else {
+    activeArchiveShares = new Map();
+    activeFolderShares = new Map();
+  }
+
+  updateArchiveProgress(archivesCache);
+  const structureSignature = buildStructureSignature();
+  if (structureSignature === lastStructureSignature) {
+    if (currentView === 'files') {
+      updateVisibleDynamicFields(buildCurrentFileItems());
+    }
+    return;
+  }
+  lastStructureSignature = structureSignature;
+  renderArchives();
+  void maybeLoadMoreArchives();
+  void syncRealtimeArchivesSubscription();
+}
+
+function syncRealtimeArchivesSubscription(force = false) {
+  if (!realtimeSocket || realtimeSocket.readyState !== WebSocket.OPEN) return;
+  const payload = buildRealtimeArchivesSubscription();
+  if (!payload) {
+    if (realtimeArchivesSubKey) {
+      sendRealtimeMessage({ type: 'unsubscribe_archives' });
+      realtimeArchivesSubKey = '';
+    }
+    return;
+  }
+  const nextKey = JSON.stringify(payload);
+  if (!force && nextKey === realtimeArchivesSubKey) return;
+  realtimeArchivesSubKey = nextKey;
+  sendRealtimeMessage(payload);
+}
+
+function connectRealtimeSocket() {
+  if (typeof WebSocket === 'undefined') return;
+  if (realtimeSocket && (realtimeSocket.readyState === WebSocket.OPEN || realtimeSocket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  const ws = new WebSocket(getRealtimeUrl());
+  realtimeSocket = ws;
+
+  ws.addEventListener('open', () => {
+    if (realtimeSocket !== ws) return;
+    realtimeConnected = true;
+    realtimeReconnectMs = 1000;
+    syncRealtimeArchivesSubscription(true);
+  });
+
+  ws.addEventListener('message', (event) => {
+    let message;
+    try {
+      message = JSON.parse(String(event.data || ''));
+    } catch {
+      return;
+    }
+    if (!message || typeof message.type !== 'string') return;
+    if (message.type === 'archives_patch') {
+      void applyRealtimeArchivesPatch(message);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    if (realtimeSocket !== ws) return;
+    realtimeConnected = false;
+    realtimeSocket = null;
+    realtimeArchivesSubKey = '';
+    scheduleRealtimeReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    // close handler schedules reconnect.
+  });
 }
 
 function setSearchScope(value) {
@@ -1723,15 +1888,18 @@ async function loadArchives(options = {}) {
   const beforeScrollTop = preserveScroll ? Number(scrollElement.scrollTop || 0) : 0;
   if (currentView === 'shared') {
     await loadShared();
+    syncRealtimeArchivesSubscription();
     return;
   }
   if (currentView === 'converted') {
     await loadConverted();
+    syncRealtimeArchivesSubscription();
     return;
   }
 
   if (isGlobalSearchActive()) {
     await loadGlobalSearchResults();
+    syncRealtimeArchivesSubscription();
     return;
   }
 
@@ -1786,6 +1954,7 @@ async function loadArchives(options = {}) {
     if (currentView === 'files') {
       updateVisibleDynamicFields(buildCurrentFileItems());
     }
+    void syncRealtimeArchivesSubscription();
     return;
   }
   lastStructureSignature = structureSignature;
@@ -1797,6 +1966,7 @@ async function loadArchives(options = {}) {
     });
   }
   void maybeLoadMoreArchives();
+  void syncRealtimeArchivesSubscription();
 }
 
 async function loadActiveSharesMap() {
@@ -4264,9 +4434,14 @@ window.addEventListener('scroll', () => {
   await loadMe();
   await loadFolders();
   await loadArchives();
+  connectRealtimeSocket();
+  syncRealtimeArchivesSubscription(true);
   await maybeLoadMoreArchives();
   syncSidebarHeight();
   setInterval(() => {
+    if (realtimeConnected && isRealtimeArchivesView()) {
+      return;
+    }
     if (currentView === 'files' || currentView === 'trash') {
       void loadArchives({ preserveCount: true });
       return;
