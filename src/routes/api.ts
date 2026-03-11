@@ -1035,6 +1035,13 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   const isTrash = req.query.trash === "1";
   const folderId = (req.query.folderId as string) || null;
   const rootOnly = req.query.root === "1";
+  const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const offsetRaw = Number.parseInt(String(req.query.offset || "0"), 10);
+  const limitRaw = Number.parseInt(String(req.query.limit || "0"), 10);
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0
+    ? Math.min(Math.max(limitRaw, 1), 500)
+    : 0;
   const baseFilter = req.session.role === "admin" ? {} : { userId: req.session.userId };
   const filter = {
     ...baseFilter,
@@ -1050,8 +1057,38 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   } else if (rootOnly && !isTrash) {
     filter.folderId = null;
   }
-  const archives = await Archive.find(filter).sort({ createdAt: -1 }).lean();
-  return res.json({ archives: archives.map((archive) => withPreviewSupport(archive)) });
+  if (queryRaw) {
+    const needle = new RegExp(escapeRegex(queryRaw), "i");
+    filter.$or = [
+      { displayName: needle },
+      { name: needle },
+      { "files.originalName": needle },
+      { "files.name": needle }
+    ];
+  }
+
+  let total = 0;
+  if (limit > 0) {
+    total = await Archive.countDocuments(filter);
+  }
+
+  const query = Archive.find(filter).sort({ createdAt: -1 });
+  if (limit > 0) {
+    query.skip(offset).limit(limit);
+  }
+
+  const archives = await query.lean();
+  const hasMore = limit > 0 ? offset + archives.length < total : false;
+  const nextOffset = hasMore ? offset + archives.length : null;
+
+  return res.json({
+    archives: archives.map((archive) => withPreviewSupport(archive)),
+    total: limit > 0 ? total : archives.length,
+    offset,
+    limit: limit > 0 ? limit : archives.length,
+    hasMore,
+    nextOffset
+  });
 });
 
 apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
