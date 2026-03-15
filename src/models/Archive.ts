@@ -109,7 +109,6 @@ export interface ArchiveDoc extends mongoose.Document {
   sourceArchiveId?: mongoose.Types.ObjectId | null;
   sourceFileIndex?: number | null;
   transcodeAudioTrack?: number | null;
-  transcodeVersion?: number | null;
   isBundle: boolean;
   encryptionVersion?: number;
   folderId?: mongoose.Types.ObjectId | null;
@@ -264,7 +263,6 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     sourceArchiveId: { type: Schema.Types.ObjectId, ref: "Archive", default: null, index: true },
     sourceFileIndex: { type: Number, default: null },
     transcodeAudioTrack: { type: Number, default: null, index: true },
-    transcodeVersion: { type: Number, default: null, index: true },
     isBundle: { type: Boolean, default: false },
     encryptionVersion: { type: Number, default: 2 },
     folderId: { type: Schema.Types.ObjectId, ref: "Folder", default: null, index: true },

@@ -477,7 +477,6 @@ async function createTranscodedArchive(
       sourceArchiveId: sourceArchive._id || sourceId,
       sourceFileIndex: fileIndex,
       transcodeAudioTrack: audioTrack,
-      transcodeVersion: 2,
       isBundle: false,
       encryptionVersion: 2,
       folderId: null,
@@ -791,11 +790,7 @@ export async function getUserTranscodeUsageStats(userId: string) {
   if (!objectId) {
     return {
       totalBytes: 0,
-      totalCount: 0,
-      legacyBytes: 0,
-      legacyCount: 0,
-      modernBytes: 0,
-      modernCount: 0
+      totalCount: 0
     };
   }
   const rows = await Archive.aggregate([
@@ -810,45 +805,13 @@ export async function getUserTranscodeUsageStats(userId: string) {
       $group: {
         _id: null,
         totalBytes: { $sum: { $ifNull: ["$originalSize", 0] } },
-        totalCount: { $sum: 1 },
-        legacyBytes: {
-          $sum: {
-            $cond: [
-              { $lt: [{ $ifNull: ["$transcodeVersion", 0] }, 2] },
-              { $ifNull: ["$originalSize", 0] },
-              0
-            ]
-          }
-        },
-        legacyCount: {
-          $sum: {
-            $cond: [{ $lt: [{ $ifNull: ["$transcodeVersion", 0] }, 2] }, 1, 0]
-          }
-        },
-        modernBytes: {
-          $sum: {
-            $cond: [
-              { $gte: [{ $ifNull: ["$transcodeVersion", 0] }, 2] },
-              { $ifNull: ["$originalSize", 0] },
-              0
-            ]
-          }
-        },
-        modernCount: {
-          $sum: {
-            $cond: [{ $gte: [{ $ifNull: ["$transcodeVersion", 0] }, 2] }, 1, 0]
-          }
-        }
+        totalCount: { $sum: 1 }
       }
     }
   ]);
   const row = rows?.[0] || {};
   return {
     totalBytes: Number(row.totalBytes || 0),
-    totalCount: Number(row.totalCount || 0),
-    legacyBytes: Number(row.legacyBytes || 0),
-    legacyCount: Number(row.legacyCount || 0),
-    modernBytes: Number(row.modernBytes || 0),
-    modernCount: Number(row.modernCount || 0)
+    totalCount: Number(row.totalCount || 0)
   };
 }

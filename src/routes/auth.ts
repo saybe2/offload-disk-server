@@ -45,10 +45,7 @@ authRouter.get("/me", async (req, res) => {
     quotaBytes: user.quotaBytes,
     usedBytes: user.usedBytes,
     transcodedUsedBytes: transcodeStats.totalBytes,
-    transcodedLegacyBytes: transcodeStats.legacyBytes,
-    transcodedLegacyCount: transcodeStats.legacyCount,
-    transcodedModernBytes: transcodeStats.modernBytes,
-    transcodedModernCount: transcodeStats.modernCount,
+    transcodedCount: transcodeStats.totalCount,
     transcodeCopiesEnabled: !!user.transcodeCopiesEnabled
   });
 });
