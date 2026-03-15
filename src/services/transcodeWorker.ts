@@ -45,7 +45,7 @@ function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
   }
   if (status === "skipped") {
     if (config.transcodeForceAll && isCompatibleSkip) {
-      // Re-queue legacy "already compatible" skips when force-all mode is enabled.
+      // Re-queue codec-compatible skips when force-all mode is enabled.
     } else if (allowRetryDisabledSkip && error === "disabled_by_user") {
       // User can re-enable copies later; allow retry path in worker scan.
     } else {
