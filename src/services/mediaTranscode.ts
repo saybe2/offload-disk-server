@@ -28,6 +28,14 @@ export async function resolvePreferredTranscodedArchiveForMedia(
   logPrefix: string
 ) {
   let transcodedArchive = preferTranscoded ? await findReadyTranscodeArchive(archive, fileIndex) : null;
+  if (preferTranscoded && !transcodedArchive && (requestedAudioTrack == null || requestedAudioTrack <= 0)) {
+    try {
+      await ensureArchiveFileTranscodeForAudioTrack(archive, fileIndex, 0);
+      transcodedArchive = await findReadyTranscodeArchive(archive, fileIndex);
+    } catch (err) {
+      log("transcode", `${logPrefix} ${archive.id} file=${fileIndex} ${(err as Error).message}`);
+    }
+  }
   if (!preferTranscoded || requestedAudioTrack == null || requestedAudioTrack <= 0) {
     return transcodedArchive;
   }
@@ -48,4 +56,3 @@ export async function resolvePreferredTranscodedArchiveForMedia(
   }
   return transcodedArchive;
 }
-

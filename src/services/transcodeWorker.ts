@@ -1,7 +1,12 @@
 import { Archive } from "../models/Archive.js";
 import { User } from "../models/User.js";
 import { config } from "../config.js";
-import { ensureArchiveFileTranscode, needsTranscodeCopy, syncSourceTranscodeStateFromArchive } from "./transcodes.js";
+import {
+  TRANSCODE_OUTPUT_PROFILE_VERSION,
+  ensureArchiveFileTranscode,
+  needsTranscodeCopy,
+  syncSourceTranscodeStateFromArchive
+} from "./transcodes.js";
 import fs from "fs";
 import path from "path";
 
@@ -39,6 +44,8 @@ function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
   const status = String(file?.transcode?.status || "");
   const error = String(file?.transcode?.error || "");
   const archiveId = String(file?.transcode?.archiveId || "");
+  const profileVersion = Number(file?.transcode?.profileVersion || 0);
+  const hasCurrentProfile = Number.isFinite(profileVersion) && profileVersion >= TRANSCODE_OUTPUT_PROFILE_VERSION;
   const isCompatibleSkip = error === "already_compatible_codecs";
   if (status === "error" && (error === "unsupported_media_content" || (!config.transcodeForceAll && isCompatibleSkip))) {
     return false;
@@ -52,14 +59,16 @@ function fileNeedsTranscode(file: any, allowRetryDisabledSkip = false) {
       return false;
     }
   }
-  if (
-    status === "ready" ||
-    status === "queued" ||
-    status === "processing"
-  ) {
+  if (status === "ready" && hasCurrentProfile) {
     return false;
   }
-  if (archiveId && status !== "error") {
+  if (status === "queued" || status === "processing") {
+    return false;
+  }
+  if (archiveId && status !== "error" && status !== "ready") {
+    return false;
+  }
+  if (archiveId && status === "ready" && hasCurrentProfile) {
     return false;
   }
   return true;
