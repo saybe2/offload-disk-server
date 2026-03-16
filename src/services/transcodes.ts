@@ -48,6 +48,7 @@ const audioExt = new Set([
 ]);
 
 const inFlight = new Map<string, Promise<string | null>>();
+export const TRANSCODE_OUTPUT_PROFILE_VERSION = 2;
 
 function asId(value: any) {
   if (value == null) return "";
@@ -62,6 +63,16 @@ function sourceArchiveId(archive: any) {
 
 function sourceUserId(archive: any) {
   return asId(archive?.userId);
+}
+
+function transcodeProfileVersionOf(archive: any) {
+  const raw = Number(archive?.transcodeProfile || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.floor(raw);
+}
+
+function isCurrentTranscodeArchiveProfile(archive: any) {
+  return transcodeProfileVersionOf(archive) >= TRANSCODE_OUTPUT_PROFILE_VERSION;
 }
 
 function extOf(fileName: string) {
@@ -158,6 +169,7 @@ function runFfmpeg(args: string[]) {
 type ProbedStream = {
   codec_type?: string;
   codec_name?: string;
+  channels?: number;
 };
 
 async function probeMediaStreams(inputPath: string) {
@@ -210,6 +222,16 @@ async function evaluateCompatibility(inputPath: string, mediaKind: "video" | "au
     .filter((stream) => String(stream.codec_type || "").toLowerCase() === "audio")
     .map((stream) => String(stream.codec_name || "").toLowerCase())
     .filter(Boolean);
+  const hasNonAvStreams = streams.some((stream) => {
+    const streamType = String(stream.codec_type || "").toLowerCase();
+    return streamType !== "video" && streamType !== "audio";
+  });
+  const maxAudioChannels = streams
+    .filter((stream) => String(stream.codec_type || "").toLowerCase() === "audio")
+    .map((stream) => Number(stream.channels || 0))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .reduce((max, value) => Math.max(max, value), 0);
+  const hasMultichannelAudio = maxAudioChannels > 2;
 
   if (mediaKind === "video") {
     if (videoCodecs.length === 0) {
@@ -217,7 +239,8 @@ async function evaluateCompatibility(inputPath: string, mediaKind: "video" | "au
     }
     const videoOk = videoCodecs.every((codec) => config.transcodeCompatibleVideoCodecs.includes(codec));
     const audioOk = audioCodecs.every((codec) => config.transcodeCompatibleAudioCodecs.includes(codec));
-    return { unsupported: false, compatible: videoOk && audioOk, reason: "already_compatible_codecs" };
+    const structureOk = !hasNonAvStreams && !hasMultichannelAudio;
+    return { unsupported: false, compatible: videoOk && audioOk && structureOk, reason: "already_compatible_codecs" };
   }
 
   if (audioCodecs.length === 0) {
@@ -227,7 +250,8 @@ async function evaluateCompatibility(inputPath: string, mediaKind: "video" | "au
     return { unsupported: false, compatible: false, reason: "" };
   }
   const audioOnlyOk = audioCodecs.every((codec) => config.transcodeCompatibleAudioCodecs.includes(codec));
-  return { unsupported: false, compatible: audioOnlyOk, reason: "already_compatible_codecs" };
+  const structureOk = !hasNonAvStreams && !hasMultichannelAudio;
+  return { unsupported: false, compatible: audioOnlyOk && structureOk, reason: "already_compatible_codecs" };
 }
 
 async function transcodeToOutput(inputPath: string, outputPath: string, mediaKind: "video" | "audio", audioTrack = 0) {
@@ -243,14 +267,24 @@ async function transcodeToOutput(inputPath: string, outputPath: string, mediaKin
       "0:v:0?",
       "-map",
       audioTrack > 0 ? `0:a:${Math.max(0, audioTrack)}?` : "0:a:0?",
+      "-map_metadata",
+      "-1",
+      "-map_chapters",
+      "-1",
+      "-sn",
+      "-dn",
       "-c:v",
       "libx264",
       "-preset",
       config.transcodeVideoPreset,
       "-crf",
       String(config.transcodeVideoCrf),
+      "-pix_fmt",
+      "yuv420p",
       "-c:a",
       "aac",
+      "-ac",
+      "2",
       "-b:a",
       `${config.transcodeAudioBitrateKbps}k`,
       "-movflags",
@@ -264,11 +298,19 @@ async function transcodeToOutput(inputPath: string, outputPath: string, mediaKin
     "-y",
     "-i",
     inputPath,
+    "-map_metadata",
+    "-1",
+    "-map_chapters",
+    "-1",
     "-vn",
+    "-sn",
+    "-dn",
     "-map",
     audioTrack > 0 ? `0:a:${Math.max(0, audioTrack)}?` : "0:a:0?",
     "-c:a",
     "aac",
+    "-ac",
+    "2",
     "-b:a",
     `${config.transcodeAudioBitrateKbps}k`,
     outputPath
@@ -322,7 +364,8 @@ async function upsertSourceTranscodeVariantState(
       size: Number(item?.size || 0),
       contentType: String(item?.contentType || ""),
       updatedAt: item?.updatedAt || null,
-      error: String(item?.error || "")
+      error: String(item?.error || ""),
+      profileVersion: Number(item?.profileVersion || 0)
     }))
     .filter((item: any) => Number.isInteger(item.audioTrack) && item.audioTrack >= 0);
   const idx = variants.findIndex((item: any) => item.audioTrack === audioTrack);
@@ -333,7 +376,8 @@ async function upsertSourceTranscodeVariantState(
     size: Number(patch.size ?? (idx >= 0 ? variants[idx].size : 0)),
     contentType: String(patch.contentType ?? (idx >= 0 ? variants[idx].contentType : "")),
     updatedAt: patch.updatedAt ?? new Date(),
-    error: String(patch.error ?? (idx >= 0 ? variants[idx].error : ""))
+    error: String(patch.error ?? (idx >= 0 ? variants[idx].error : "")),
+    profileVersion: Number(patch.profileVersion ?? (idx >= 0 ? variants[idx].profileVersion : 0))
   };
   if (idx >= 0) {
     variants[idx] = next;
@@ -375,7 +419,8 @@ async function createTranscodedArchive(
       error: "unsupported_media_type",
       archiveId: "",
       size: 0,
-      contentType: ""
+      contentType: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     return null;
   }
@@ -385,7 +430,8 @@ async function createTranscodedArchive(
       error: "already_compatible",
       archiveId: "",
       size: 0,
-      contentType: ""
+      contentType: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     return null;
   }
@@ -397,7 +443,8 @@ async function createTranscodedArchive(
       error: compatibility.reason || "unsupported_media_content",
       archiveId: "",
       size: 0,
-      contentType: ""
+      contentType: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     return null;
   }
@@ -407,7 +454,8 @@ async function createTranscodedArchive(
       error: compatibility.reason || "already_compatible_codecs",
       archiveId: "",
       size: 0,
-      contentType: ""
+      contentType: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     return null;
   }
@@ -421,8 +469,13 @@ async function createTranscodedArchive(
       )
     : String(sourceArchive.files?.[fileIndex]?.transcode?.archiveId || "");
   if (existingArchiveId) {
-    const existing = await Archive.findById(existingArchiveId).select("_id status deletedAt").lean();
-    if (existing && !existing.deletedAt && ["queued", "processing", "ready"].includes(String(existing.status || ""))) {
+    const existing = await Archive.findById(existingArchiveId).select("_id status deletedAt transcodeProfile").lean();
+    if (
+      existing &&
+      !existing.deletedAt &&
+      ["queued", "processing", "ready"].includes(String(existing.status || "")) &&
+      isCurrentTranscodeArchiveProfile(existing)
+    ) {
       return existing._id.toString();
     }
   }
@@ -461,7 +514,8 @@ async function createTranscodedArchive(
         error: "quota_exceeded",
         archiveId: "",
         size: 0,
-        contentType
+        contentType,
+        profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
       });
       await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
       return null;
@@ -477,6 +531,7 @@ async function createTranscodedArchive(
       sourceArchiveId: sourceArchive._id || sourceId,
       sourceFileIndex: fileIndex,
       transcodeAudioTrack: audioTrack,
+      transcodeProfile: TRANSCODE_OUTPUT_PROFILE_VERSION,
       isBundle: false,
       encryptionVersion: 2,
       folderId: null,
@@ -511,7 +566,8 @@ async function createTranscodedArchive(
       status: "queued",
       size: stat.size,
       contentType,
-      error: ""
+      error: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     noteTranscodeDone(stat.size, transcodeDurationMs);
     finished = true;
@@ -559,7 +615,8 @@ export async function ensureArchiveFileTranscodeFromSource(
         error: "disabled_by_user",
         archiveId: "",
         size: 0,
-        contentType: ""
+        contentType: "",
+        profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
       });
       return null;
     }
@@ -571,7 +628,8 @@ export async function ensureArchiveFileTranscodeFromSource(
         error: "unsupported_media_type",
         archiveId: "",
         size: 0,
-        contentType: ""
+        contentType: "",
+        profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
       });
       return null;
     }
@@ -583,7 +641,8 @@ export async function ensureArchiveFileTranscodeFromSource(
 
     await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
       status: "processing",
-      error: ""
+      error: "",
+      profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
     });
     return await createTranscodedArchive(sourceArchive, fileIndex, sourcePath, sourceName, file.detectedKind, audioTrack);
   })()
@@ -591,7 +650,8 @@ export async function ensureArchiveFileTranscodeFromSource(
       const message = toErrorMessage(err);
       await updateSourceTranscodeStateForTrack(sourceId, fileIndex, audioTrack, {
         status: "error",
-        error: message.slice(0, 500)
+        error: message.slice(0, 500),
+        profileVersion: TRANSCODE_OUTPUT_PROFILE_VERSION
       });
       throw err;
     })
@@ -682,6 +742,7 @@ export async function findReadyTranscodeArchive(sourceArchive: ArchiveDoc | any,
   if (transArchive.deletedAt || transArchive.trashedAt) return null;
   if (String(transArchive.archiveKind || "") !== "transcoded") return null;
   if (transArchive.status !== "ready") return null;
+  if (!isCurrentTranscodeArchiveProfile(transArchive)) return null;
   return transArchive;
 }
 
@@ -701,7 +762,14 @@ export async function findReadyTranscodeArchiveByAudioTrack(
   );
   if (directId) {
     const direct = await Archive.findById(directId);
-    if (direct && !direct.deletedAt && !direct.trashedAt && String(direct.archiveKind || "") === "transcoded" && direct.status === "ready") {
+    if (
+      direct &&
+      !direct.deletedAt &&
+      !direct.trashedAt &&
+      String(direct.archiveKind || "") === "transcoded" &&
+      direct.status === "ready" &&
+      isCurrentTranscodeArchiveProfile(direct)
+    ) {
       return direct;
     }
   }
@@ -717,12 +785,14 @@ export async function findReadyTranscodeArchiveByAudioTrack(
     trashedAt: null
   });
   if (!found) return null;
+  if (!isCurrentTranscodeArchiveProfile(found)) return null;
   await upsertSourceTranscodeVariantState(String(sourceArchiveId), fileIndex, audioTrack, {
     archiveId: found.id,
     status: "ready",
     size: Number(found.originalSize || found.files?.[0]?.size || 0),
     contentType: String((mime.lookup(found.downloadName || found.name || "") as string) || ""),
-    error: ""
+    error: "",
+    profileVersion: transcodeProfileVersionOf(found)
   }).catch(() => undefined);
   return found;
 }
@@ -742,12 +812,14 @@ export async function syncSourceTranscodeStateFromArchive(transcodeArchive: Arch
         ? "error"
         : "processing";
   const archiveId = asId(transcodeArchive.id || transcodeArchive._id);
+  const profileVersion = transcodeProfileVersionOf(transcodeArchive);
   const patch = {
     archiveId,
     status: nextStatus,
     size: Number(transcodeArchive.originalSize || file?.size || 0),
     contentType,
-    error: String(transcodeArchive.error || "")
+    error: String(transcodeArchive.error || ""),
+    profileVersion
   };
   if (Number.isInteger(audioTrack) && audioTrack > 0) {
     await upsertSourceTranscodeVariantState(sourceArchiveId, sourceFileIndex, audioTrack, patch);
