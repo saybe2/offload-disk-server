@@ -4,7 +4,11 @@ USER root
 RUN apt-get update \
   && apt-get install -y samba smbclient samba-common-bin fuse3 libfuse3-dev libfuse2 \
      gosu sudo python3 python3-pip ffmpeg make g++ pkg-config \
-  && python3 -m pip install --no-cache-dir "faster-whisper==1.1.1" \
+  && if python3 -m pip install --help 2>/dev/null | grep -q -- '--break-system-packages'; then \
+       python3 -m pip install --no-cache-dir --break-system-packages "faster-whisper==1.1.1"; \
+     else \
+       python3 -m pip install --no-cache-dir "faster-whisper==1.1.1"; \
+     fi \
   && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
