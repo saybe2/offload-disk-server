@@ -11,11 +11,14 @@ export SMB_CONF_PATH="/home/container/runtime/smb.conf"
 export HOME="/home/container"
 
 mkdir -p /home/container/data/samba /home/container/logs /home/container/offload_mount /home/container/runtime /home/container/.npm
+mkdir -p /run/samba/ncalrpc
 rm -f /home/container/data/fuse_ready /home/container/data/fuse_failed
 chmod 777 /home/container/offload_mount
 chown -R "${APP_UID}:${APP_GID}" /home/container
 chown -R root:root /home/container/data/samba /home/container/logs /home/container/runtime
+chown -R root:root /run/samba
 chmod 755 /home/container/data/samba /home/container/logs /home/container/runtime
+chmod 755 /run/samba /run/samba/ncalrpc
 touch /home/container/logs/samba.log
 chmod +x /home/container/tools/smb_user.sh || true
 
