@@ -936,14 +936,14 @@ export function startFuse() {
   const fuse = new (Fuse as any)(mountPath, ops, {
     force: true,
     debug: false,
-    allowOther: true,
-    options: ["nonempty"]
+    allowOther: true
   });
-  fuse.mount((err: Error) => {
+  fuse.mount((err: Error & { code?: string }) => {
     if (err) {
-      log("smb", `fuse mount failed: ${err.message}`);
+      const details = [err.message, err.code ? `code=${err.code}` : ""].filter(Boolean).join(" ");
+      log("smb", `fuse mount failed: ${details}`);
       try {
-        fs.writeFileSync(failedFile, err.message);
+        fs.writeFileSync(failedFile, details || err.message);
       } catch {}
       return;
     }
