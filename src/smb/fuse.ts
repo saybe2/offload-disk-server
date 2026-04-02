@@ -402,9 +402,14 @@ async function ensureProgressivePartReady(key: string, partIndex: number) {
     }
     const plain = await decryptPartToBuffer(partPath, info.part as any, entry.cryptoKey);
     await fs.promises.unlink(partPath).catch(() => undefined);
+    const writeLen = Math.min(plain.length, Math.max(0, info.plainSize));
+    if (writeLen <= 0) {
+      entry.readyParts.add(partIndex);
+      return;
+    }
     const fd = await fs.promises.open(entry.path, "r+");
     try {
-      await fd.write(plain, 0, plain.length, info.start);
+      await fd.write(plain, 0, writeLen, info.start);
     } finally {
       await fd.close();
     }
