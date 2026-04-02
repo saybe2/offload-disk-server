@@ -79,8 +79,14 @@ start_smb() {
     return 0
   fi
   if [[ ! -f /home/container/data/fuse_ready ]]; then
-    echo "FUSE not ready, skipping SMB start" >> /home/container/logs/samba.log
-    return 1
+    if [[ -f /home/container/data/fuse_failed ]]; then
+      reason="$(cat /home/container/data/fuse_failed 2>/dev/null || true)"
+      echo "FUSE not ready, skipping SMB start: ${reason:-unknown}" >> /home/container/logs/samba.log
+    else
+      echo "FUSE not ready, skipping SMB start" >> /home/container/logs/samba.log
+    fi
+    # SMB is optional; keep API container alive even when FUSE mount failed.
+    return 0
   fi
   if command -v smbd >/dev/null 2>&1; then
     if command -v pdbedit >/dev/null 2>&1; then
@@ -97,6 +103,7 @@ start_smb() {
   else
     echo "smbd not found in PATH"
   fi
+  return 0
 }
 
 start_app
