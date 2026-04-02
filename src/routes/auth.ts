@@ -2,6 +2,8 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import { getUserTranscodeUsageStats } from "../services/transcodes.js";
+import { ensureSmbUser } from "../services/smbUsers.js";
+import { log } from "../logger.js";
 
 export const authRouter = Router();
 
@@ -17,6 +19,12 @@ authRouter.post("/login", async (req, res) => {
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) {
     return res.status(401).json({ error: "invalid_credentials" });
+  }
+  // Keep SMB credentials in sync with web credentials for existing accounts.
+  try {
+    await ensureSmbUser(username, password);
+  } catch (err) {
+    log("smb", `sync user failed for ${username}: ${err instanceof Error ? err.message : err}`);
   }
   req.session.userId = user.id;
   req.session.role = user.role;
