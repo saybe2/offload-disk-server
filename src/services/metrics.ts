@@ -73,6 +73,12 @@ const gauges = {
     labelNames: ["provider"] as const,
     registers: [registry]
   }),
+  providerDone: new client.Gauge({
+    name: "offload_provider_done_total",
+    help: "Done count by provider and flow kind since process start",
+    labelNames: ["provider", "kind"] as const,
+    registers: [registry]
+  }),
   mirrorProviderError: new client.Gauge({
     name: "offload_mirror_provider_error_total",
     help: "Mirror error count by provider since process start",
@@ -485,6 +491,10 @@ async function refreshMetrics() {
   gauges.mirrorAvgMs.set(mirror.avgPartMs || 0);
   gauges.mirrorProviderDone.labels("discord").set(mirror.providers?.discord?.done || 0);
   gauges.mirrorProviderDone.labels("telegram").set(mirror.providers?.telegram?.done || 0);
+  gauges.providerDone.labels("discord", "upload").set(upload.providers?.discord?.done || 0);
+  gauges.providerDone.labels("telegram", "upload").set(upload.providers?.telegram?.done || 0);
+  gauges.providerDone.labels("discord", "mirror").set(mirror.providers?.discord?.done || 0);
+  gauges.providerDone.labels("telegram", "mirror").set(mirror.providers?.telegram?.done || 0);
   gauges.mirrorProviderError.labels("discord").set(mirror.providers?.discord?.error || 0);
   gauges.mirrorProviderError.labels("telegram").set(mirror.providers?.telegram?.error || 0);
   gauges.mirrorProviderRateLimited.labels("discord").set(mirror.providers?.discord?.rateLimited || 0);

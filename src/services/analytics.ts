@@ -22,7 +22,17 @@ const FLUSH_INTERVAL_MS = 1500;
 const TOTALS_DOC_ID = "global";
 
 const totals = {
-  upload: { archivesStarted: 0, archivesDone: 0, archivesError: 0, bytes: 0, durationMs: 0 },
+  upload: {
+    archivesStarted: 0,
+    archivesDone: 0,
+    archivesError: 0,
+    bytes: 0,
+    durationMs: 0,
+    providers: {
+      discord: { done: 0, bytes: 0 },
+      telegram: { done: 0, bytes: 0 }
+    }
+  },
   mirror: {
     partsDone: 0,
     partsError: 0,
@@ -177,6 +187,10 @@ export async function initAnalyticsPersistence() {
   totals.upload.archivesError = Number(doc.upload?.archivesError || 0);
   totals.upload.bytes = Number(doc.upload?.bytes || 0);
   totals.upload.durationMs = Number(doc.upload?.durationMs || 0);
+  totals.upload.providers.discord.done = Number((doc as any).upload?.providers?.discord?.done || 0);
+  totals.upload.providers.discord.bytes = Number((doc as any).upload?.providers?.discord?.bytes || 0);
+  totals.upload.providers.telegram.done = Number((doc as any).upload?.providers?.telegram?.done || 0);
+  totals.upload.providers.telegram.bytes = Number((doc as any).upload?.providers?.telegram?.bytes || 0);
 
   totals.mirror.partsDone = Number(doc.mirror?.partsDone || 0);
   totals.mirror.partsError = Number(doc.mirror?.partsError || 0);
@@ -277,6 +291,18 @@ export function noteUploadBytes(bytes: number) {
   totals.upload.bytes += amount;
   getCurrentBucket().uploadBytes += amount;
   addPendingInc({ "upload.bytes": amount });
+}
+
+export function noteUploadProviderDone(provider: "discord" | "telegram", bytes: number) {
+  const amount = Math.max(0, Math.trunc(bytes || 0));
+  totals.upload.providers[provider].done += 1;
+  if (amount > 0) {
+    totals.upload.providers[provider].bytes += amount;
+  }
+  addPendingInc({
+    [`upload.providers.${provider}.done`]: 1,
+    ...(amount > 0 ? { [`upload.providers.${provider}.bytes`]: amount } : {})
+  });
 }
 
 export function noteUploadArchiveError() {
