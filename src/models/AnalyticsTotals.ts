@@ -7,6 +7,11 @@ interface ProviderTotals {
   bytes: number;
 }
 
+interface UploadProviderTotals {
+  done: number;
+  bytes: number;
+}
+
 interface SubtitleProviderTotals {
   attempted: number;
   failed: number;
@@ -20,6 +25,10 @@ interface AnalyticsTotalsDoc {
     archivesError: number;
     bytes: number;
     durationMs: number;
+    providers: {
+      discord: UploadProviderTotals;
+      telegram: UploadProviderTotals;
+    };
   };
   mirror: {
     partsDone: number;
@@ -108,6 +117,14 @@ const ProviderTotalsSchema = new Schema<ProviderTotals>(
   { _id: false }
 );
 
+const UploadProviderTotalsSchema = new Schema<UploadProviderTotals>(
+  {
+    done: { type: Number, default: 0 },
+    bytes: { type: Number, default: 0 }
+  },
+  { _id: false }
+);
+
 const SubtitleProviderTotalsSchema = new Schema<SubtitleProviderTotals>(
   {
     attempted: { type: Number, default: 0 },
@@ -124,7 +141,11 @@ const AnalyticsTotalsSchema = new Schema<AnalyticsTotalsDoc>(
       archivesDone: { type: Number, default: 0 },
       archivesError: { type: Number, default: 0 },
       bytes: { type: Number, default: 0 },
-      durationMs: { type: Number, default: 0 }
+      durationMs: { type: Number, default: 0 },
+      providers: {
+        discord: { type: UploadProviderTotalsSchema, default: () => ({}) },
+        telegram: { type: UploadProviderTotalsSchema, default: () => ({}) }
+      }
     },
     mirror: {
       partsDone: { type: Number, default: 0 },
