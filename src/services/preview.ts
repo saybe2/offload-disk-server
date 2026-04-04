@@ -95,6 +95,15 @@ function extOf(fileName: string) {
   return dot >= 0 ? lower.slice(dot) : "";
 }
 
+export function isHeifFileName(fileName: string, contentType = "") {
+  const ext = extOf(fileName);
+  if (ext === ".heic" || ext === ".heif") {
+    return true;
+  }
+  const normalized = String(contentType || "").toLowerCase();
+  return normalized.startsWith("image/heic") || normalized.startsWith("image/heif");
+}
+
 function isCodeLikeFileName(fileName: string) {
   if (!fileName) return false;
   const name = String(fileName).trim();

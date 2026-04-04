@@ -53,10 +53,12 @@ import { queueArchiveTranscodes } from "../services/transcodeWorker.js";
 import { detectFileTypeFromName, detectFileTypeFromSample, detectStoredFileType } from "../services/fileType.js";
 import {
   isMediaPreviewSupported,
+  isHeifFileName,
   isPreviewAllowedForFile,
   isPreviewContentTypeAllowed,
   resolvePreviewContentType
 } from "../services/preview.js";
+import { rerenderImageForPreview } from "../services/imageRerender.js";
 import { remuxTsToMp4, remuxVideoAudioTrack } from "../services/videoPreview.js";
 import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
@@ -1894,16 +1896,16 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
     return res.status(404).json({ error: "file_deleted" });
   }
 
-  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
-  const fileSize = Number(file.size || 0);
-  if (fileSize > previewMaxBytes) {
-    return res.status(413).json({ error: "preview_too_large", maxBytes: previewMaxBytes });
-  }
-
   const fileName = (file.originalName || file.name || archive.downloadName || archive.name).replace(/[\\/]/g, "_");
   const ext = path.extname(fileName).toLowerCase();
   const detectedKind = String(file.detectedKind || "").toLowerCase();
   let detectedType = (mime.lookup(fileName) as string) || "application/octet-stream";
+  const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
+  const fileSize = Number(file.size || 0);
+  const heifPreview = isHeifFileName(fileName, detectedType);
+  if (fileSize > previewMaxBytes && !heifPreview) {
+    return res.status(413).json({ error: "preview_too_large", maxBytes: previewMaxBytes });
+  }
   if (detectedKind === "code" || (!detectedKind && ext === ".ts")) {
     detectedType = ext === ".md" || ext === ".markdown" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8";
   }
@@ -1933,6 +1935,12 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
         servePath = mp4Path;
         contentType = "video/mp4";
       }
+    }
+    if (heifPreview) {
+      const jpegPath = path.join(tempDir, `${fileIndex}_${sanitizeName(fileName)}.preview.jpg`);
+      await rerenderImageForPreview(outputPath, fileName, jpegPath);
+      servePath = jpegPath;
+      contentType = "image/jpeg";
     }
     const body = await fs.promises.readFile(servePath);
     const encodedName = encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, "%2A");

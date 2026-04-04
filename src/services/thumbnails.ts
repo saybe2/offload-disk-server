@@ -9,14 +9,13 @@ import { config } from "../config.js";
 import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./discord.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { noteThumbnailDone, noteThumbnailError, noteThumbnailStarted } from "./analytics.js";
+import { canServerRenderHeif, renderImageToWebp } from "./imageRerender.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
 const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob", ".ts"]);
 const inFlight = new Map<string, Promise<ThumbnailResult>>();
 const require = createRequire(import.meta.url);
 const ffmpegPath: string | null = require("ffmpeg-static");
-const sharpFormats = (sharp as any).format || {};
-const heifInputSupported = !!sharpFormats.heif?.input;
 
 export interface ThumbnailResult {
   filePath: string;
@@ -67,7 +66,7 @@ function isHeif(fileName: string) {
 }
 
 function isImage(fileName: string) {
-  if (isHeif(fileName) && !heifInputSupported) return false;
+  if (isHeif(fileName) && !canServerRenderHeif()) return false;
   return imageExt.has(extOf(fileName));
 }
 
@@ -80,7 +79,7 @@ function isVideo(fileName: string, detectedKind?: string) {
 }
 
 export function supportsThumbnail(fileName: string, detectedKind?: string) {
-  if (isHeif(fileName) && !heifInputSupported) return false;
+  if (isHeif(fileName) && !canServerRenderHeif()) return false;
   if (detectedKind === "image") return true;
   if (detectedKind === "video") return true;
   if (detectedKind && detectedKind !== "image" && detectedKind !== "video") return false;
@@ -210,11 +209,11 @@ async function spawnFfmpegFrame(inputPath: string) {
 async function generateThumbFromFile(sourcePath: string, fileName: string, outPath: string, detectedKind?: string) {
   const size = Math.max(64, config.thumbnailSizePx);
   const quality = Math.max(30, Math.min(95, config.thumbnailQuality));
-  if (isHeif(fileName) && !heifInputSupported) {
+  if (isHeif(fileName) && !canServerRenderHeif()) {
     throw new Error("thumbnail_heif_unsupported_runtime");
   }
   if (detectedKind === "image" || isImage(fileName)) {
-    await sharp(sourcePath).rotate().resize(size, size, { fit: "inside", withoutEnlargement: true }).webp({ quality }).toFile(outPath);
+    await renderImageToWebp(sourcePath, fileName, outPath, size, quality);
     return;
   }
   if (detectedKind === "video" || isVideo(fileName, detectedKind)) {
