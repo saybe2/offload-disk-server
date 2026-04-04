@@ -1,6 +1,7 @@
 import { Archive } from "../models/Archive.js";
 import { config } from "../config.js";
 import {
+  canRetryThumbnailFailure,
   ensureArchiveThumbnail,
   ensureArchiveThumbnailFromSource,
   isPermanentThumbnailFailureMessage,
@@ -29,8 +30,13 @@ function log(message: string) {
 
 function fileNeedsThumbnail(file: any) {
   if (file?.deletedAt) return false;
-  if (file?.thumbnail?.failedAt) return false;
   const fileName = file?.originalName || file?.name || "";
+  if (file?.thumbnail?.failedAt) {
+    const message = String(file?.thumbnail?.error || "");
+    if (!canRetryThumbnailFailure(fileName, message)) {
+      return false;
+    }
+  }
   if (!supportsThumbnail(fileName, file?.detectedKind)) return false;
   return !file?.thumbnail?.updatedAt;
 }
@@ -75,7 +81,10 @@ async function refillQueue() {
     deletedAt: null,
     trashedAt: null,
     "files.0": { $exists: true },
-    "files.thumbnail.updatedAt": { $exists: false }
+    $or: [
+      { "files.thumbnail.updatedAt": { $exists: false } },
+      { "files.thumbnail.failedAt": { $exists: true } }
+    ]
   })
     .sort({ createdAt: 1 })
     .select("_id files")
