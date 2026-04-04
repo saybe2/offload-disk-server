@@ -207,12 +207,14 @@ function compareSearchNames(left: string, right: string, queryLower: string) {
 }
 
 function resolveRequestedUserId(req: Request) {
+  const ownUserId = new Types.ObjectId(req.session.userId);
   if (req.session.role !== "admin") {
-    return { ok: true as const, value: new Types.ObjectId(req.session.userId) };
+    return { ok: true as const, value: ownUserId };
   }
   const raw = typeof req.query.userId === "string" ? req.query.userId.trim() : "";
   if (!raw) {
-    return { ok: true as const, value: null as Types.ObjectId | null };
+    // Admin default scope is own files; cross-user browsing must be explicit.
+    return { ok: true as const, value: ownUserId };
   }
   if (!Types.ObjectId.isValid(raw)) {
     return { ok: false as const, value: null as Types.ObjectId | null };
