@@ -29,8 +29,8 @@ const totals = {
     bytes: 0,
     durationMs: 0,
     providers: {
-      discord: { done: 0, bytes: 0 },
-      telegram: { done: 0, bytes: 0 }
+      discord: { done: 0, error: 0, rateLimited: 0, bytes: 0 },
+      telegram: { done: 0, error: 0, rateLimited: 0, bytes: 0 }
     }
   },
   mirror: {
@@ -188,8 +188,12 @@ export async function initAnalyticsPersistence() {
   totals.upload.bytes = Number(doc.upload?.bytes || 0);
   totals.upload.durationMs = Number(doc.upload?.durationMs || 0);
   totals.upload.providers.discord.done = Number((doc as any).upload?.providers?.discord?.done || 0);
+  totals.upload.providers.discord.error = Number((doc as any).upload?.providers?.discord?.error || 0);
+  totals.upload.providers.discord.rateLimited = Number((doc as any).upload?.providers?.discord?.rateLimited || 0);
   totals.upload.providers.discord.bytes = Number((doc as any).upload?.providers?.discord?.bytes || 0);
   totals.upload.providers.telegram.done = Number((doc as any).upload?.providers?.telegram?.done || 0);
+  totals.upload.providers.telegram.error = Number((doc as any).upload?.providers?.telegram?.error || 0);
+  totals.upload.providers.telegram.rateLimited = Number((doc as any).upload?.providers?.telegram?.rateLimited || 0);
   totals.upload.providers.telegram.bytes = Number((doc as any).upload?.providers?.telegram?.bytes || 0);
 
   totals.mirror.partsDone = Number(doc.mirror?.partsDone || 0);
@@ -303,6 +307,18 @@ export function noteUploadProviderDone(provider: "discord" | "telegram", bytes: 
     [`upload.providers.${provider}.done`]: 1,
     ...(amount > 0 ? { [`upload.providers.${provider}.bytes`]: amount } : {})
   });
+}
+
+export function noteUploadProviderError(provider: "discord" | "telegram", isRateLimited = false) {
+  totals.upload.providers[provider].error += 1;
+  const delta: Record<string, number> = {
+    [`upload.providers.${provider}.error`]: 1
+  };
+  if (isRateLimited) {
+    totals.upload.providers[provider].rateLimited += 1;
+    delta[`upload.providers.${provider}.rateLimited`] = 1;
+  }
+  addPendingInc(delta);
 }
 
 export function noteUploadArchiveError() {

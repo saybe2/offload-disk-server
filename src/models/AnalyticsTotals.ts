@@ -9,6 +9,8 @@ interface ProviderTotals {
 
 interface UploadProviderTotals {
   done: number;
+  error: number;
+  rateLimited: number;
   bytes: number;
 }
 
@@ -120,6 +122,8 @@ const ProviderTotalsSchema = new Schema<ProviderTotals>(
 const UploadProviderTotalsSchema = new Schema<UploadProviderTotals>(
   {
     done: { type: Number, default: 0 },
+    error: { type: Number, default: 0 },
+    rateLimited: { type: Number, default: 0 },
     bytes: { type: Number, default: 0 }
   },
   { _id: false }

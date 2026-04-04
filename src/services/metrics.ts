@@ -79,6 +79,18 @@ const gauges = {
     labelNames: ["provider", "kind"] as const,
     registers: [registry]
   }),
+  providerError: new client.Gauge({
+    name: "offload_provider_error_total",
+    help: "Error count by provider and flow kind since process start",
+    labelNames: ["provider", "kind"] as const,
+    registers: [registry]
+  }),
+  providerRateLimited: new client.Gauge({
+    name: "offload_provider_rate_limited_total",
+    help: "Rate-limit (429) count by provider and flow kind since process start",
+    labelNames: ["provider", "kind"] as const,
+    registers: [registry]
+  }),
   mirrorProviderError: new client.Gauge({
     name: "offload_mirror_provider_error_total",
     help: "Mirror error count by provider since process start",
@@ -495,6 +507,14 @@ async function refreshMetrics() {
   gauges.providerDone.labels("telegram", "upload").set(upload.providers?.telegram?.done || 0);
   gauges.providerDone.labels("discord", "mirror").set(mirror.providers?.discord?.done || 0);
   gauges.providerDone.labels("telegram", "mirror").set(mirror.providers?.telegram?.done || 0);
+  gauges.providerError.labels("discord", "upload").set(upload.providers?.discord?.error || 0);
+  gauges.providerError.labels("telegram", "upload").set(upload.providers?.telegram?.error || 0);
+  gauges.providerError.labels("discord", "mirror").set(mirror.providers?.discord?.error || 0);
+  gauges.providerError.labels("telegram", "mirror").set(mirror.providers?.telegram?.error || 0);
+  gauges.providerRateLimited.labels("discord", "upload").set(upload.providers?.discord?.rateLimited || 0);
+  gauges.providerRateLimited.labels("telegram", "upload").set(upload.providers?.telegram?.rateLimited || 0);
+  gauges.providerRateLimited.labels("discord", "mirror").set(mirror.providers?.discord?.rateLimited || 0);
+  gauges.providerRateLimited.labels("telegram", "mirror").set(mirror.providers?.telegram?.rateLimited || 0);
   gauges.mirrorProviderError.labels("discord").set(mirror.providers?.discord?.error || 0);
   gauges.mirrorProviderError.labels("telegram").set(mirror.providers?.telegram?.error || 0);
   gauges.mirrorProviderRateLimited.labels("discord").set(mirror.providers?.discord?.rateLimited || 0);

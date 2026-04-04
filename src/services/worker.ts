@@ -39,7 +39,8 @@ import {
   noteUploadArchiveError,
   noteUploadArchiveStarted,
   noteUploadBytes,
-  noteUploadProviderDone
+  noteUploadProviderDone,
+  noteUploadProviderError
 } from "./analytics.js";
 
 let running = 0;
@@ -89,6 +90,18 @@ function isTransientError(err: unknown) {
     if (code >= 500 && code <= 599) return true;
   }
   return false;
+}
+
+function detectUploadErrorProvider(err: unknown): { provider: "discord" | "telegram" | null; rateLimited: boolean } {
+  const message = err instanceof Error ? err.message : String(err || "");
+  const rateLimited = /(?:^|:|\D)429(?:\D|$)/.test(message);
+  if (/telegram_/i.test(message)) {
+    return { provider: "telegram", rateLimited };
+  }
+  if (/webhook_/i.test(message) || /discord_/i.test(message)) {
+    return { provider: "discord", rateLimited };
+  }
+  return { provider: null, rateLimited };
 }
 
 async function uploadBufferWithRetry(
@@ -528,6 +541,10 @@ async function processNextArchive() {
               log(`progress ${archive.id} ${uploadedNow}/${totalHint} (${pct}%)`);
             }
           } catch (err) {
+            const providerError = detectUploadErrorProvider(err);
+            if (providerError.provider) {
+              noteUploadProviderError(providerError.provider, providerError.rateLimited);
+            }
             const asError = err instanceof Error ? err : new Error(String(err));
             if (!uploadFailed) {
               uploadFailed = asError;
