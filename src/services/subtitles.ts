@@ -736,35 +736,53 @@ function splitTextToSubtitleBlocks(rawText: string, targetMaxChars = 140) {
     current = "";
   };
 
+  const splitLongChunk = (value: string) => {
+    const words = value.split(/\s+/).filter(Boolean);
+    const out: string[] = [];
+    let piece = "";
+    for (const word of words) {
+      if (word.length > maxChars) {
+        if (piece) {
+          out.push(piece);
+          piece = "";
+        }
+        for (let idx = 0; idx < word.length; idx += maxChars) {
+          const chunk = word.slice(idx, idx + maxChars).trim();
+          if (chunk) out.push(chunk);
+        }
+        continue;
+      }
+      const candidate = piece ? `${piece} ${word}` : word;
+      if (candidate.length <= maxChars) {
+        piece = candidate;
+      } else {
+        if (piece) out.push(piece);
+        piece = word;
+      }
+    }
+    if (piece) out.push(piece);
+    if (out.length === 0) {
+      for (let idx = 0; idx < value.length; idx += maxChars) {
+        const chunk = value.slice(idx, idx + maxChars).trim();
+        if (chunk) out.push(chunk);
+      }
+    }
+    return out;
+  };
+
   const pushPart = (text: string) => {
     const value = text.trim();
     if (!value) return;
-    if (value.length > maxChars * 1.5) {
-      const words = value.split(/\s+/).filter(Boolean);
-      let piece = "";
-      for (const word of words) {
-        const candidate = piece ? `${piece} ${word}` : word;
-        if (candidate.length <= maxChars) {
-          piece = candidate;
-          continue;
-        }
-        if (piece) {
-          pushPart(piece);
-        }
-        piece = word;
+    const chunks = value.length > maxChars * 1.5 ? splitLongChunk(value) : [value];
+    for (const chunk of chunks) {
+      const combined = current ? `${current} ${chunk}` : chunk;
+      if (!current || combined.length <= maxChars) {
+        current = combined;
+        continue;
       }
-      if (piece) {
-        pushPart(piece);
-      }
-      return;
+      flush();
+      current = chunk;
     }
-    const combined = current ? `${current} ${value}` : value;
-    if (!current || combined.length <= maxChars) {
-      current = combined;
-      return;
-    }
-    flush();
-    current = value;
   };
 
   for (const part of parts) {
