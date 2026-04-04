@@ -65,7 +65,7 @@ function isHeif(fileName: string) {
   return ext === ".heic" || ext === ".heif";
 }
 
-function canRetryHeifFailure(fileName: string, message: string) {
+export function canRetryThumbnailFailure(fileName: string, message: string) {
   if (!isHeif(fileName)) return false;
   const lower = String(message || "").toLowerCase();
   return (
@@ -324,7 +324,7 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
   const fileName = (file.originalName || file.name || "").trim();
   if (file.thumbnail?.failedAt) {
     const failure = file.thumbnail.error || "marked_failed";
-    if (canRetryHeifFailure(fileName, failure) && canServerRenderHeif()) {
+    if (canRetryThumbnailFailure(fileName, failure) && canServerRenderHeif()) {
       await clearThumbnailFailure(archive.id, fileIndex);
     } else {
       throw makePermanentThumbnailFailure(failure);
@@ -359,7 +359,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
   const fileName = (file.originalName || file.name || "").trim();
   if (file.thumbnail?.failedAt) {
     const failure = file.thumbnail.error || "marked_failed";
-    if (canRetryHeifFailure(fileName, failure) && canServerRenderHeif()) {
+    if (canRetryThumbnailFailure(fileName, failure) && canServerRenderHeif()) {
       await clearThumbnailFailure(archive.id, fileIndex);
     } else {
       throw makePermanentThumbnailFailure(failure);
