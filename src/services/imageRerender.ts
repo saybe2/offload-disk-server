@@ -59,6 +59,17 @@ async function resolveInput(sourcePath: string, sourceName: string) {
   return runFfmpegDecodePng(sourcePath);
 }
 
+function shouldRetryHeifViaFfmpeg(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err || "");
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("heif: error while loading plugin") ||
+    lower.includes("bad seek") ||
+    lower.includes("input file contains unsupported image format") ||
+    lower.includes("unsupported image format")
+  );
+}
+
 export function canServerRenderHeif() {
   return heifInputSupported || !!ffmpegPath;
 }
@@ -70,12 +81,25 @@ export async function renderImageToWebp(
   sizePx: number,
   quality: number
 ) {
+  const heif = isHeifFileName(sourceName);
   const input = await resolveInput(sourcePath, sourceName);
-  await sharp(input)
-    .rotate()
-    .resize(sizePx, sizePx, { fit: "inside", withoutEnlargement: true })
-    .webp({ quality })
-    .toFile(outputPath);
+  try {
+    await sharp(input)
+      .rotate()
+      .resize(sizePx, sizePx, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality })
+      .toFile(outputPath);
+  } catch (err) {
+    if (!heif || !ffmpegPath || Buffer.isBuffer(input) || !shouldRetryHeifViaFfmpeg(err)) {
+      throw err;
+    }
+    const fallbackInput = await runFfmpegDecodePng(sourcePath);
+    await sharp(fallbackInput)
+      .rotate()
+      .resize(sizePx, sizePx, { fit: "inside", withoutEnlargement: true })
+      .webp({ quality })
+      .toFile(outputPath);
+  }
 }
 
 export async function rerenderImageForPreview(
@@ -83,9 +107,21 @@ export async function rerenderImageForPreview(
   sourceName: string,
   outputPath: string
 ) {
+  const heif = isHeifFileName(sourceName);
   const input = await resolveInput(sourcePath, sourceName);
-  await sharp(input)
-    .rotate()
-    .jpeg({ quality: 92, mozjpeg: true })
-    .toFile(outputPath);
+  try {
+    await sharp(input)
+      .rotate()
+      .jpeg({ quality: 92, mozjpeg: true })
+      .toFile(outputPath);
+  } catch (err) {
+    if (!heif || !ffmpegPath || Buffer.isBuffer(input) || !shouldRetryHeifViaFfmpeg(err)) {
+      throw err;
+    }
+    const fallbackInput = await runFfmpegDecodePng(sourcePath);
+    await sharp(fallbackInput)
+      .rotate()
+      .jpeg({ quality: 92, mozjpeg: true })
+      .toFile(outputPath);
+  }
 }
