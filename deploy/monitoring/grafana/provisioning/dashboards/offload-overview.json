@@ -5,7 +5,7 @@
   "tags": ["offload", "storage"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "5s",
   "time": {
     "from": "now-1h",
@@ -101,15 +101,48 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Provider Done",
+      "title": "Provider Done: Discord Upload",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "rate(offload_provider_done_total{provider=\"discord\",kind=\"upload\"}[$__rate_interval])", "legendFormat": "discord upload/s" },
-        { "refId": "B", "expr": "rate(offload_provider_done_total{provider=\"telegram\",kind=\"upload\"}[$__rate_interval])", "legendFormat": "telegram upload/s" },
-        { "refId": "C", "expr": "rate(offload_provider_done_total{provider=\"discord\",kind=\"mirror\"}[$__rate_interval])", "legendFormat": "discord mirror/s" },
-        { "refId": "D", "expr": "rate(offload_provider_done_total{provider=\"telegram\",kind=\"mirror\"}[$__rate_interval])", "legendFormat": "telegram mirror/s" }
+        { "refId": "A", "expr": "rate(offload_provider_done_total{provider=\"discord\",kind=\"upload\"}[$__rate_interval])", "legendFormat": "discord upload/s" }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Provider Done: Telegram Upload",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(offload_provider_done_total{provider=\"telegram\",kind=\"upload\"}[$__rate_interval])", "legendFormat": "telegram upload/s" }
+      ],
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Provider Done: Discord Mirror",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(offload_provider_done_total{provider=\"discord\",kind=\"mirror\"}[$__rate_interval])", "legendFormat": "discord mirror/s" }
+      ],
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Provider Done: Telegram Mirror",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(offload_provider_done_total{provider=\"telegram\",kind=\"mirror\"}[$__rate_interval])", "legendFormat": "telegram mirror/s" }
+      ],
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 12 },
       "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
@@ -124,7 +157,7 @@
         { "refId": "C", "expr": "rate(offload_mirror_provider_rate_limited_total{provider=\"discord\"}[$__rate_interval])", "legendFormat": "discord 429/s" },
         { "refId": "D", "expr": "rate(offload_mirror_provider_rate_limited_total{provider=\"telegram\"}[$__rate_interval])", "legendFormat": "telegram 429/s" }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
       "fieldConfig": { "defaults": { "unit": "ops", "decimals": 2 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
@@ -145,7 +178,7 @@
           "legendFormat": "rss memory"
         }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
       "fieldConfig": {
         "defaults": { "unit": "short", "decimals": 2 },
         "overrides": [
@@ -163,7 +196,7 @@
       "title": "Upload Avg Archive Time",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "offload_upload_archive_avg_ms" }],
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 20 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 28 },
       "fieldConfig": { "defaults": { "unit": "ms", "decimals": 0 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "colorMode": "value", "graphMode": "none" }
     },
@@ -173,7 +206,7 @@
       "title": "Mirror Avg Part Time",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "offload_mirror_part_avg_ms" }],
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 20 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 28 },
       "fieldConfig": { "defaults": { "unit": "ms", "decimals": 0 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "colorMode": "value", "graphMode": "none" }
     },
@@ -183,7 +216,7 @@
       "title": "Upload Errors Total",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "offload_upload_archives_error_total" }],
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 20 },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 28 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "colorMode": "value", "graphMode": "none" }
     },
@@ -193,7 +226,7 @@
       "title": "Download Errors Total",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "offload_download_error_total" }],
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 20 },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 28 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "values": false }, "colorMode": "value", "graphMode": "none" }
     },
@@ -207,7 +240,7 @@
         { "refId": "B", "expr": "offload_mirror_parts_error_total", "legendFormat": "parts error total" },
         { "refId": "C", "expr": "offload_mirror_rate_limited_total", "legendFormat": "429 total" }
       ],
-      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 24 },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 32 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
@@ -227,7 +260,7 @@
         { "refId": "C", "expr": "offload_provider_done_total{provider=\"discord\",kind=\"mirror\"}", "legendFormat": "discord mirror total" },
         { "refId": "D", "expr": "offload_provider_done_total{provider=\"telegram\",kind=\"mirror\"}", "legendFormat": "telegram mirror total" }
       ],
-      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 24 },
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 32 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
@@ -246,7 +279,7 @@
         { "refId": "B", "expr": "offload_archives_status{status=\"processing\"}", "legendFormat": "processing" },
         { "refId": "C", "expr": "offload_archives_status{status=\"error\"}", "legendFormat": "error" }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 36 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
@@ -262,7 +295,7 @@
         { "refId": "D", "expr": "offload_thumb_worker_state{state=\"active\"}", "legendFormat": "thumb active" },
         { "refId": "E", "expr": "offload_subtitle_worker_state{state=\"active\"}", "legendFormat": "subtitle active" }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 36 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
     },
@@ -278,7 +311,7 @@
         { "refId": "D", "expr": "offload_proxy_state{state=\"degraded_routes\"}", "legendFormat": "proxy degraded routes" },
         { "refId": "E", "expr": "offload_webhooks_enabled_total", "legendFormat": "webhooks enabled" }
       ],
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "values": false },
@@ -299,7 +332,7 @@
           "legendFormat": "{{type}}/s"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
       "fieldConfig": { "defaults": { "unit": "ops", "decimals": 3 }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
     },
@@ -315,7 +348,7 @@
           "legendFormat": "{{type}} total"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0 }, "overrides": [] },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"], "values": false },

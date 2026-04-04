@@ -2,7 +2,7 @@ import path from "path";
 import mime from "mime-types";
 import { config } from "../config.js";
 import { getMediaKind } from "./subtitles.js";
-import { isMediaPreviewSupported, isPreviewAllowedForFile } from "./preview.js";
+import { isHeifFileName, isMediaPreviewSupported, isPreviewAllowedForFile } from "./preview.js";
 
 export function isFileDeleted(file: any) {
   return !!file?.deletedAt;
@@ -32,8 +32,8 @@ export function isPreviewSupportedForFile(archive: any, file: any) {
   }
   const fileSize = Number(file.size || 0);
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
-  if (fileSize > previewMaxBytes) return false;
   const contentType = (mime.lookup(fileName) as string) || "";
+  if (fileSize > previewMaxBytes && !isHeifFileName(fileName, contentType)) return false;
   return isPreviewAllowedForFile(fileName, contentType);
 }
 
@@ -50,4 +50,3 @@ export function isClientStreamAbortError(err: unknown) {
     code === "ERR_STREAM_PREMATURE_CLOSE"
   );
 }
-
