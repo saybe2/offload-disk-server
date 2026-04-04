@@ -115,7 +115,7 @@ async function fetchArchiveWindow(client: RealtimeClient, sub: ArchiveSubscripti
   const isTrash = sub.view === "trash";
   const baseFilter =
     client.role === "admin"
-      ? (sub.ownerId ? { userId: sub.ownerId } : {})
+      ? { userId: sub.ownerId || client.userId }
       : { userId: client.userId };
   const filter: Record<string, unknown> = {
     ...baseFilter,
