@@ -84,6 +84,8 @@ const prioritySaveBtn = document.getElementById('prioritySaveBtn');
 const priorityCloseBtn = document.getElementById('priorityCloseBtn');
 
 let currentFolderId = null;
+let currentOwnerId = null;
+let currentOwnerName = '';
 let currentView = 'files'; // files | trash | shared | converted
 let STREAM_UPLOADS_ENABLED = false;
 let STREAM_SINGLE_MIN_MIB = 8;
@@ -151,6 +153,7 @@ let globalSearchResults = {
 };
 let transcodeToggleBusy = false;
 let lastQuotaSnapshot = null;
+let isAdminSession = false;
 if (!VIEW_MODES.has(viewMode)) {
   viewMode = 'list';
 }
@@ -168,6 +171,29 @@ function normalizeSearchScope(value) {
   return value === 'global' ? 'global' : 'folder';
 }
 
+function normalizeOwnerId(value) {
+  const raw = String(value || '').trim();
+  return /^[a-fA-F0-9]{24}$/.test(raw) ? raw : null;
+}
+
+function scopedOwnerId() {
+  if (!isAdminSession) return null;
+  return currentOwnerId || null;
+}
+
+function applyScopedUserParam(params) {
+  const ownerId = scopedOwnerId();
+  if (ownerId) {
+    params.set('userId', ownerId);
+  }
+}
+
+function ownerScopeLabel() {
+  const ownerId = scopedOwnerId();
+  if (!ownerId) return '';
+  return currentOwnerName || ownerId;
+}
+
 function isGlobalSearchActive() {
   return currentView === 'files' && searchScope === 'global' && !!searchTerm;
 }
@@ -180,6 +206,7 @@ function buildArchivesQueryKey() {
   return [
     currentView,
     currentFolderId || '',
+    scopedOwnerId() || '',
     isFolderSearchActive() ? searchTerm.toLowerCase() : ''
   ].join('|');
 }
@@ -196,6 +223,7 @@ function buildArchivesParams(offset, limit) {
   if (isFolderSearchActive()) {
     params.set('q', searchTerm);
   }
+  applyScopedUserParam(params);
   if (offset > 0) {
     params.set('offset', String(offset));
   }
@@ -226,6 +254,7 @@ function buildRealtimeArchivesSubscription() {
     queryKey: buildArchivesQueryKey(),
     view: currentView,
     folderId: currentView === 'files' ? (currentFolderId || null) : null,
+    ownerId: scopedOwnerId(),
     rootOnly: currentView === 'files' && !currentFolderId,
     query: isFolderSearchActive() ? searchTerm : '',
     limit
@@ -395,6 +424,13 @@ function updateUrl() {
   if (sortDir !== 'asc') {
     params.set('dir', sortDir);
   }
+  const ownerId = scopedOwnerId();
+  if (ownerId) {
+    params.set('owner', ownerId);
+    if (currentOwnerName) {
+      params.set('ownerName', currentOwnerName);
+    }
+  }
   const qs = params.toString();
   const url = qs ? `${location.pathname}?${qs}` : location.pathname;
   history.replaceState({}, '', url);
@@ -407,6 +443,13 @@ async function loadMe() {
     return null;
   }
   const me = await res.json();
+  isAdminSession = me.role === 'admin';
+  if (!isAdminSession) {
+    currentOwnerId = null;
+    currentOwnerName = '';
+  } else if (scopedOwnerId() && !currentOwnerName) {
+    currentOwnerName = scopedOwnerId();
+  }
   adminLink.style.display = me.role === 'admin' ? 'inline' : 'none';
   renderQuotaWidget(me);
   if (transcodeCopiesToggle) {
@@ -591,16 +634,19 @@ function buildFolderPath(folderId) {
 }
 
 function updateTitle() {
+  const ownerLabel = ownerScopeLabel();
   if (currentView === 'trash') {
-    listTitle.textContent = 'Trash';
+    listTitle.textContent = ownerLabel ? `Trash / ${ownerLabel}` : 'Trash';
   } else if (currentView === 'shared') {
-    listTitle.textContent = 'Shared';
+    listTitle.textContent = ownerLabel ? `Shared / ${ownerLabel}` : 'Shared';
   } else if (currentView === 'converted') {
-    listTitle.textContent = 'Converted';
+    listTitle.textContent = ownerLabel ? `Converted / ${ownerLabel}` : 'Converted';
   } else if (isGlobalSearchActive()) {
-    listTitle.textContent = `Files / Global search: ${searchTerm}`;
+    const base = `Files / Global search: ${searchTerm}`;
+    listTitle.textContent = ownerLabel ? `${base} / ${ownerLabel}` : base;
   } else {
-    listTitle.textContent = buildFolderPath(currentFolderId);
+    const base = buildFolderPath(currentFolderId);
+    listTitle.textContent = ownerLabel ? `${base} / ${ownerLabel}` : base;
   }
   updateViewVisibility();
   updateUrl();
@@ -1563,7 +1609,10 @@ function renderHead() {
 }
 
 async function loadFolders() {
-  const res = await fetch('/api/folders');
+  const params = new URLSearchParams();
+  applyScopedUserParam(params);
+  const query = params.toString();
+  const res = await fetch(query ? `/api/folders?${query}` : '/api/folders');
   const data = await res.json();
   foldersCache = data.folders || [];
   foldersById = {};
@@ -1826,6 +1875,7 @@ async function loadGlobalSearchResults() {
   const params = new URLSearchParams();
   params.set('q', searchTerm);
   params.set('limit', '250');
+  applyScopedUserParam(params);
   try {
     globalSearchResults.loading = true;
     const res = await fetch(`/api/search/global?${params.toString()}`, { signal: controller.signal });
@@ -1956,7 +2006,10 @@ async function loadArchives(options = {}) {
 
 async function loadActiveSharesMap() {
   try {
-    const res = await fetch('/api/shares?active=1');
+    const params = new URLSearchParams();
+    params.set('active', '1');
+    applyScopedUserParam(params);
+    const res = await fetch(`/api/shares?${params.toString()}`);
     if (!res.ok) return;
     const data = await res.json();
     const nextArchiveMap = new Map();
@@ -3654,7 +3707,10 @@ async function loadConverted() {
   listTable.classList.remove('hidden');
   gridView.classList.add('hidden');
   gridView.innerHTML = '';
-  const res = await fetch('/api/archives/converted');
+  const params = new URLSearchParams();
+  applyScopedUserParam(params);
+  const query = params.toString();
+  const res = await fetch(query ? `/api/archives/converted?${query}` : '/api/archives/converted');
   const data = await res.json();
   await loadActiveSharesMap();
   archiveList.innerHTML = '';
@@ -3786,7 +3842,10 @@ async function loadShared() {
   listTable.classList.remove('hidden');
   gridView.classList.add('hidden');
   gridView.innerHTML = '';
-  const res = await fetch('/api/shares?active=1');
+  const params = new URLSearchParams();
+  params.set('active', '1');
+  applyScopedUserParam(params);
+  const res = await fetch(`/api/shares?${params.toString()}`);
   const data = await res.json();
   archiveList.innerHTML = '';
   renderHead();
@@ -4367,6 +4426,8 @@ window.addEventListener('scroll', () => {
   const scope = params.get('scope');
   const sort = params.get('sort');
   const dir = params.get('dir');
+  const owner = params.get('owner') || params.get('userId');
+  const ownerName = params.get('ownerName');
   if (view === 'trash' || view === 'shared' || view === 'files' || view === 'converted') {
     currentView = view;
   }
@@ -4394,6 +4455,8 @@ window.addEventListener('scroll', () => {
   if (dir === 'asc' || dir === 'desc') {
     sortDir = dir;
   }
+  currentOwnerId = normalizeOwnerId(owner);
+  currentOwnerName = ownerName ? ownerName.trim() : '';
   if (sortFieldSelect) {
     sortFieldSelect.value = sortField;
   }

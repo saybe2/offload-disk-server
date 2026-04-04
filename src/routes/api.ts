@@ -206,6 +206,20 @@ function compareSearchNames(left: string, right: string, queryLower: string) {
   return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
 }
 
+function resolveRequestedUserId(req: Request) {
+  if (req.session.role !== "admin") {
+    return { ok: true as const, value: new Types.ObjectId(req.session.userId) };
+  }
+  const raw = typeof req.query.userId === "string" ? req.query.userId.trim() : "";
+  if (!raw) {
+    return { ok: true as const, value: null as Types.ObjectId | null };
+  }
+  if (!Types.ObjectId.isValid(raw)) {
+    return { ok: false as const, value: null as Types.ObjectId | null };
+  }
+  return { ok: true as const, value: new Types.ObjectId(raw) };
+}
+
 function isTransientError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   if (/fetch failed/i.test(message)) return true;
@@ -1036,6 +1050,10 @@ apiRouter.post("/upload-stream", requireAuth, async (req, res) => {
 });
 
 apiRouter.get("/archives", requireAuth, async (req, res) => {
+  const requestedUser = resolveRequestedUserId(req);
+  if (!requestedUser.ok) {
+    return res.status(400).json({ error: "bad_user" });
+  }
   const isTrash = req.query.trash === "1";
   const folderId = (req.query.folderId as string) || null;
   const rootOnly = req.query.root === "1";
@@ -1046,7 +1064,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   const limit = Number.isFinite(limitRaw) && limitRaw > 0
     ? Math.min(Math.max(limitRaw, 1), 500)
     : 0;
-  const baseFilter = req.session.role === "admin" ? {} : { userId: req.session.userId };
+  const baseFilter = requestedUser.value ? { userId: requestedUser.value } : {};
   const filter = {
     ...baseFilter,
     archiveKind: { $ne: "transcoded" },
@@ -1096,7 +1114,11 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
 });
 
 apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
-  const baseFilter = req.session.role === "admin" ? {} : { userId: req.session.userId };
+  const requestedUser = resolveRequestedUserId(req);
+  if (!requestedUser.ok) {
+    return res.status(400).json({ error: "bad_user" });
+  }
+  const baseFilter = requestedUser.value ? { userId: requestedUser.value } : {};
   const statusRaw = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
   const statusFilter = statusRaw === "ready" || statusRaw === "processing" || statusRaw === "error" || statusRaw === "skipped"
     ? statusRaw
@@ -1155,6 +1177,10 @@ apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
 });
 
 apiRouter.get("/search/global", requireAuth, async (req, res) => {
+  const requestedUser = resolveRequestedUserId(req);
+  if (!requestedUser.ok) {
+    return res.status(400).json({ error: "bad_user" });
+  }
   const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const limitInput = Number.parseInt(String(req.query.limit || ""), 10);
   const perTypeLimit = Number.isFinite(limitInput) ? Math.min(Math.max(limitInput, 10), 500) : 200;
@@ -1172,9 +1198,7 @@ apiRouter.get("/search/global", requireAuth, async (req, res) => {
 
   const queryLower = queryRaw.toLowerCase();
   const needle = new RegExp(escapeRegex(queryRaw), "i");
-  const userMatch = req.session.role === "admin"
-    ? {}
-    : { userId: new Types.ObjectId(req.session.userId) };
+  const userMatch = requestedUser.value ? { userId: requestedUser.value } : {};
 
   const folderRows = await Folder.find({ ...userMatch, name: needle })
     .select("_id name parentId priority createdAt updatedAt")
@@ -2204,7 +2228,11 @@ apiRouter.patch("/archives/:id/move", requireAuth, async (req, res) => {
 });
 
 apiRouter.get("/folders", requireAuth, async (req, res) => {
-  const filter = req.session.role === "admin" ? {} : { userId: req.session.userId };
+  const requestedUser = resolveRequestedUserId(req);
+  if (!requestedUser.ok) {
+    return res.status(400).json({ error: "bad_user" });
+  }
+  const filter = requestedUser.value ? { userId: requestedUser.value } : {};
   const folders = await Folder.find(filter).sort({ name: 1 }).lean();
   res.json({ folders });
 });
@@ -2537,8 +2565,14 @@ apiRouter.post("/shares", requireAuth, async (req, res) => {
 });
 
 apiRouter.get("/shares", requireAuth, async (req, res) => {
+  const requestedUser = resolveRequestedUserId(req);
+  if (!requestedUser.ok) {
+    return res.status(400).json({ error: "bad_user" });
+  }
   const onlyActive = req.query.active === "1";
-  const filter: Record<string, unknown> = { userId: req.session.userId };
+  const filter: Record<string, unknown> = requestedUser.value
+    ? { userId: requestedUser.value }
+    : {};
   if (onlyActive) {
     filter.$or = [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }];
   }
