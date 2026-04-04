@@ -232,6 +232,7 @@ async function loadUsers() {
         <button data-action="password" data-user="${u._id}">Update</button>
       </td>
       <td>
+        <button data-action="view" data-user="${u._id}" data-username="${encodeURIComponent(u.username)}">Files</button>
         <button data-action="delete" data-user="${u._id}">Delete</button>
       </td>
     `;
@@ -278,6 +279,12 @@ async function loadUsers() {
           return;
         }
         await loadUsers();
+        return;
+      }
+      if (action === 'view') {
+        const usernameEncoded = btn.getAttribute('data-username') || '';
+        const target = `/?view=files&owner=${encodeURIComponent(id)}${usernameEncoded ? `&ownerName=${usernameEncoded}` : ''}`;
+        window.open(target, '_blank');
       }
     });
   });

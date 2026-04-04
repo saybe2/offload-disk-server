@@ -21,6 +21,7 @@ interface ArchiveSubscription {
   queryKey: string;
   view: ArchiveView;
   folderId: string | null;
+  ownerId: string | null;
   rootOnly: boolean;
   query: string;
   limit: number;
@@ -59,6 +60,12 @@ function escapeRegex(value: string) {
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeObjectId(value: unknown): string | null {
+  const raw = normalizeString(value);
+  if (!raw) return null;
+  return /^[a-fA-F0-9]{24}$/.test(raw) ? raw : null;
 }
 
 function withPreviewSupport(archive: any) {
@@ -106,7 +113,10 @@ function serializeArchive(archive: any) {
 
 async function fetchArchiveWindow(client: RealtimeClient, sub: ArchiveSubscription) {
   const isTrash = sub.view === "trash";
-  const baseFilter = client.role === "admin" ? {} : { userId: client.userId };
+  const baseFilter =
+    client.role === "admin"
+      ? (sub.ownerId ? { userId: sub.ownerId } : {})
+      : { userId: client.userId };
   const filter: Record<string, unknown> = {
     ...baseFilter,
     archiveKind: { $ne: "transcoded" },
@@ -236,12 +246,14 @@ function parseArchiveSubscription(message: Record<string, unknown>): ArchiveSubs
   if (!queryKey) return null;
 
   const folderIdRaw = normalizeString(message.folderId);
+  const ownerId = normalizeObjectId(message.ownerId);
   const query = normalizeString(message.query);
 
   return {
     queryKey,
     view,
     folderId: folderIdRaw || null,
+    ownerId,
     rootOnly: message.rootOnly === true,
     query,
     limit: normalizeLimit(message.limit),
