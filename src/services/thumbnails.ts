@@ -65,6 +65,29 @@ function isHeif(fileName: string) {
   return ext === ".heic" || ext === ".heif";
 }
 
+function canRetryHeifFailure(fileName: string, message: string) {
+  if (!isHeif(fileName)) return false;
+  const lower = String(message || "").toLowerCase();
+  return (
+    lower.includes("thumbnail_heif_unsupported_runtime") ||
+    lower.includes("heif: error while loading plugin") ||
+    lower.includes("support for this compression format has not been built in")
+  );
+}
+
+async function clearThumbnailFailure(archiveId: string, fileIndex: number) {
+  await Archive.updateOne(
+    { _id: archiveId },
+    {
+      $set: {
+        [`files.${fileIndex}.thumbnail.failedAt`]: null,
+        [`files.${fileIndex}.thumbnail.error`]: "",
+        [`files.${fileIndex}.thumbnail.updatedAt`]: null
+      }
+    }
+  );
+}
+
 function isImage(fileName: string) {
   if (isHeif(fileName) && !canServerRenderHeif()) return false;
   return imageExt.has(extOf(fileName));
@@ -298,10 +321,15 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
   if (!file) {
     throw new Error("file_not_found");
   }
-  if (file.thumbnail?.failedAt) {
-    throw makePermanentThumbnailFailure(file.thumbnail.error || "marked_failed");
-  }
   const fileName = (file.originalName || file.name || "").trim();
+  if (file.thumbnail?.failedAt) {
+    const failure = file.thumbnail.error || "marked_failed";
+    if (canRetryHeifFailure(fileName, failure) && canServerRenderHeif()) {
+      await clearThumbnailFailure(archive.id, fileIndex);
+    } else {
+      throw makePermanentThumbnailFailure(failure);
+    }
+  }
   if (!supportsThumbnail(fileName, file.detectedKind)) {
     throw new Error("thumbnail_unsupported");
   }
@@ -328,10 +356,15 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
   if (!file) {
     throw new Error("file_not_found");
   }
-  if (file.thumbnail?.failedAt) {
-    throw makePermanentThumbnailFailure(file.thumbnail.error || "marked_failed");
-  }
   const fileName = (file.originalName || file.name || "").trim();
+  if (file.thumbnail?.failedAt) {
+    const failure = file.thumbnail.error || "marked_failed";
+    if (canRetryHeifFailure(fileName, failure) && canServerRenderHeif()) {
+      await clearThumbnailFailure(archive.id, fileIndex);
+    } else {
+      throw makePermanentThumbnailFailure(failure);
+    }
+  }
   if (!supportsThumbnail(fileName, file.detectedKind)) {
     throw new Error("thumbnail_unsupported");
   }
