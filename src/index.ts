@@ -36,6 +36,10 @@ process.on("uncaughtException", (err) => {
     log("restore", `zip parse guard ${message}`);
     return;
   }
+  if (/ECONNREFUSED/i.test(message) && (/27017/.test(message) || /mongo|mongodb|connect-mongo/i.test(stack))) {
+    log("db", `transient connection failure ${message}`);
+    return;
+  }
   log("server", `uncaught exception ${message}`);
   process.exit(1);
 });
@@ -53,11 +57,17 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
 
+const sessionStore = MongoStore.create({ mongoUrl: config.mongoUri, dbName: config.mongoDb });
+sessionStore.on("error", (err) => {
+  const message = err instanceof Error ? err.message : String(err || "");
+  log("db", `session store error ${message}`);
+});
+
 const sessionMiddleware = session({
   secret: config.sessionSecret,
   resave: false,
   saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: config.mongoUri, dbName: config.mongoDb })
+  store: sessionStore
 });
 
 app.use(sessionMiddleware);
