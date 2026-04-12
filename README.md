@@ -168,6 +168,17 @@ Defaults are from `.env.example`.
 - `ADMIN_USERNAME` (`admin`) - bootstrap admin login (first startup).
 - `ADMIN_PASSWORD` (`admin`) - bootstrap admin password (first startup).
 
+### Redis (optional cache)
+- `REDIS_ENABLED` (`false`) - enable Redis integration.
+- `REDIS_URL` (empty) - full connection URL; if set, host/port/user/pass/db fields are ignored.
+- `REDIS_HOST` (`127.0.0.1`) - Redis host for split config mode.
+- `REDIS_PORT` (`6379`) - Redis port.
+- `REDIS_USERNAME` (`offload`) - ACL username used for auth.
+- `REDIS_PASSWORD` (empty) - ACL password used for auth.
+- `REDIS_DB` (`0`) - logical DB index.
+- `REDIS_KEY_PREFIX` (`offload`) - key prefix namespace.
+- `REDIS_CACHE_TTL_SEC` (`8`) - TTL for API cache entries.
+
 ### Encryption
 - `MASTER_KEY` - master key for archive part encryption/decryption. Losing it means data loss.
 
