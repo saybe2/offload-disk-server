@@ -28,6 +28,7 @@ import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
 import { initAnalyticsPersistence } from "./services/analytics.js";
 import { initRealtimeServer } from "./services/realtime.js";
+import { getRedisRuntimeState, startRedis } from "./services/redis.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -328,6 +329,13 @@ async function ensureCacheDirs() {
 
 async function main() {
   await connectDb();
+  startRedis();
+  const redisState = getRedisRuntimeState();
+  if (redisState.enabled) {
+    log("redis", "enabled");
+  } else {
+    log("redis", "disabled");
+  }
   await ensureCacheDirs();
   await ensureAdminUser();
   await ensureMasterKey();

@@ -64,6 +64,7 @@ import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
 import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
 import { activeBundleFileIndices, hasActiveFiles, isTranscodedArchive } from "../services/archiveFiles.js";
+import { redisCacheGet, redisCacheSet } from "../services/redis.js";
 import {
   getPreviewMediaKind,
   isClientStreamAbortError,
@@ -204,6 +205,10 @@ function compareSearchNames(left: string, right: string, queryLower: string) {
   const rankDiff = searchRank(left, queryLower) - searchRank(right, queryLower);
   if (rankDiff !== 0) return rankDiff;
   return String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
+}
+
+function cacheToken(value: unknown) {
+  return encodeURIComponent(String(value || "").trim().toLowerCase());
 }
 
 function resolveRequestedUserId(req: Request) {
@@ -1090,6 +1095,20 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
       { "files.name": needle }
     ];
   }
+  const cacheKey = [
+    "archives:v2",
+    `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
+    `trash=${isTrash ? 1 : 0}`,
+    `folder=${cacheToken(folderId || "")}`,
+    `root=${rootOnly ? 1 : 0}`,
+    `q=${cacheToken(queryRaw)}`,
+    `offset=${offset}`,
+    `limit=${limit}`
+  ].join(":");
+  const cached = await redisCacheGet<any>(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
 
   let total = 0;
   if (limit > 0) {
@@ -1105,14 +1124,16 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   const hasMore = limit > 0 ? offset + archives.length < total : false;
   const nextOffset = hasMore ? offset + archives.length : null;
 
-  return res.json({
+  const payload = {
     archives: archives.map((archive) => withPreviewSupport(archive)),
     total: limit > 0 ? total : archives.length,
     offset,
     limit: limit > 0 ? limit : archives.length,
     hasMore,
     nextOffset
-  });
+  };
+  await redisCacheSet(cacheKey, payload);
+  return res.json(payload);
 });
 
 apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
@@ -1125,6 +1146,15 @@ apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
   const statusFilter = statusRaw === "ready" || statusRaw === "processing" || statusRaw === "error" || statusRaw === "skipped"
     ? statusRaw
     : null;
+  const cacheKey = [
+    "archives:converted:v2",
+    `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
+    `status=${cacheToken(statusFilter || "")}`
+  ].join(":");
+  const cached = await redisCacheGet<any>(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
 
   const archives = await Archive.find({
     ...baseFilter,
@@ -1172,10 +1202,12 @@ apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
     }
   }
 
-  return res.json({
+  const payload = {
     items,
     total: items.length
-  });
+  };
+  await redisCacheSet(cacheKey, payload);
+  return res.json(payload);
 });
 
 apiRouter.get("/search/global", requireAuth, async (req, res) => {
@@ -1196,6 +1228,16 @@ apiRouter.get("/search/global", requireAuth, async (req, res) => {
       folderTruncated: false,
       fileTruncated: false
     });
+  }
+  const cacheKey = [
+    "search:global:v2",
+    `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
+    `q=${cacheToken(queryRaw)}`,
+    `limit=${perTypeLimit}`
+  ].join(":");
+  const cached = await redisCacheGet<any>(cacheKey);
+  if (cached) {
+    return res.json(cached);
   }
 
   const queryLower = queryRaw.toLowerCase();
@@ -1295,7 +1337,7 @@ apiRouter.get("/search/global", requireAuth, async (req, res) => {
     };
   });
 
-  return res.json({
+  const payload = {
     query: queryRaw,
     folders,
     files,
@@ -1303,7 +1345,9 @@ apiRouter.get("/search/global", requireAuth, async (req, res) => {
     truncated: folderTruncated || fileTruncated,
     folderTruncated,
     fileTruncated
-  });
+  };
+  await redisCacheSet(cacheKey, payload);
+  return res.json(payload);
 });
 
 apiRouter.get("/archives/:id/download", requireAuth, async (req, res) => {

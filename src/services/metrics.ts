@@ -12,6 +12,7 @@ import { getTranscodeWorkerState } from "./transcodeWorker.js";
 import { getOutboundProxyRuntimeStatus } from "./outbound.js";
 import { getSmbRuntimeState } from "../smb/fuse.js";
 import { config } from "../config.js";
+import { getRedisRuntimeState } from "./redis.js";
 
 const registry = new client.Registry();
 client.collectDefaultMetrics({ register: registry, prefix: "offload_node_" });
@@ -473,6 +474,12 @@ const gauges = {
     help: "Outbound proxy runtime status",
     labelNames: ["state"] as const,
     registers: [registry]
+  }),
+  redisState: new client.Gauge({
+    name: "offload_redis_state",
+    help: "Redis runtime status",
+    labelNames: ["state"] as const,
+    registers: [registry]
   })
 };
 
@@ -622,6 +629,11 @@ async function refreshMetrics() {
   gauges.proxyState.labels("active").set(proxyState.active ? 1 : 0);
   gauges.proxyState.labels("degraded_routes").set(proxyState.degradedRoutes || 0);
   gauges.proxyState.labels("bypassed_routes").set(proxyState.bypassedRoutes || 0);
+
+  const redisState = getRedisRuntimeState();
+  gauges.redisState.labels("enabled").set(redisState.enabled ? 1 : 0);
+  gauges.redisState.labels("ready").set(redisState.ready ? 1 : 0);
+  gauges.redisState.labels("reconnecting").set(redisState.reconnecting ? 1 : 0);
 
   const transcodePendingOr: Record<string, unknown>[] = [
     { "transcode.status": { $exists: false } },
