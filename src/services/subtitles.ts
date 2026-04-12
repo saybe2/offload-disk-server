@@ -862,13 +862,31 @@ function extractTextFromApiBody(bodyText: string) {
         return cuesToVtt(cues as SubtitleCue[]);
       }
     }
-    const fromJson = parsed.vtt || parsed.text || "";
+    const fromJson = String(parsed.vtt || parsed.text || "").trim();
     if (!fromJson) {
-      throw new Error("missing_text");
+      throw new Error("subtitle_asr_invalid_payload:missing_text_or_segments");
     }
     return fromJson;
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith("subtitle_asr_invalid_payload:")) {
+      throw err;
+    }
     return bodyText;
+  }
+}
+
+async function isKnownBadSubtitlePayload(localPath: string) {
+  try {
+    const text = await fs.promises.readFile(localPath, "utf8");
+    const sample = text.slice(0, 4000).toLowerCase();
+    if (!sample.includes("webvtt")) return false;
+    return (
+      sample.includes("\"task\":\"transcribe\"") &&
+      sample.includes("\"segments\":[]") &&
+      sample.includes("\"provider\"")
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -1304,6 +1322,69 @@ async function upsertSubtitleTrackMeta(
   await doc.save();
 }
 
+async function hydrateSubtitleMetaFromLocal(
+  archiveId: string,
+  fileIndex: number,
+  localPath: string,
+  language: string,
+  existingUpdatedAt?: Date | null
+) {
+  const stat = await fs.promises.stat(localPath);
+  if (!existingUpdatedAt) {
+    await Archive.updateOne(
+      { _id: archiveId },
+      {
+        $set: {
+          [`files.${fileIndex}.subtitle.contentType`]: "text/vtt; charset=utf-8",
+          [`files.${fileIndex}.subtitle.size`]: stat.size,
+          [`files.${fileIndex}.subtitle.localPath`]: localPath,
+          [`files.${fileIndex}.subtitle.language`]: language,
+          [`files.${fileIndex}.subtitle.updatedAt`]: new Date(),
+          [`files.${fileIndex}.subtitle.failedAt`]: null,
+          [`files.${fileIndex}.subtitle.error`]: ""
+        }
+      }
+    );
+  }
+  return {
+    filePath: localPath,
+    contentType: "text/vtt; charset=utf-8",
+    size: stat.size,
+    language
+  } satisfies SubtitleResult;
+}
+
+async function hydrateSubtitleTrackMetaFromLocal(
+  archiveId: string,
+  fileIndex: number,
+  audioTrack: number,
+  localPath: string,
+  language: string,
+  label: string,
+  existingUpdatedAt?: Date | null
+) {
+  const stat = await fs.promises.stat(localPath);
+  if (!existingUpdatedAt) {
+    await upsertSubtitleTrackMeta(archiveId, fileIndex, audioTrack, {
+      audioTrack,
+      label,
+      language,
+      contentType: "text/vtt; charset=utf-8",
+      size: stat.size,
+      localPath,
+      updatedAt: new Date(),
+      failedAt: null,
+      error: ""
+    });
+  }
+  return {
+    filePath: localPath,
+    contentType: "text/vtt; charset=utf-8",
+    size: stat.size,
+    language
+  } satisfies SubtitleResult;
+}
+
 async function persistSubtitleMeta(
   archiveId: string,
   fileIndex: number,
@@ -1512,13 +1593,31 @@ async function ensureSubtitleTrackFromSource(
   await ensureSubtitleDir();
   const localPath = subtitleTargetPath(archive.id, fileIndex, audioTrack);
   if (fs.existsSync(localPath)) {
-    const stat = await fs.promises.stat(localPath);
-    return {
-      filePath: localPath,
-      contentType: "text/vtt; charset=utf-8",
-      size: stat.size,
-      language: getTrackLanguage(track)
-    } satisfies SubtitleResult;
+    if (!audioTrack && (await isKnownBadSubtitlePayload(localPath))) {
+      await fs.promises.rm(localPath, { force: true }).catch(() => undefined);
+      log("subtitle", `drop bad cached subtitle archive=${archive.id} file=${fileIndex}`);
+    } else {
+    const file = archive.files?.[fileIndex] as any;
+    const language = getTrackLanguage(track);
+    if (!audioTrack) {
+      return hydrateSubtitleMetaFromLocal(
+        archive.id,
+        fileIndex,
+        localPath,
+        language,
+        file?.subtitle?.updatedAt || null
+      );
+    }
+    return hydrateSubtitleTrackMetaFromLocal(
+      archive.id,
+      fileIndex,
+      audioTrack,
+      localPath,
+      language,
+      track?.label || buildTrackLabel(audioTrack, track?.language, ""),
+      null
+    );
+    }
   }
   return generateSubtitleUsingSource(archive, fileIndex, fileName, sourcePath, localPath, audioTrack, track);
 }
@@ -1612,13 +1711,40 @@ async function ensureSubtitleInternal(archive: ArchiveDoc, fileIndex: number, au
   const trackMeta = findStoredSubtitleTrack(file, audioTrack);
   const localPath = String(trackMeta?.localPath || subtitleTargetPath(archive.id, fileIndex, audioTrack));
   if (fs.existsSync(localPath)) {
-    const stat = await fs.promises.stat(localPath);
-    return {
-      filePath: localPath,
-      contentType: "text/vtt; charset=utf-8",
-      size: stat.size,
-      language: normalizeTrackLanguage(String(trackMeta?.language || config.subtitleLanguage || "auto"))
-    };
+    if (!audioTrack && (await isKnownBadSubtitlePayload(localPath))) {
+      await fs.promises.rm(localPath, { force: true }).catch(() => undefined);
+      await Archive.updateOne(
+        { _id: archive.id },
+        {
+          $set: {
+            [`files.${fileIndex}.subtitle.updatedAt`]: null,
+            [`files.${fileIndex}.subtitle.error`]: "",
+            [`files.${fileIndex}.subtitle.failedAt`]: null
+          }
+        }
+      );
+      log("subtitle", `drop bad subtitle and regenerate archive=${archive.id} file=${fileIndex}`);
+    } else {
+    const language = normalizeTrackLanguage(String(trackMeta?.language || config.subtitleLanguage || "auto"));
+    if (!audioTrack) {
+      return hydrateSubtitleMetaFromLocal(
+        archive.id,
+        fileIndex,
+        localPath,
+        language,
+        (trackMeta as any)?.updatedAt || null
+      );
+    }
+    return hydrateSubtitleTrackMetaFromLocal(
+      archive.id,
+      fileIndex,
+      audioTrack,
+      localPath,
+      language,
+      String(trackMeta?.label || buildTrackLabel(audioTrack, language, "")),
+      (trackMeta as any)?.updatedAt || null
+    );
+    }
   }
 
   if (file.path && fs.existsSync(file.path) && config.subtitlePreferSource) {

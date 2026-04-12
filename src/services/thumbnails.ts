@@ -281,6 +281,31 @@ async function persistThumbMeta(archiveId: string, fileIndex: number, localPath:
   return { filePath: localPath, contentType: "image/webp", size: stat.size };
 }
 
+async function hydrateThumbMetaFromLocal(
+  archiveId: string,
+  fileIndex: number,
+  localPath: string,
+  existingUpdatedAt?: Date | null
+): Promise<ThumbnailResult> {
+  const stat = await fs.promises.stat(localPath);
+  if (!existingUpdatedAt) {
+    await Archive.updateOne(
+      { _id: archiveId },
+      {
+        $set: {
+          [`files.${fileIndex}.thumbnail.contentType`]: "image/webp",
+          [`files.${fileIndex}.thumbnail.size`]: stat.size,
+          [`files.${fileIndex}.thumbnail.localPath`]: localPath,
+          [`files.${fileIndex}.thumbnail.updatedAt`]: new Date(),
+          [`files.${fileIndex}.thumbnail.failedAt`]: null,
+          [`files.${fileIndex}.thumbnail.error`]: ""
+        }
+      }
+    );
+  }
+  return { filePath: localPath, contentType: "image/webp", size: stat.size };
+}
+
 async function generateThumbUsingSource(
   archive: ArchiveDoc,
   fileIndex: number,
@@ -341,8 +366,7 @@ export async function ensureArchiveThumbnailFromSource(archive: ArchiveDoc, file
   await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
 
   if (fs.existsSync(localPath)) {
-    const stat = await fs.promises.stat(localPath);
-    return { filePath: localPath, contentType: "image/webp", size: stat.size };
+    return hydrateThumbMetaFromLocal(archive.id, fileIndex, localPath, file.thumbnail?.updatedAt || null);
   }
   if (!fs.existsSync(file.path)) {
     throw new Error("source_missing");
@@ -373,8 +397,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
   await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
 
   if (fs.existsSync(localPath)) {
-    const stat = await fs.promises.stat(localPath);
-    return { filePath: localPath, contentType: "image/webp", size: stat.size };
+    return hydrateThumbMetaFromLocal(archive.id, fileIndex, localPath, file.thumbnail?.updatedAt || null);
   }
 
   if (file.path && fs.existsSync(file.path)) {
