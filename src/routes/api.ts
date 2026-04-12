@@ -64,7 +64,7 @@ import { outboundFetch } from "../services/outbound.js";
 import { isTelegramReady } from "../services/telegram.js";
 import { parseAudioTrackQuery, resolvePreferredTranscodedArchiveForMedia } from "../services/mediaTranscode.js";
 import { activeBundleFileIndices, hasActiveFiles, isTranscodedArchive } from "../services/archiveFiles.js";
-import { redisCacheGet, redisCacheSet } from "../services/redis.js";
+import { getCacheVersion, redisCacheGet, redisCacheSet } from "../services/redis.js";
 import {
   getPreviewMediaKind,
   isClientStreamAbortError,
@@ -1095,8 +1095,10 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
       { "files.name": needle }
     ];
   }
+  const cacheVersion = await getCacheVersion();
   const cacheKey = [
     "archives:v2",
+    `v=${cacheVersion}`,
     `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
     `trash=${isTrash ? 1 : 0}`,
     `folder=${cacheToken(folderId || "")}`,
@@ -1146,8 +1148,10 @@ apiRouter.get("/archives/converted", requireAuth, async (req, res) => {
   const statusFilter = statusRaw === "ready" || statusRaw === "processing" || statusRaw === "error" || statusRaw === "skipped"
     ? statusRaw
     : null;
+  const cacheVersion = await getCacheVersion();
   const cacheKey = [
     "archives:converted:v2",
+    `v=${cacheVersion}`,
     `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
     `status=${cacheToken(statusFilter || "")}`
   ].join(":");
@@ -1229,8 +1233,10 @@ apiRouter.get("/search/global", requireAuth, async (req, res) => {
       fileTruncated: false
     });
   }
+  const cacheVersion = await getCacheVersion();
   const cacheKey = [
     "search:global:v2",
+    `v=${cacheVersion}`,
     `user=${cacheToken(requestedUser.value?.toString() || req.session.userId)}`,
     `q=${cacheToken(queryRaw)}`,
     `limit=${perTypeLimit}`

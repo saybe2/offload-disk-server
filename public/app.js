@@ -1118,6 +1118,33 @@ function canPreviewItem(item) {
   return !!codeLanguageFromFileName(fileName);
 }
 
+async function openPreviewOnDoubleClick(item, event) {
+  if (!canPreviewItem(item)) return;
+  if (event?.target?.closest?.('a,button,select,input,textarea,label')) return;
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  await openPreviewModal(item);
+}
+
+function buildSharePreviewItem(share) {
+  if (!share?.archiveId) return null;
+  return {
+    archive: {
+      _id: share.archiveId,
+      name: share.name || 'Shared',
+      displayName: share.name || 'Shared'
+    },
+    file: {
+      originalName: share.archiveFirstFileName || share.name || 'Shared',
+      name: share.archiveFirstFileName || share.name || 'Shared',
+      detectedKind: share.archiveFirstFileKind || '',
+      previewSupported: !!share.previewSupported
+    },
+    fileIndex: 0,
+    isBundle: !!share.archiveIsBundle
+  };
+}
+
 function renderTextPreview(text, fileName) {
   const lang = codeLanguageFromFileName(fileName);
   previewCode.textContent = text;
@@ -2222,6 +2249,9 @@ function renderGlobalSearchResults() {
       if (event.target.closest('a,button,select')) return;
       handleRowSelection(item, key, index, event);
     });
+    tr.addEventListener('dblclick', (event) => {
+      void openPreviewOnDoubleClick(item, event);
+    });
 
     const nameTd = document.createElement('td');
     const nameWrap = document.createElement('div');
@@ -2559,6 +2589,9 @@ function renderArchives() {
     tr.addEventListener('click', (e) => {
       if (e.target.closest('a,button,select')) return;
       handleRowSelection(item, key, index, e);
+    });
+    tr.addEventListener('dblclick', (e) => {
+      void openPreviewOnDoubleClick(item, e);
     });
 
     const nameTd = document.createElement('td');
@@ -2982,6 +3015,9 @@ function renderArchivesGrid() {
     card.addEventListener('click', (e) => {
       if (e.target.closest('a,button,select')) return;
       handleRowSelection(item, key, index, e);
+    });
+    card.addEventListener('dblclick', (e) => {
+      void openPreviewOnDoubleClick(item, e);
     });
 
     const content = document.createElement('div');
@@ -3740,6 +3776,9 @@ async function loadConverted() {
       if (event.target.closest('a,button,select')) return;
       handleRowSelection(item, key, index, event);
     });
+    tr.addEventListener('dblclick', (event) => {
+      void openPreviewOnDoubleClick(item, event);
+    });
 
     const nameTd = document.createElement('td');
     const nameWrap = document.createElement('div');
@@ -3913,25 +3952,21 @@ async function loadShared() {
       share.archiveStatus === 'ready' &&
       share.previewSupported
     );
+    const sharePreviewItem = canPreviewShare ? buildSharePreviewItem(share) : null;
+    if (sharePreviewItem) {
+      tr.addEventListener('dblclick', (event) => {
+        if (event.target.closest('a,button,select,input,textarea,label')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void openPreviewModal(sharePreviewItem);
+      });
+    }
     if (canPreviewShare) {
       const previewBtn = document.createElement('button');
       previewBtn.textContent = 'Preview';
       previewBtn.addEventListener('click', async () => {
-        if (!share.archiveId) return;
-        await openPreviewModal({
-          archive: {
-            _id: share.archiveId,
-            name: share.name || 'Shared',
-            displayName: share.name || 'Shared'
-          },
-          file: {
-            originalName: share.archiveFirstFileName || share.name || 'Shared',
-            name: share.archiveFirstFileName || share.name || 'Shared',
-            detectedKind: share.archiveFirstFileKind || ''
-          },
-          fileIndex: 0,
-          isBundle: !!share.archiveIsBundle
-        });
+        if (!sharePreviewItem) return;
+        await openPreviewModal(sharePreviewItem);
       });
       actionTd.appendChild(previewBtn);
     }

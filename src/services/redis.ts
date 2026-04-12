@@ -92,6 +92,11 @@ function buildCacheKey(key: string) {
   return `${prefix}:cache:${key}`;
 }
 
+function buildCacheVersionKey() {
+  const prefix = (config.redisKeyPrefix || "offload").trim() || "offload";
+  return `${prefix}:cache:version`;
+}
+
 export async function redisCacheGet<T>(key: string): Promise<T | null> {
   if (!client?.isReady) return null;
   try {
@@ -110,5 +115,25 @@ export async function redisCacheSet<T>(key: string, value: T, ttlSec = config.re
     await client.set(buildCacheKey(key), JSON.stringify(value), { EX: ttl });
   } catch {
     // ignore cache write failures
+  }
+}
+
+export async function getCacheVersion() {
+  if (!client?.isReady) return 0;
+  try {
+    const raw = await client.get(buildCacheVersionKey());
+    const parsed = Number.parseInt(String(raw || "0"), 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function bumpCacheVersion() {
+  if (!client?.isReady) return;
+  try {
+    await client.incr(buildCacheVersionKey());
+  } catch {
+    // ignore invalidation failures
   }
 }

@@ -298,6 +298,11 @@ function attachSubtitleTracks(videoEl, subtitleBaseUrl, tracks) {
   }
 }
 
+function canOpenSharePreview(item) {
+  if (!item || item.status !== 'ready') return false;
+  return !!(item.previewUrl || item.mediaUrl);
+}
+
 async function openPreviewModal(item) {
   sharePreviewTitle.textContent = `Preview: ${item.name}`;
   resetPreviewContent('Loading preview...');
@@ -456,6 +461,15 @@ function addRow(item) {
     previewBtn.textContent = 'Preview';
     previewBtn.addEventListener('click', async () => openPreviewModal(item));
     actionTd.appendChild(previewBtn);
+  }
+
+  if (canOpenSharePreview(item)) {
+    tr.addEventListener('dblclick', async (event) => {
+      if (event.target.closest('a,button,select,input,textarea,label')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      await openPreviewModal(item);
+    });
   }
 
   tr.appendChild(nameTd);
