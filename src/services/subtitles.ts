@@ -844,25 +844,47 @@ function extractTextFromApiBody(bodyText: string) {
   if (bodyText.trim().startsWith("WEBVTT") || looksLikeSrt(bodyText)) {
     return bodyText;
   }
+  const parseEnvelope = (payload: any): string | null => {
+    if (!payload || typeof payload !== "object") return null;
+    const segments = Array.isArray(payload.segments) ? payload.segments : null;
+    if (!segments) return null;
+    const cues = segments
+      .map((segment: any) => ({
+        start: Number(segment?.start),
+        end: Number(segment?.end),
+        text: String(segment?.text || "").trim()
+      }))
+      .filter((cue: any) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
+    if (cues.length > 0) {
+      return cuesToVtt(cues as SubtitleCue[]);
+    }
+    const plain = String(payload.text || "").trim();
+    // Valid "no speech" payload.
+    return plain ? plain : "WEBVTT\n\n";
+  };
   try {
     const parsed = JSON.parse(bodyText) as {
       text?: string;
       vtt?: string;
       segments?: Array<{ start?: number; end?: number; text?: string }>;
     };
-    if (Array.isArray(parsed.segments) && parsed.segments.length > 0) {
-      const cues = parsed.segments
-        .map((segment) => ({
-          start: Number(segment?.start),
-          end: Number(segment?.end),
-          text: String(segment?.text || "").trim()
-        }))
-        .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.end > cue.start && cue.text);
-      if (cues.length > 0) {
-        return cuesToVtt(cues as SubtitleCue[]);
+    const fromEnvelope = parseEnvelope(parsed);
+    if (fromEnvelope !== null) {
+      return fromEnvelope;
+    }
+    const nestedText = String(parsed.text || "").trim();
+    if ((nestedText.startsWith("{") || nestedText.startsWith("[")) && nestedText.includes("\"segments\"")) {
+      try {
+        const nestedParsed = JSON.parse(nestedText);
+        const fromNested = parseEnvelope(nestedParsed);
+        if (fromNested !== null) {
+          return fromNested;
+        }
+      } catch {
+        // Keep fallback behavior.
       }
     }
-    const fromJson = String(parsed.vtt || parsed.text || "").trim();
+    const fromJson = String(parsed.vtt || nestedText || "").trim();
     if (!fromJson) {
       throw new Error("subtitle_asr_invalid_payload:missing_text_or_segments");
     }
