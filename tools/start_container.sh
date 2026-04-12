@@ -69,14 +69,15 @@ cat > "$CONF_PATH" <<EOF
 EOF
 
 start_app() {
+  APP_CMD='npm_config_cache=/home/container/.npm npm ci --no-audit --no-fund || npm_config_cache=/home/container/.npm npm install --no-audit --no-fund --package-lock=false'
   # FUSE mount is performed by the node process (startFuse). It needs SYS_ADMIN capability,
   # which is not preserved after gosu to an unprivileged user.
   if [[ "$SMB_ENABLED" == "true" ]]; then
-    bash -lc "npm_config_cache=/home/container/.npm npm install && npm run dev" &
+    bash -lc "$APP_CMD && npm run dev" &
   elif command -v gosu >/dev/null 2>&1; then
-    gosu "${APP_UID}:${APP_GID}" bash -lc "npm_config_cache=/home/container/.npm npm install && npm run dev" &
+    gosu "${APP_UID}:${APP_GID}" bash -lc "$APP_CMD && npm run dev" &
   else
-    bash -lc "npm_config_cache=/home/container/.npm npm install && npm run dev" &
+    bash -lc "$APP_CMD && npm run dev" &
   fi
   APP_PID=$!
 }
