@@ -28,7 +28,7 @@ import { initMirrorSyncControl } from "./services/mirrorSyncControl.js";
 import { getPrometheusContentType, getPrometheusMetrics } from "./services/metrics.js";
 import { initAnalyticsPersistence } from "./services/analytics.js";
 import { initRealtimeServer } from "./services/realtime.js";
-import { getRedisRuntimeState, startRedis } from "./services/redis.js";
+import { bumpCacheVersion, getRedisRuntimeState, startRedis } from "./services/redis.js";
 
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
@@ -57,6 +57,20 @@ app.use((req, _res, next) => {
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+app.use("/api", (req, res, next) => {
+  const method = String(req.method || "").toUpperCase();
+  const mutating = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+  if (!mutating) {
+    return next();
+  }
+  res.on("finish", () => {
+    if (res.statusCode >= 200 && res.statusCode < 400) {
+      void bumpCacheVersion();
+    }
+  });
+  next();
+});
 
 const sessionStore = MongoStore.create({ mongoUrl: config.mongoUri, dbName: config.mongoDb });
 sessionStore.on("error", (err) => {
