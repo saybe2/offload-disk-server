@@ -95,6 +95,7 @@ let UI_ETA_WINDOW_MS = 120000;
 let UI_ETA_MAX_SAMPLES = 30;
 let UPLOAD_RESPONSE_TIMEOUT_MS = 120000;
 let ARCHIVES_PAGE_SIZE = 120;
+const ARCHIVES_PREFETCH_PX = 1200;
 let dragArchiveId = null;
 let dragFolderId = null;
 let foldersById = {};
@@ -207,7 +208,9 @@ function buildArchivesQueryKey() {
     currentView,
     currentFolderId || '',
     scopedOwnerId() || '',
-    isFolderSearchActive() ? searchTerm.toLowerCase() : ''
+    isFolderSearchActive() ? searchTerm.toLowerCase() : '',
+    sortField,
+    sortDir
   ].join('|');
 }
 
@@ -230,6 +233,8 @@ function buildArchivesParams(offset, limit) {
   if (limit > 0) {
     params.set('limit', String(limit));
   }
+  params.set('sort', sortField);
+  params.set('dir', sortDir);
   return params;
 }
 
@@ -257,7 +262,9 @@ function buildRealtimeArchivesSubscription() {
     ownerId: scopedOwnerId(),
     rootOnly: currentView === 'files' && !currentFolderId,
     query: isFolderSearchActive() ? searchTerm : '',
-    limit
+    limit,
+    sort: sortField,
+    dir: sortDir
   };
 }
 
@@ -2005,7 +2012,10 @@ async function loadArchives(options = {}) {
   }
 
   if (currentView === 'files') {
-    await loadActiveSharesMap();
+    // Active shares rarely change; avoid an extra API roundtrip on every appended page.
+    if (!append || (activeArchiveShares.size === 0 && activeFolderShares.size === 0)) {
+      await loadActiveSharesMap();
+    }
   } else {
     activeArchiveShares = new Map();
     activeFolderShares = new Map();
@@ -4270,7 +4280,7 @@ async function maybeLoadMoreArchives() {
   if (!shouldAutoLoadMoreArchives()) return;
   const scrollElement = document.scrollingElement || document.documentElement;
   const remain = scrollElement.scrollHeight - (scrollElement.scrollTop + window.innerHeight);
-  if (remain > 480) return;
+  if (remain > ARCHIVES_PREFETCH_PX) return;
   await loadArchives({ append: true });
 }
 
@@ -4303,7 +4313,7 @@ sortFieldSelect?.addEventListener('change', () => {
     loadArchives();
     return;
   }
-  renderArchives();
+  loadArchives();
 });
 
 sortDirSelect?.addEventListener('change', () => {
@@ -4313,7 +4323,7 @@ sortDirSelect?.addEventListener('change', () => {
     loadArchives();
     return;
   }
-  renderArchives();
+  loadArchives();
 });
 
 viewModeSelect?.addEventListener('change', () => {
