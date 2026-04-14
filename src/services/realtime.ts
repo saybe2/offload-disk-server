@@ -25,6 +25,8 @@ interface ArchiveSubscription {
   rootOnly: boolean;
   query: string;
   limit: number;
+  sortField: "name" | "date" | "size" | "views" | "downloads" | "type";
+  sortDir: "asc" | "desc";
   lastById: Map<string, string>;
   lastOrder: string[];
   lastTotal: number;
@@ -102,6 +104,55 @@ function normalizeLimit(value: unknown) {
   return Math.min(Math.max(num, MIN_LIMIT), MAX_LIMIT);
 }
 
+function normalizeSortField(value: unknown): ArchiveSubscription["sortField"] {
+  const raw = normalizeString(value).toLowerCase();
+  if (
+    raw === "name" ||
+    raw === "date" ||
+    raw === "size" ||
+    raw === "views" ||
+    raw === "downloads" ||
+    raw === "type"
+  ) {
+    return raw;
+  }
+  return "name";
+}
+
+function normalizeSortDir(value: unknown): ArchiveSubscription["sortDir"] {
+  return normalizeString(value).toLowerCase() === "desc" ? "desc" : "asc";
+}
+
+function buildArchiveSort(
+  sortField: ArchiveSubscription["sortField"],
+  sortDir: ArchiveSubscription["sortDir"]
+) {
+  const dir: 1 | -1 = sortDir === "desc" ? -1 : 1;
+  const fallbackCreatedAt: 1 | -1 = dir;
+  const fallbackId: 1 | -1 = dir;
+  if (sortField === "date") {
+    return { contentModifiedAt: dir, createdAt: dir, _id: fallbackId } as Record<string, 1 | -1>;
+  }
+  if (sortField === "size") {
+    return { originalSize: dir, createdAt: fallbackCreatedAt, _id: fallbackId } as Record<string, 1 | -1>;
+  }
+  if (sortField === "views") {
+    return { "files.0.previewCount": dir, createdAt: fallbackCreatedAt, _id: fallbackId } as Record<string, 1 | -1>;
+  }
+  if (sortField === "downloads") {
+    return { "files.0.downloadCount": dir, createdAt: fallbackCreatedAt, _id: fallbackId } as Record<string, 1 | -1>;
+  }
+  if (sortField === "type") {
+    return {
+      "files.0.detectedTypeLabel": dir,
+      "files.0.detectedKind": dir,
+      displayName: dir,
+      _id: fallbackId
+    } as Record<string, 1 | -1>;
+  }
+  return { displayName: dir, createdAt: fallbackCreatedAt, _id: fallbackId } as Record<string, 1 | -1>;
+}
+
 function sendJson(ws: WebSocket, payload: unknown) {
   if (ws.readyState !== 1) return;
   ws.send(JSON.stringify(payload));
@@ -145,8 +196,9 @@ async function fetchArchiveWindow(client: RealtimeClient, sub: ArchiveSubscripti
   }
 
   const total = await Archive.countDocuments(filter);
+  const sort = buildArchiveSort(sub.sortField, sub.sortDir);
   const archives = await Archive.find(filter)
-    .sort({ createdAt: -1 })
+    .sort(sort)
     .limit(sub.limit)
     .lean();
   const hasMore = archives.length < total;
@@ -257,6 +309,8 @@ function parseArchiveSubscription(message: Record<string, unknown>): ArchiveSubs
     rootOnly: message.rootOnly === true,
     query,
     limit: normalizeLimit(message.limit),
+    sortField: normalizeSortField(message.sort),
+    sortDir: normalizeSortDir(message.dir),
     lastById: new Map(),
     lastOrder: [],
     lastTotal: -1,

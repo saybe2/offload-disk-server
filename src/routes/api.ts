@@ -227,6 +227,53 @@ function resolveRequestedUserId(req: Request) {
   return { ok: true as const, value: new Types.ObjectId(raw) };
 }
 
+type ArchiveSortField = "name" | "date" | "size" | "views" | "downloads" | "type";
+
+function normalizeArchiveSortField(raw: unknown): ArchiveSortField {
+  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (
+    value === "name" ||
+    value === "date" ||
+    value === "size" ||
+    value === "views" ||
+    value === "downloads" ||
+    value === "type"
+  ) {
+    return value;
+  }
+  return "name";
+}
+
+function normalizeArchiveSortDir(raw: unknown): 1 | -1 {
+  return String(raw || "").trim().toLowerCase() === "desc" ? -1 : 1;
+}
+
+function resolveArchiveSort(rawField: unknown, rawDir: unknown) {
+  const field = normalizeArchiveSortField(rawField);
+  const dir = normalizeArchiveSortDir(rawDir);
+  const fallbackCreatedAt = dir === 1 ? 1 : -1;
+  const fallbackId = dir === 1 ? 1 : -1;
+  let sort: Record<string, 1 | -1>;
+  if (field === "date") {
+    sort = { contentModifiedAt: dir, createdAt: dir, _id: fallbackId };
+  } else if (field === "size") {
+    sort = { originalSize: dir, createdAt: fallbackCreatedAt, _id: fallbackId };
+  } else if (field === "views") {
+    sort = { "files.0.previewCount": dir, createdAt: fallbackCreatedAt, _id: fallbackId };
+  } else if (field === "downloads") {
+    sort = { "files.0.downloadCount": dir, createdAt: fallbackCreatedAt, _id: fallbackId };
+  } else if (field === "type") {
+    sort = { "files.0.detectedTypeLabel": dir, "files.0.detectedKind": dir, displayName: dir, _id: fallbackId };
+  } else {
+    sort = { displayName: dir, createdAt: fallbackCreatedAt, _id: fallbackId };
+  }
+  return {
+    field,
+    dir: dir === 1 ? "asc" as const : "desc" as const,
+    sort
+  };
+}
+
 function isTransientError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err);
   if (/fetch failed/i.test(message)) return true;
@@ -1065,6 +1112,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
   const folderId = (req.query.folderId as string) || null;
   const rootOnly = req.query.root === "1";
   const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const sortSpec = resolveArchiveSort(req.query.sort, req.query.dir);
   const offsetRaw = Number.parseInt(String(req.query.offset || "0"), 10);
   const limitRaw = Number.parseInt(String(req.query.limit || "0"), 10);
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0;
@@ -1104,6 +1152,8 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
     `folder=${cacheToken(folderId || "")}`,
     `root=${rootOnly ? 1 : 0}`,
     `q=${cacheToken(queryRaw)}`,
+    `sort=${sortSpec.field}`,
+    `dir=${sortSpec.dir}`,
     `offset=${offset}`,
     `limit=${limit}`
   ].join(":");
@@ -1117,7 +1167,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
     total = await Archive.countDocuments(filter);
   }
 
-  const query = Archive.find(filter).sort({ createdAt: -1 });
+  const query = Archive.find(filter).sort(sortSpec.sort);
   if (limit > 0) {
     query.skip(offset).limit(limit);
   }
