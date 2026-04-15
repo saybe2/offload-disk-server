@@ -97,6 +97,37 @@ const upload = multer({
 
 export const apiRouter = Router();
 
+const ARCHIVE_LIST_PROJECTION = {
+  _id: 1,
+  folderId: 1,
+  status: 1,
+  isBundle: 1,
+  priority: 1,
+  deleting: 1,
+  deleteRequestedAt: 1,
+  deletedParts: 1,
+  deleteTotalParts: 1,
+  uploadedParts: 1,
+  totalParts: 1,
+  originalSize: 1,
+  encryptedSize: 1,
+  contentModifiedAt: 1,
+  createdAt: 1,
+  displayName: 1,
+  name: 1,
+  "files.name": 1,
+  "files.originalName": 1,
+  "files.size": 1,
+  "files.contentModifiedAt": 1,
+  "files.downloadCount": 1,
+  "files.previewCount": 1,
+  "files.detectedKind": 1,
+  "files.detectedTypeLabel": 1,
+  "files.deletedAt": 1,
+  "files.transcode.status": 1,
+  "files.transcode.archiveId": 1
+} as const;
+
 function sanitizeName(name: string) {
   return sanitizeFilename(name);
 }
@@ -1167,7 +1198,7 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
     total = await Archive.countDocuments(filter);
   }
 
-  const query = Archive.find(filter).sort(sortSpec.sort);
+  const query = Archive.find(filter).select(ARCHIVE_LIST_PROJECTION).sort(sortSpec.sort);
   if (limit > 0) {
     query.skip(offset).limit(limit);
   }
