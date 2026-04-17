@@ -94,7 +94,8 @@ app.get("/api/ui-config", (_req, res) => {
     previewMaxMiB: config.previewMaxMiB,
     refreshMs: config.uiRefreshMs,
     etaWindowMs: config.uiEtaWindowMs,
-    etaMaxSamples: config.uiEtaMaxSamples
+    etaMaxSamples: config.uiEtaMaxSamples,
+    archivesPageSize: config.uiArchivesPageSize
   });
 });
 
