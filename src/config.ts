@@ -109,6 +109,7 @@ export const config = {
   uiRefreshMs: toNumber(process.env.UI_REFRESH_MS, 5000),
   uiEtaWindowMs: toNumber(process.env.UI_ETA_WINDOW_MS, 120000),
   uiEtaMaxSamples: toNumber(process.env.UI_ETA_MAX_SAMPLES, 30),
+  uiArchivesPageSize: Math.max(40, Math.min(500, toNumber(process.env.UI_ARCHIVES_PAGE_SIZE, 160))),
   outboundProxyEnabled: (process.env.OUTBOUND_PROXY_ENABLED || "false") === "true",
   outboundProxyUrl: (process.env.OUTBOUND_PROXY_URL || "").trim(),
   outboundProxyTargets: toList(process.env.OUTBOUND_PROXY_TARGETS, defaultProxyTargets),
