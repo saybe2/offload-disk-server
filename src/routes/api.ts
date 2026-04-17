@@ -443,6 +443,277 @@ apiRouter.patch("/me/settings", requireAuth, async (req, res) => {
   return res.json({ ok: true, transcodeCopiesEnabled });
 });
 
+apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
+  const payload = req.body as any;
+  const originalName = sanitizeFilename(String(payload?.name || "").trim());
+  const originalSize = Number(payload?.size || 0);
+  const chunkSizeBytes = Math.max(1024, Number(payload?.chunkSizeBytes || computed.chunkSizeBytes));
+  const folderIdRaw = typeof payload?.folderId === "string" ? payload.folderId.trim() : "";
+  const rawParts = Array.isArray(payload?.parts) ? payload.parts : [];
+
+  if (!originalName) {
+    return res.status(400).json({ error: "missing_name" });
+  }
+  if (!Number.isFinite(originalSize) || originalSize <= 0) {
+    return res.status(400).json({ error: "bad_size" });
+  }
+  if (rawParts.length === 0) {
+    return res.status(400).json({ error: "missing_parts" });
+  }
+  if (!payload?.uploadEncrypted) {
+    return res.status(400).json({ error: "plain_parts_not_supported" });
+  }
+
+  const user = await User.findById(req.session.userId);
+  if (!user) {
+    return res.status(401).json({ error: "auth_required" });
+  }
+  if (user.quotaBytes > 0 && user.usedBytes + originalSize > user.quotaBytes) {
+    return res.status(413).json({ error: "quota_exceeded" });
+  }
+
+  let folderRef: Types.ObjectId | null = null;
+  let priority = 2;
+  if (folderIdRaw) {
+    if (!Types.ObjectId.isValid(folderIdRaw)) {
+      return res.status(400).json({ error: "invalid_folder" });
+    }
+    const folder = await Folder.findById(folderIdRaw).lean();
+    if (!folder || (req.session.role !== "admin" && folder.userId.toString() !== req.session.userId)) {
+      return res.status(400).json({ error: "invalid_folder" });
+    }
+    folderRef = folder._id as Types.ObjectId;
+    priority = folder.priority ?? 2;
+  }
+
+  type ImportedPart = {
+    index: number;
+    size: number;
+    plainSize: number;
+    hash: string;
+    url: string;
+    messageId: string;
+    webhookId: string;
+    provider: "discord" | "telegram";
+    telegramFileId: string;
+    telegramChatId: string;
+    mirrorProvider: "discord" | "telegram" | null;
+    mirrorUrl: string;
+    mirrorMessageId: string;
+    mirrorWebhookId: string;
+    mirrorTelegramFileId: string;
+    mirrorTelegramChatId: string;
+    mirrorPending: boolean;
+    mirrorError: string;
+    iv: string;
+    authTag: string;
+  };
+
+  const parts: ImportedPart[] = rawParts
+    .map((part: any) => {
+      const index = Number(part?.index);
+      const size = Number(part?.size);
+      const plainSize = Number(part?.plainSize || size);
+      const hash = String(part?.hash || "").trim();
+      const url = String(part?.url || "").trim();
+      const messageId = String(part?.messageId || "").trim();
+      const webhookId = String(part?.webhookId || "").trim();
+      const provider = String(part?.provider || "").toLowerCase() === "telegram" ? "telegram" : "discord";
+      const mirrorProviderRaw = String(part?.mirrorProvider || "").toLowerCase();
+      const mirrorProvider = mirrorProviderRaw === "discord" || mirrorProviderRaw === "telegram" ? mirrorProviderRaw : null;
+      const iv = String(part?.iv || "").trim();
+      const authTag = String(part?.authTag || "").trim();
+      return {
+        index,
+        size,
+        plainSize,
+        hash,
+        url,
+        messageId,
+        webhookId: webhookId || (provider === "telegram" ? "telegram" : "external"),
+        provider,
+        telegramFileId: String(part?.telegramFileId || "").trim(),
+        telegramChatId: String(part?.telegramChatId || "").trim(),
+        mirrorProvider,
+        mirrorUrl: String(part?.mirrorUrl || "").trim(),
+        mirrorMessageId: String(part?.mirrorMessageId || "").trim(),
+        mirrorWebhookId: String(part?.mirrorWebhookId || "").trim(),
+        mirrorTelegramFileId: String(part?.mirrorTelegramFileId || "").trim(),
+        mirrorTelegramChatId: String(part?.mirrorTelegramChatId || "").trim(),
+        mirrorPending: !!part?.mirrorPending,
+        mirrorError: String(part?.mirrorError || "").slice(0, 500),
+        iv,
+        authTag
+      };
+    })
+    .sort((a: ImportedPart, b: ImportedPart) => a.index - b.index);
+
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (!Number.isInteger(part.index) || part.index !== i) {
+      return res.status(400).json({ error: "bad_part_index" });
+    }
+    if (!Number.isFinite(part.size) || part.size <= 0) {
+      return res.status(400).json({ error: "bad_part_size" });
+    }
+    if (!Number.isFinite(part.plainSize) || part.plainSize <= 0) {
+      return res.status(400).json({ error: "bad_part_plain_size" });
+    }
+    if (!part.hash || !part.url || !part.messageId || !part.iv || !part.authTag) {
+      return res.status(400).json({ error: "bad_part_fields" });
+    }
+  }
+
+  const plainTotal = parts.reduce((sum: number, part: ImportedPart) => sum + part.plainSize, 0);
+  if (plainTotal !== originalSize) {
+    return res.status(400).json({ error: "size_mismatch" });
+  }
+  const uploadedBytes = parts.reduce((sum: number, part: ImportedPart) => sum + part.size, 0);
+
+  const modifiedAt = payload?.contentModifiedAt ? new Date(payload.contentModifiedAt) : new Date();
+  const contentModifiedAt = Number.isNaN(modifiedAt.getTime()) ? new Date() : modifiedAt;
+  const detected = detectFileTypeFromName(originalName);
+  const detectedKind = String(payload?.detectedKind || detected.kind || "").trim();
+  const detectedTypeLabel = String(payload?.detectedTypeLabel || detected.label || "").trim();
+
+  const normalizeArtifact = (value: any, kind: "thumbnail" | "subtitle") => {
+    if (!value || typeof value !== "object") return null;
+    const url = String(value?.url || "").trim();
+    if (!url) return null;
+    const provider = String(value?.provider || "").toLowerCase() === "telegram" ? "telegram" : "discord";
+    const webhookId = String(value?.webhookId || "").trim() || (provider === "telegram" ? "telegram" : "external");
+    const contentTypeDefault = kind === "thumbnail" ? "image/webp" : "text/vtt; charset=utf-8";
+    return {
+      contentType: String(value?.contentType || contentTypeDefault).trim() || contentTypeDefault,
+      size: Math.max(0, Number(value?.size || 0)),
+      localPath: "",
+      language: String(value?.language || "auto").trim() || "auto",
+      provider,
+      url,
+      messageId: String(value?.messageId || "").trim(),
+      webhookId,
+      telegramFileId: String(value?.telegramFileId || "").trim(),
+      telegramChatId: String(value?.telegramChatId || "").trim(),
+      mirrorProvider:
+        String(value?.mirrorProvider || "").toLowerCase() === "telegram" || String(value?.mirrorProvider || "").toLowerCase() === "discord"
+          ? String(value?.mirrorProvider || "").toLowerCase()
+          : null,
+      mirrorUrl: String(value?.mirrorUrl || "").trim(),
+      mirrorMessageId: String(value?.mirrorMessageId || "").trim(),
+      mirrorWebhookId: String(value?.mirrorWebhookId || "").trim(),
+      mirrorTelegramFileId: String(value?.mirrorTelegramFileId || "").trim(),
+      mirrorTelegramChatId: String(value?.mirrorTelegramChatId || "").trim(),
+      mirrorPending: !!value?.mirrorPending,
+      mirrorError: String(value?.mirrorError || "").slice(0, 500),
+      updatedAt: new Date(),
+      failedAt: null,
+      error: ""
+    };
+  };
+
+  const thumbnail = normalizeArtifact(payload?.thumbnail, "thumbnail");
+  const subtitle = normalizeArtifact(payload?.subtitle, "subtitle");
+
+  const now = new Date();
+  const archive = await Archive.create({
+    userId: user._id,
+    name: originalName,
+    displayName: originalName,
+    downloadName: originalName,
+    isBundle: false,
+    encryptionVersion: 2,
+    folderId: folderRef,
+    priority,
+    priorityOverride: false,
+    status: "ready",
+    retryCount: 0,
+    contentModifiedAt,
+    originalSize,
+    encryptedSize: uploadedBytes,
+    uploadedBytes,
+    uploadedParts: parts.length,
+    totalParts: parts.length,
+    deleteTotalParts: 0,
+    deletedParts: 0,
+    chunkSizeBytes,
+    stagingDir: path.join(config.cacheDir, "external", `${Date.now()}_${nanoid(8)}`),
+    files: [
+      {
+        path: "",
+        name: originalName,
+        originalName,
+        size: originalSize,
+        contentModifiedAt,
+        downloadCount: 0,
+        previewCount: 0,
+        detectedKind,
+        detectedTypeLabel,
+        thumbnail: thumbnail
+          ? {
+              contentType: thumbnail.contentType,
+              size: thumbnail.size,
+              localPath: "",
+              url: thumbnail.url,
+              messageId: thumbnail.messageId,
+              webhookId: thumbnail.webhookId,
+              updatedAt: thumbnail.updatedAt,
+              failedAt: null,
+              error: ""
+            }
+          : undefined,
+        subtitle: subtitle
+          ? {
+              contentType: subtitle.contentType,
+              size: subtitle.size,
+              localPath: "",
+              language: subtitle.language,
+              provider: subtitle.provider,
+              url: subtitle.url,
+              messageId: subtitle.messageId,
+              webhookId: subtitle.webhookId,
+              telegramFileId: subtitle.telegramFileId,
+              telegramChatId: subtitle.telegramChatId,
+              mirrorProvider: subtitle.mirrorProvider,
+              mirrorUrl: subtitle.mirrorUrl,
+              mirrorMessageId: subtitle.mirrorMessageId,
+              mirrorWebhookId: subtitle.mirrorWebhookId,
+              mirrorTelegramFileId: subtitle.mirrorTelegramFileId,
+              mirrorTelegramChatId: subtitle.mirrorTelegramChatId,
+              mirrorPending: subtitle.mirrorPending,
+              mirrorError: subtitle.mirrorError,
+              updatedAt: subtitle.updatedAt,
+              failedAt: null,
+              error: ""
+            }
+          : undefined
+      }
+    ],
+    parts,
+    iv: "",
+    authTag: "",
+    error: "",
+    trashedAt: null,
+    deleteRequestedAt: null,
+    deletedAt: null,
+    deleting: false,
+    createdAt: now,
+    updatedAt: now
+  });
+
+  await User.updateOne({ _id: user._id }, { $inc: { usedBytes: originalSize } });
+
+  if (!thumbnail && supportsThumbnail(originalName, detectedKind)) {
+    queueArchiveThumbnails(archive.id);
+  }
+  if (!subtitle && supportsSubtitle(originalName, detectedKind)) {
+    queueArchiveSubtitles(archive.id);
+  }
+  queueArchiveTranscodes(archive.id);
+
+  log("api", `import external ${archive.id} size=${originalSize} parts=${parts.length}`);
+  return res.json({ ok: true, id: archive.id });
+});
+
 apiRouter.post("/upload", requireAuth, upload.any(), async (req, res) => {
   let aborted = false;
   let stagingDir: string | null = null;
