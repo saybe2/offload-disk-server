@@ -217,6 +217,7 @@ Defaults are from `.env.example`.
 - `UI_REFRESH_MS` (`5000`) - client polling interval for file list/status refresh.
 - `UI_ETA_WINDOW_MS` (`120000`) - smoothing window for ETA/speed estimation.
 - `UI_ETA_MAX_SAMPLES` (`30`) - max sample count used for ETA smoothing.
+- `UI_ARCHIVES_PAGE_SIZE` (`160`) - number of archives fetched per page for infinite scroll (higher = fewer requests, larger payloads).
 
 ### Thumbnails
 - `THUMBNAIL_SIZE_PX` (`320`) - output thumbnail side size target.
