@@ -41,6 +41,10 @@ process.on("uncaughtException", (err) => {
     log("db", `transient connection failure ${message}`);
     return;
   }
+  if (/Archive validation failed: .*files\.\d+\.path: Path `path` is required\./i.test(message)) {
+    log("server", `archive path validation guard ${message}`);
+    return;
+  }
   log("server", `uncaught exception ${message}`);
   process.exit(1);
 });
