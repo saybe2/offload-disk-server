@@ -235,7 +235,7 @@ async function decryptPartToBuffer(
   const ivB64 = part.iv || "";
   const authTagB64 = part.authTag || "";
   if (!ivB64 || !authTagB64) {
-    throw new Error(`part_crypto_missing:${part.index}`);
+    return await fs.promises.readFile(partPath);
   }
   const iv = Buffer.from(ivB64, "base64");
   const authTag = Buffer.from(authTagB64, "base64");

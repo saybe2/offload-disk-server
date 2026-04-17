@@ -450,6 +450,7 @@ apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
   const chunkSizeBytes = Math.max(1024, Number(payload?.chunkSizeBytes || computed.chunkSizeBytes));
   const folderIdRaw = typeof payload?.folderId === "string" ? payload.folderId.trim() : "";
   const rawParts = Array.isArray(payload?.parts) ? payload.parts : [];
+  const uploadEncrypted = !!payload?.uploadEncrypted;
 
   if (!originalName) {
     return res.status(400).json({ error: "missing_name" });
@@ -460,10 +461,6 @@ apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
   if (rawParts.length === 0) {
     return res.status(400).json({ error: "missing_parts" });
   }
-  if (!payload?.uploadEncrypted) {
-    return res.status(400).json({ error: "plain_parts_not_supported" });
-  }
-
   const user = await User.findById(req.session.userId);
   if (!user) {
     return res.status(401).json({ error: "auth_required" });
@@ -559,8 +556,11 @@ apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
     if (!Number.isFinite(part.plainSize) || part.plainSize <= 0) {
       return res.status(400).json({ error: "bad_part_plain_size" });
     }
-    if (!part.hash || !part.url || !part.messageId || !part.iv || !part.authTag) {
+    if (!part.hash || !part.url || !part.messageId) {
       return res.status(400).json({ error: "bad_part_fields" });
+    }
+    if (uploadEncrypted && (!part.iv || !part.authTag)) {
+      return res.status(400).json({ error: "missing_part_crypto" });
     }
   }
 
@@ -621,7 +621,7 @@ apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
     displayName: originalName,
     downloadName: originalName,
     isBundle: false,
-    encryptionVersion: 2,
+    encryptionVersion: uploadEncrypted ? 2 : 0,
     folderId: folderRef,
     priority,
     priorityOverride: false,
