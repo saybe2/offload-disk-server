@@ -199,6 +199,7 @@ async function migrateArchives() {
       { "files.transcode.variants": { $exists: false } },
       { "files.subtitleTracks": { $exists: false } },
       { "files.path": { $exists: false } },
+      { "files.path": null },
       { "files.path": "" }
     ]
   }).lean();
