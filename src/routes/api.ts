@@ -615,90 +615,98 @@ apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
   const subtitle = normalizeArtifact(payload?.subtitle, "subtitle");
 
   const now = new Date();
-  const archive = await Archive.create({
-    userId: user._id,
-    name: originalName,
-    displayName: originalName,
-    downloadName: originalName,
-    isBundle: false,
-    encryptionVersion: uploadEncrypted ? 2 : 0,
-    folderId: folderRef,
-    priority,
-    priorityOverride: false,
-    status: "ready",
-    retryCount: 0,
-    contentModifiedAt,
-    originalSize,
-    encryptedSize: uploadedBytes,
-    uploadedBytes,
-    uploadedParts: parts.length,
-    totalParts: parts.length,
-    deleteTotalParts: 0,
-    deletedParts: 0,
-    chunkSizeBytes,
-    stagingDir: path.join(config.cacheDir, "external", `${Date.now()}_${nanoid(8)}`),
-    files: [
-      {
-        path: "",
-        name: originalName,
-        originalName,
-        size: originalSize,
-        contentModifiedAt,
-        downloadCount: 0,
-        previewCount: 0,
-        detectedKind,
-        detectedTypeLabel,
-        thumbnail: thumbnail
-          ? {
-              contentType: thumbnail.contentType,
-              size: thumbnail.size,
-              localPath: "",
-              url: thumbnail.url,
-              messageId: thumbnail.messageId,
-              webhookId: thumbnail.webhookId,
-              updatedAt: thumbnail.updatedAt,
-              failedAt: null,
-              error: ""
-            }
-          : undefined,
-        subtitle: subtitle
-          ? {
-              contentType: subtitle.contentType,
-              size: subtitle.size,
-              localPath: "",
-              language: subtitle.language,
-              provider: subtitle.provider,
-              url: subtitle.url,
-              messageId: subtitle.messageId,
-              webhookId: subtitle.webhookId,
-              telegramFileId: subtitle.telegramFileId,
-              telegramChatId: subtitle.telegramChatId,
-              mirrorProvider: subtitle.mirrorProvider,
-              mirrorUrl: subtitle.mirrorUrl,
-              mirrorMessageId: subtitle.mirrorMessageId,
-              mirrorWebhookId: subtitle.mirrorWebhookId,
-              mirrorTelegramFileId: subtitle.mirrorTelegramFileId,
-              mirrorTelegramChatId: subtitle.mirrorTelegramChatId,
-              mirrorPending: subtitle.mirrorPending,
-              mirrorError: subtitle.mirrorError,
-              updatedAt: subtitle.updatedAt,
-              failedAt: null,
-              error: ""
-            }
-          : undefined
-      }
-    ],
-    parts,
-    iv: "",
-    authTag: "",
-    error: "",
-    trashedAt: null,
-    deleteRequestedAt: null,
-    deletedAt: null,
-    deleting: false,
-    createdAt: now,
-    updatedAt: now
-  });
+  let archive: any;
+  try {
+    archive = await Archive.create({
+      userId: user._id,
+      name: originalName,
+      displayName: originalName,
+      downloadName: originalName,
+      isBundle: false,
+      encryptionVersion: uploadEncrypted ? 2 : 0,
+      folderId: folderRef,
+      priority,
+      priorityOverride: false,
+      status: "ready",
+      retryCount: 0,
+      contentModifiedAt,
+      originalSize,
+      encryptedSize: uploadedBytes,
+      uploadedBytes,
+      uploadedParts: parts.length,
+      totalParts: parts.length,
+      deleteTotalParts: 0,
+      deletedParts: 0,
+      chunkSizeBytes,
+      stagingDir: path.join(config.cacheDir, "external", `${Date.now()}_${nanoid(8)}`),
+      files: [
+        {
+          // External import is a single-file archive, so file path equals name.
+          path: originalName,
+          name: originalName,
+          originalName,
+          size: originalSize,
+          contentModifiedAt,
+          downloadCount: 0,
+          previewCount: 0,
+          detectedKind,
+          detectedTypeLabel,
+          thumbnail: thumbnail
+            ? {
+                contentType: thumbnail.contentType,
+                size: thumbnail.size,
+                localPath: "",
+                url: thumbnail.url,
+                messageId: thumbnail.messageId,
+                webhookId: thumbnail.webhookId,
+                updatedAt: thumbnail.updatedAt,
+                failedAt: null,
+                error: ""
+              }
+            : undefined,
+          subtitle: subtitle
+            ? {
+                contentType: subtitle.contentType,
+                size: subtitle.size,
+                localPath: "",
+                language: subtitle.language,
+                provider: subtitle.provider,
+                url: subtitle.url,
+                messageId: subtitle.messageId,
+                webhookId: subtitle.webhookId,
+                telegramFileId: subtitle.telegramFileId,
+                telegramChatId: subtitle.telegramChatId,
+                mirrorProvider: subtitle.mirrorProvider,
+                mirrorUrl: subtitle.mirrorUrl,
+                mirrorMessageId: subtitle.mirrorMessageId,
+                mirrorWebhookId: subtitle.mirrorWebhookId,
+                mirrorTelegramFileId: subtitle.mirrorTelegramFileId,
+                mirrorTelegramChatId: subtitle.mirrorTelegramChatId,
+                mirrorPending: subtitle.mirrorPending,
+                mirrorError: subtitle.mirrorError,
+                updatedAt: subtitle.updatedAt,
+                failedAt: null,
+                error: ""
+              }
+            : undefined
+        }
+      ],
+      parts,
+      iv: "",
+      authTag: "",
+      error: "",
+      trashedAt: null,
+      deleteRequestedAt: null,
+      deletedAt: null,
+      deleting: false,
+      createdAt: now,
+      updatedAt: now
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log("api", `import external failed validation: ${message}`);
+    return res.status(400).json({ error: "invalid_import_payload", details: message.slice(0, 200) });
+  }
 
   await User.updateOne({ _id: user._id }, { $inc: { usedBytes: originalSize } });
 
