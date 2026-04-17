@@ -197,12 +197,17 @@ async function migrateArchives() {
       { sourceFileIndex: { $exists: false } },
       { transcodeAudioTrack: { $exists: false } },
       { "files.transcode.variants": { $exists: false } },
-      { "files.subtitleTracks": { $exists: false } }
+      { "files.subtitleTracks": { $exists: false } },
+      { "files.path": { $exists: false } },
+      { "files.path": "" }
     ]
   }).lean();
 
   for await (const doc of cursor) {
-    const files = (doc.files || []).map((f: any) => {
+    const files = (doc.files || []).map((f: any, index: number) => {
+      const originalName = String(f?.originalName || f?.name || path.basename(String(f?.path || "")) || `file_${index}`);
+      const normalizedPath = String(f?.path || "").trim() || originalName;
+      const normalizedName = String(f?.name || "").trim() || path.basename(normalizedPath) || originalName;
       const normalizedVariants = Array.isArray(f?.transcode?.variants)
         ? f.transcode.variants
             .map((variant: any) => ({
@@ -229,7 +234,9 @@ async function migrateArchives() {
       }
       return {
         ...f,
-        originalName: f.originalName || f.name || path.basename(f.path || "file"),
+        path: normalizedPath,
+        name: normalizedName,
+        originalName,
         subtitleTracks: Array.isArray(f?.subtitleTracks) ? f.subtitleTracks : [],
         transcode: {
           archiveId: String(f?.transcode?.archiveId || ""),
