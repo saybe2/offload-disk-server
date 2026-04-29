@@ -10,6 +10,7 @@ import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./di
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { noteThumbnailDone, noteThumbnailError, noteThumbnailStarted } from "./analytics.js";
 import { canServerRenderHeif, renderImageToWebp } from "./imageRerender.js";
+import { buildTelegramFileUrl, isTelegramReady, uploadBufferToTelegram } from "./telegram.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
 const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob", ".ts"]);
@@ -113,55 +114,162 @@ function thumbTargetPath(archiveId: string, fileIndex: number) {
   return path.join(config.cacheDir, "thumbs", `${archiveId}_${fileIndex}.webp`);
 }
 
-async function repairThumbUrl(
-  archiveId: string,
-  fileIndex: number,
-  webhookId: string,
-  messageId: string
-) {
+type ThumbCopy = {
+  provider: "discord" | "telegram";
+  url: string;
+  messageId: string;
+  webhookId: string;
+  telegramFileId: string;
+};
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function isDownloadAuthExpired(message: string) {
+  return /download_failed:(401|403|404)/.test(message);
+}
+
+function isDownloadTransient(message: string) {
+  if (/download_failed:(429|5\d\d)/.test(message)) return true;
+  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up/i.test(message);
+}
+
+function resolveThumbProvider(thumb: any): "discord" | "telegram" {
+  if (String(thumb?.provider || "").toLowerCase() === "telegram") return "telegram";
+  if (String(thumb?.webhookId || "").toLowerCase() === "telegram") return "telegram";
+  return "discord";
+}
+
+function resolveThumbMirrorProvider(thumb: any): "discord" | "telegram" | null {
+  const raw = String(thumb?.mirrorProvider || "").toLowerCase();
+  if (raw === "discord" || raw === "telegram") return raw;
+  if (String(thumb?.mirrorWebhookId || "").toLowerCase() === "telegram") return "telegram";
+  return null;
+}
+
+async function refreshDiscordThumbUrl(webhookId: string, messageId: string) {
   const hook = await Webhook.findById(webhookId).lean();
   if (!hook?.url) {
-    return null;
+    throw new Error("missing_webhook");
   }
   const payload = await fetchWebhookMessage(hook.url, messageId);
   const freshUrl = payload.attachments?.[0]?.url;
   if (!freshUrl) {
-    return null;
+    throw new Error("missing_attachment_url");
   }
+  return freshUrl;
+}
+
+async function refreshPrimaryThumbUrl(archiveId: string, fileIndex: number, thumb: any) {
+  const provider = resolveThumbProvider(thumb);
+  const freshUrl =
+    provider === "telegram"
+      ? await buildTelegramFileUrl(String(thumb?.telegramFileId || ""))
+      : await refreshDiscordThumbUrl(String(thumb?.webhookId || ""), String(thumb?.messageId || ""));
   await Archive.updateOne(
     { _id: archiveId },
     { $set: { [`files.${fileIndex}.thumbnail.url`]: freshUrl, [`files.${fileIndex}.thumbnail.updatedAt`]: new Date() } }
   );
+  thumb.url = freshUrl;
   return freshUrl;
 }
 
-async function tryRestoreThumbFromDiscord(
+async function refreshMirrorThumbUrl(archiveId: string, fileIndex: number, thumb: any) {
+  const provider = resolveThumbMirrorProvider(thumb);
+  if (!provider) {
+    throw new Error("missing_mirror_provider");
+  }
+  const freshUrl =
+    provider === "telegram"
+      ? await buildTelegramFileUrl(String(thumb?.mirrorTelegramFileId || ""))
+      : await refreshDiscordThumbUrl(
+          String(thumb?.mirrorWebhookId || ""),
+          String(thumb?.mirrorMessageId || "")
+        );
+  await Archive.updateOne(
+    { _id: archiveId },
+    { $set: { [`files.${fileIndex}.thumbnail.mirrorUrl`]: freshUrl, [`files.${fileIndex}.thumbnail.updatedAt`]: new Date() } }
+  );
+  thumb.mirrorUrl = freshUrl;
+  return freshUrl;
+}
+
+async function downloadThumbCopy(
+  copy: ThumbCopy,
+  localPath: string,
+  refreshUrl?: () => Promise<string>
+) {
+  let refreshed = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await downloadToFile(copy.url, localPath);
+      return true;
+    } catch (err) {
+      const message = toMessage(err);
+      if (!refreshed && refreshUrl && isDownloadAuthExpired(message)) {
+        copy.url = await refreshUrl();
+        refreshed = true;
+        continue;
+      }
+      if (isDownloadTransient(message) && attempt < 2) {
+        await sleep(500 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+}
+
+async function tryRestoreThumbFromRemote(
   archive: ArchiveDoc,
   fileIndex: number,
   localPath: string
 ) {
   const thumb = archive.files?.[fileIndex]?.thumbnail;
-  const url = thumb?.url || "";
-  const webhookId = thumb?.webhookId || "";
-  const messageId = thumb?.messageId || "";
-  if (!url || !webhookId || !messageId) {
+  if (!thumb) {
     return false;
   }
 
+  const primaryCopy: ThumbCopy | null =
+    thumb.url && thumb.messageId
+      ? {
+          provider: resolveThumbProvider(thumb),
+          url: String(thumb.url || ""),
+          messageId: String(thumb.messageId || ""),
+          webhookId: String(thumb.webhookId || ""),
+          telegramFileId: String(thumb.telegramFileId || "")
+        }
+      : null;
+
+  if (primaryCopy) {
+    try {
+      return await downloadThumbCopy(primaryCopy, localPath, () => refreshPrimaryThumbUrl(archive.id, fileIndex, thumb));
+    } catch {
+      // try mirror below
+    }
+  }
+
+  const mirrorProvider = resolveThumbMirrorProvider(thumb);
+  const mirrorCopy: ThumbCopy | null =
+    mirrorProvider && thumb.mirrorUrl && thumb.mirrorMessageId
+      ? {
+          provider: mirrorProvider,
+          url: String(thumb.mirrorUrl || ""),
+          messageId: String(thumb.mirrorMessageId || ""),
+          webhookId: String(thumb.mirrorWebhookId || ""),
+          telegramFileId: String(thumb.mirrorTelegramFileId || "")
+        }
+      : null;
+
+  if (!mirrorCopy) {
+    return false;
+  }
   try {
-    await downloadToFile(url, localPath);
-    return true;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!/download_failed:404/.test(message)) {
-      return false;
-    }
-    const repaired = await repairThumbUrl(archive.id, fileIndex, webhookId, messageId);
-    if (!repaired) {
-      return false;
-    }
-    await downloadToFile(repaired, localPath);
-    return true;
+    return await downloadThumbCopy(mirrorCopy, localPath, () => refreshMirrorThumbUrl(archive.id, fileIndex, thumb));
+  } catch {
+    return false;
   }
 }
 
@@ -248,15 +356,61 @@ async function generateThumbFromFile(sourcePath: string, fileName: string, outPa
 }
 
 async function uploadThumbBackup(archiveId: string, fileIndex: number, localPath: string) {
+  const content = `thumb archive:${archiveId} file:${fileIndex}`;
+  const filename = `thumb_${archiveId}_${fileIndex}.webp`;
+  const buffer = await fs.promises.readFile(localPath);
+  const copies: Array<{
+    provider: "discord" | "telegram";
+    url: string;
+    messageId: string;
+    webhookId: string;
+    telegramFileId: string;
+    telegramChatId: string;
+  }> = [];
+
   const hooks = await Webhook.find({ enabled: true }).lean();
-  if (hooks.length === 0) {
+  if (hooks.length > 0) {
+    const pick = hooks[Math.abs(fileIndex) % hooks.length];
+    try {
+      const uploaded = await uploadBufferToWebhook(buffer, filename, pick.url, content);
+      copies.push({
+        provider: "discord",
+        url: uploaded.url,
+        messageId: uploaded.messageId,
+        webhookId: pick._id.toString(),
+        telegramFileId: "",
+        telegramChatId: ""
+      });
+    } catch {
+      // Continue; Telegram copy may still succeed.
+    }
+  }
+
+  if (isTelegramReady()) {
+    try {
+      const uploaded = await uploadBufferToTelegram(buffer, filename, content);
+      copies.push({
+        provider: "telegram",
+        url: uploaded.url,
+        messageId: uploaded.messageId,
+        webhookId: "telegram",
+        telegramFileId: uploaded.fileId,
+        telegramChatId: uploaded.chatId
+      });
+    } catch {
+      // Keep any successful Discord copy.
+    }
+  }
+
+  if (copies.length === 0) {
     return null;
   }
-  const pick = hooks[Math.abs(fileIndex) % hooks.length];
-  const buffer = await fs.promises.readFile(localPath);
-  const content = `thumb archive:${archiveId} file:${fileIndex}`;
-  const result = await uploadBufferToWebhook(buffer, `thumb_${archiveId}_${fileIndex}.webp`, pick.url, content);
-  return { url: result.url, messageId: result.messageId, webhookId: pick._id.toString() };
+
+  const primary =
+    copies.find((copy) => copy.provider === "discord")
+    || copies[0];
+  const mirror = copies.find((copy) => copy.provider !== primary.provider) || null;
+  return { primary, mirror };
 }
 
 async function persistThumbMeta(archiveId: string, fileIndex: number, localPath: string): Promise<ThumbnailResult> {
@@ -269,9 +423,20 @@ async function persistThumbMeta(archiveId: string, fileIndex: number, localPath:
         [`files.${fileIndex}.thumbnail.contentType`]: "image/webp",
         [`files.${fileIndex}.thumbnail.size`]: stat.size,
         [`files.${fileIndex}.thumbnail.localPath`]: localPath,
-        [`files.${fileIndex}.thumbnail.url`]: backup?.url || "",
-        [`files.${fileIndex}.thumbnail.messageId`]: backup?.messageId || "",
-        [`files.${fileIndex}.thumbnail.webhookId`]: backup?.webhookId || "",
+        [`files.${fileIndex}.thumbnail.provider`]: backup?.primary?.provider || "discord",
+        [`files.${fileIndex}.thumbnail.url`]: backup?.primary?.url || "",
+        [`files.${fileIndex}.thumbnail.messageId`]: backup?.primary?.messageId || "",
+        [`files.${fileIndex}.thumbnail.webhookId`]: backup?.primary?.webhookId || "",
+        [`files.${fileIndex}.thumbnail.telegramFileId`]: backup?.primary?.telegramFileId || "",
+        [`files.${fileIndex}.thumbnail.telegramChatId`]: backup?.primary?.telegramChatId || "",
+        [`files.${fileIndex}.thumbnail.mirrorProvider`]: backup?.mirror?.provider || null,
+        [`files.${fileIndex}.thumbnail.mirrorUrl`]: backup?.mirror?.url || "",
+        [`files.${fileIndex}.thumbnail.mirrorMessageId`]: backup?.mirror?.messageId || "",
+        [`files.${fileIndex}.thumbnail.mirrorWebhookId`]: backup?.mirror?.webhookId || "",
+        [`files.${fileIndex}.thumbnail.mirrorTelegramFileId`]: backup?.mirror?.telegramFileId || "",
+        [`files.${fileIndex}.thumbnail.mirrorTelegramChatId`]: backup?.mirror?.telegramChatId || "",
+        [`files.${fileIndex}.thumbnail.mirrorPending`]: false,
+        [`files.${fileIndex}.thumbnail.mirrorError`]: "",
         [`files.${fileIndex}.thumbnail.updatedAt`]: new Date(),
         [`files.${fileIndex}.thumbnail.failedAt`]: null,
         [`files.${fileIndex}.thumbnail.error`]: ""
@@ -411,7 +576,7 @@ async function ensureThumbnailInternal(archive: ArchiveDoc, fileIndex: number): 
     }
   }
 
-  if (await tryRestoreThumbFromDiscord(archive, fileIndex, localPath)) {
+  if (await tryRestoreThumbFromRemote(archive, fileIndex, localPath)) {
     const stat = await fs.promises.stat(localPath);
     return { filePath: localPath, contentType: "image/webp", size: stat.size };
   }
