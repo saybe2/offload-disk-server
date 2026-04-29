@@ -30,6 +30,24 @@ import { initAnalyticsPersistence } from "./services/analytics.js";
 import { initRealtimeServer } from "./services/realtime.js";
 import { bumpCacheVersion, getRedisRuntimeState, startRedis } from "./services/redis.js";
 
+function isMongoTransientRuntimeError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err || "");
+  const stack = err instanceof Error ? err.stack || "" : "";
+  const name = err && typeof err === "object" ? String((err as any).name || "") : "";
+  const source = `${name} ${message} ${stack}`.toLowerCase();
+  const looksMongo = /mongo|mongodb|mongoose|connect-mongo|27017/.test(source);
+  if (!looksMongo) return false;
+  return (
+    /econnrefused/.test(source) ||
+    /connection <monitor>.*closed/.test(source) ||
+    /server selection timed out/.test(source) ||
+    /timed out while checking out a connection/.test(source) ||
+    /topology.*(closed|destroyed)/.test(source) ||
+    /pool.*closed/.test(source) ||
+    /not connected/.test(source)
+  );
+}
+
 process.on("uncaughtException", (err) => {
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? err.stack || "" : "";
@@ -37,8 +55,8 @@ process.on("uncaughtException", (err) => {
     log("restore", `zip parse guard ${message}`);
     return;
   }
-  if (/ECONNREFUSED/i.test(message) && (/27017/.test(message) || /mongo|mongodb|connect-mongo/i.test(stack))) {
-    log("db", `transient connection failure ${message}`);
+  if (isMongoTransientRuntimeError(err)) {
+    log("db", `transient runtime connection failure ${message}`);
     return;
   }
   if (/Archive validation failed: .*files\.\d+\.path: Path `path` is required\./i.test(message)) {
@@ -47,6 +65,15 @@ process.on("uncaughtException", (err) => {
   }
   log("server", `uncaught exception ${message}`);
   process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason || "");
+  if (isMongoTransientRuntimeError(reason)) {
+    log("db", `transient runtime rejection ${message}`);
+    return;
+  }
+  log("server", `unhandled rejection ${message}`);
 });
 
 const app = express();
