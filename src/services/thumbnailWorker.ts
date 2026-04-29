@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { Archive } from "../models/Archive.js";
 import { config } from "../config.js";
 import {
@@ -38,7 +40,14 @@ function fileNeedsThumbnail(file: any) {
     }
   }
   if (!supportsThumbnail(fileName, file?.detectedKind)) return false;
-  return !file?.thumbnail?.updatedAt;
+  if (!file?.thumbnail?.updatedAt) {
+    return true;
+  }
+  const localPath = String(file?.thumbnail?.localPath || "").trim();
+  if (!localPath) {
+    return true;
+  }
+  return !fs.existsSync(localPath);
 }
 
 function archiveNeedsThumbnail(archive: any) {
@@ -105,6 +114,34 @@ async function refillQueue() {
         queued.add(id);
       }
     }
+  }
+}
+
+async function invalidateThumbnailCacheMetadataIfMissing() {
+  const thumbsDir = path.join(config.cacheDir, "thumbs");
+  if (fs.existsSync(thumbsDir)) {
+    return;
+  }
+  const result = await Archive.updateMany(
+    {
+      deletedAt: null,
+      trashedAt: null,
+      "files.thumbnail.updatedAt": { $ne: null }
+    },
+    {
+      $set: {
+        "files.$[file].thumbnail.updatedAt": null,
+        "files.$[file].thumbnail.localPath": "",
+        "files.$[file].thumbnail.failedAt": null,
+        "files.$[file].thumbnail.error": ""
+      }
+    },
+    {
+      arrayFilters: [{ "file.thumbnail.updatedAt": { $ne: null } }]
+    }
+  );
+  if (result.modifiedCount > 0) {
+    log(`cache missing detected, requeued thumbnails=${result.modifiedCount}`);
   }
 }
 
@@ -208,6 +245,7 @@ export function startThumbnailWorker() {
     return;
   }
   if (ticker) return;
+  void invalidateThumbnailCacheMetadataIfMissing();
   ticker = setInterval(() => {
     void tick();
   }, config.thumbWorkerPollMs);
