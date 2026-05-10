@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, json as expressJson } from "express";
 import type { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
@@ -443,7 +443,9 @@ apiRouter.patch("/me/settings", requireAuth, async (req, res) => {
   return res.json({ ok: true, transcodeCopiesEnabled });
 });
 
-apiRouter.post("/archives/import-external", requireAuth, async (req, res) => {
+// Large JSON limit only here: a single import payload contains one entry per
+// chunk, so for multi-hundred-GB archives the body can grow to tens of MB.
+apiRouter.post("/archives/import-external", expressJson({ limit: "64mb" }), requireAuth, async (req, res) => {
   const payload = req.body as any;
   const originalName = sanitizeFilename(String(payload?.name || "").trim());
   const originalSize = Number(payload?.size || 0);
