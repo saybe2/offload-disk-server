@@ -8,6 +8,19 @@ const toNumber = (value: string | undefined, fallback: number) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const requiredSecret = (name: string, value: string | undefined, forbidden: string[] = []): string => {
+  const v = (value || "").trim();
+  if (!v) {
+    console.error(`[config] ${name} is required but missing. Refusing to start.`);
+    process.exit(1);
+  }
+  if (forbidden.includes(v)) {
+    console.error(`[config] ${name} is set to a forbidden placeholder value (${v}). Refusing to start.`);
+    process.exit(1);
+  }
+  return v;
+};
+
 const toList = (value: string | undefined, fallback: string[]) => {
   if (!value || !value.trim()) return fallback;
   return value
@@ -72,10 +85,10 @@ export const config = {
   redisDb: Math.max(0, toNumber(process.env.REDIS_DB, 0)),
   redisKeyPrefix: (process.env.REDIS_KEY_PREFIX || "offload").trim(),
   redisCacheTtlSec: Math.max(1, toNumber(process.env.REDIS_CACHE_TTL_SEC, 8)),
-  sessionSecret: process.env.SESSION_SECRET || "change-me",
+  sessionSecret: requiredSecret("SESSION_SECRET", process.env.SESSION_SECRET, ["change-me", "changeme"]),
   adminUsername: process.env.ADMIN_USERNAME || "admin",
-  adminPassword: process.env.ADMIN_PASSWORD || "admin",
-  masterKey: process.env.MASTER_KEY || "CHANGE_ME",
+  adminPassword: requiredSecret("ADMIN_PASSWORD", process.env.ADMIN_PASSWORD, ["admin", "password", "change-me"]),
+  masterKey: requiredSecret("MASTER_KEY", process.env.MASTER_KEY, ["CHANGE_ME", "change-me", "changeme"]),
   cacheDir: path.resolve(process.env.CACHE_DIR || "./data/cache"),
   cacheDeleteAfterUpload: (process.env.CACHE_DELETE_AFTER_UPLOAD || "true") === "true",
   chunkSizeMiB: toNumber(process.env.CHUNK_SIZE_MIB, 9.8),
