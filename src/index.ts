@@ -90,8 +90,11 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true }));
+// Default limit kept tight to reduce DoS surface; specific routes that need
+// larger JSON payloads (e.g. archives/import-external for migration) opt in
+// to a higher limit at the route level via express.json({ limit: ... }).
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.use("/api", (req, res, next) => {
   const method = String(req.method || "").toUpperCase();
