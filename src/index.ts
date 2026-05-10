@@ -78,6 +78,10 @@ process.on("unhandledRejection", (reason) => {
 
 const app = express();
 
+// Trust the first proxy hop (e.g. nginx) so secure cookies and rate-limit
+// see the real client protocol/IP via X-Forwarded-* headers.
+app.set("trust proxy", 1);
+
 app.use((req, _res, next) => {
   req.on("error", (err) => {
     if ((err as Error)?.message === "aborted") return;
@@ -113,7 +117,15 @@ const sessionMiddleware = session({
   secret: config.sessionSecret,
   resave: false,
   saveUninitialized: false,
-  store: sessionStore
+  store: sessionStore,
+  cookie: {
+    httpOnly: true,
+    sameSite: "lax",
+    // "auto" => Secure flag is set when the request was made over HTTPS
+    // (works behind nginx via trust proxy and over plain HTTP on LAN)
+    secure: "auto",
+    maxAge: 90 * 24 * 60 * 60 * 1000
+  }
 });
 
 app.use(sessionMiddleware);
