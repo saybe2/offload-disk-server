@@ -90,6 +90,37 @@ export interface ArchiveFile {
   };
 }
 
+export interface ArchiveThumbnailBundleEntry {
+  fileIndex: number;
+  size: number;
+  contentType?: string;
+}
+
+export interface ArchiveThumbnailBundle {
+  provider?: "discord" | "telegram";
+  url?: string;
+  messageId?: string;
+  webhookId?: string;
+  telegramFileId?: string;
+  telegramChatId?: string;
+  mirrorProvider?: "discord" | "telegram" | null;
+  mirrorUrl?: string;
+  mirrorMessageId?: string;
+  mirrorWebhookId?: string;
+  mirrorTelegramFileId?: string;
+  mirrorTelegramChatId?: string;
+  mirrorPending?: boolean;
+  mirrorError?: string;
+  iv?: string;
+  authTag?: string;
+  encryptedSize?: number;
+  plainSize?: number;
+  entries?: ArchiveThumbnailBundleEntry[];
+  needsRebuild?: boolean;
+  rebuildError?: string;
+  updatedAt?: Date | null;
+}
+
 export interface ArchivePart {
   index: number;
   size: number;
@@ -142,6 +173,7 @@ export interface ArchiveDoc extends mongoose.Document {
   stagingDir: string;
   files: ArchiveFile[];
   parts: ArchivePart[];
+  thumbnailBundle?: ArchiveThumbnailBundle;
   iv: string;
   authTag: string;
   error?: string;
@@ -310,6 +342,39 @@ const ArchiveSchema = new Schema<ArchiveDoc>(
     stagingDir: { type: String, required: true },
     files: { type: [FileSchema], default: [] },
     parts: { type: [PartSchema], default: [] },
+    thumbnailBundle: {
+      provider: { type: String, enum: ["discord", "telegram"], default: null },
+      url: { type: String, default: "" },
+      messageId: { type: String, default: "" },
+      webhookId: { type: String, default: "" },
+      telegramFileId: { type: String, default: "" },
+      telegramChatId: { type: String, default: "" },
+      mirrorProvider: { type: String, enum: ["discord", "telegram"], default: null },
+      mirrorUrl: { type: String, default: "" },
+      mirrorMessageId: { type: String, default: "" },
+      mirrorWebhookId: { type: String, default: "" },
+      mirrorTelegramFileId: { type: String, default: "" },
+      mirrorTelegramChatId: { type: String, default: "" },
+      mirrorPending: { type: Boolean, default: false },
+      mirrorError: { type: String, default: "" },
+      iv: { type: String, default: "" },
+      authTag: { type: String, default: "" },
+      encryptedSize: { type: Number, default: 0 },
+      plainSize: { type: Number, default: 0 },
+      entries: {
+        type: [
+          {
+            fileIndex: { type: Number, required: true },
+            size: { type: Number, required: true },
+            contentType: { type: String, default: "image/webp" }
+          }
+        ],
+        default: []
+      },
+      needsRebuild: { type: Boolean, default: false },
+      rebuildError: { type: String, default: "" },
+      updatedAt: { type: Date, default: null }
+    },
     iv: { type: String, default: "" },
     authTag: { type: String, default: "" },
     error: { type: String },

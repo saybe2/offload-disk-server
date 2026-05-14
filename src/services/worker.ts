@@ -18,6 +18,7 @@ import {
 } from "./partProvider.js";
 import { uniqueParts } from "./parts.js";
 import { ensureArchiveThumbnailFromSource, supportsThumbnail } from "./thumbnails.js";
+import { buildAndUploadBundleForArchive, deleteBundleFromRemote, isPermanentBundleFailure } from "./thumbnailBundle.js";
 import { queueArchiveSubtitles } from "./subtitleWorker.js";
 import { queueArchiveTranscodes } from "./transcodeWorker.js";
 import { isTelegramReady } from "./telegram.js";
@@ -203,6 +204,31 @@ async function generateLocalThumbnails(archive: any) {
   }
   if (generated > 0) {
     log(`thumb ready ${archive.id} generated=${generated}`);
+    // Reload to capture freshly persisted thumbnail metadata before bundling.
+    const fresh = await Archive.findById(archive.id);
+    if (fresh) {
+      try {
+        const result = await buildAndUploadBundleForArchive(fresh);
+        if (result.uploaded) {
+          log(`thumb bundle uploaded ${archive.id}`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isPermanentBundleFailure(message)) {
+          await Archive.updateOne(
+            { _id: archive.id },
+            { $set: { "thumbnailBundle.rebuildError": message.slice(0, 500), "thumbnailBundle.needsRebuild": false } }
+          );
+          log(`thumb bundle permanent failure ${archive.id} ${message}`);
+        } else {
+          await Archive.updateOne(
+            { _id: archive.id },
+            { $set: { "thumbnailBundle.needsRebuild": true, "thumbnailBundle.rebuildError": message.slice(0, 500) } }
+          );
+          log(`thumb bundle deferred ${archive.id} ${message}`);
+        }
+      }
+    }
   }
 }
 
@@ -710,9 +736,14 @@ async function processDelete() {
       }
     }
 
+    const bundleMeta = (candidate as any).thumbnailBundle;
+    if (bundleMeta?.messageId) {
+      await deleteBundleFromRemote(bundleMeta).catch(() => undefined);
+    }
+
     await Archive.updateOne(
       { _id: candidate.id },
-      { $set: { deletedAt: new Date() }, $unset: { parts: 1 } }
+      { $set: { deletedAt: new Date() }, $unset: { parts: 1, thumbnailBundle: 1 } }
     );
 
     await User.updateOne({ _id: candidate.userId }, { $inc: { usedBytes: -candidate.originalSize } });

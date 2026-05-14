@@ -6,11 +6,12 @@ import sharp from "sharp";
 import { Archive, type ArchiveDoc } from "../models/Archive.js";
 import { Webhook } from "../models/Webhook.js";
 import { config } from "../config.js";
-import { downloadToFile, fetchWebhookMessage, uploadBufferToWebhook } from "./discord.js";
+import { downloadToFile, fetchWebhookMessage } from "./discord.js";
 import { restoreArchiveFileToFile, restoreArchiveToFile } from "./restore.js";
 import { noteThumbnailDone, noteThumbnailError, noteThumbnailStarted } from "./analytics.js";
 import { canServerRenderHeif, renderImageToWebp } from "./imageRerender.js";
-import { buildTelegramFileUrl, isTelegramReady, uploadBufferToTelegram } from "./telegram.js";
+import { buildTelegramFileUrl } from "./telegram.js";
+import { restoreThumbnailsFromBundleToCache } from "./thumbnailBundle.js";
 
 const imageExt = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"]);
 const videoExt = new Set([".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpeg", ".mpg", ".m2ts", ".3gp", ".ogv", ".vob", ".ts"]);
@@ -222,11 +223,33 @@ async function downloadThumbCopy(
   return false;
 }
 
+async function tryRestoreThumbFromBundle(archive: ArchiveDoc, fileIndex: number, localPath: string) {
+  const bundle = (archive as any)?.thumbnailBundle;
+  if (!bundle?.iv || !bundle?.authTag) {
+    return false;
+  }
+  try {
+    const result = await restoreThumbnailsFromBundleToCache(archive, fileIndex);
+    if (result.targetExists) {
+      return true;
+    }
+    return fs.existsSync(localPath);
+  } catch {
+    return false;
+  }
+}
+
 async function tryRestoreThumbFromRemote(
   archive: ArchiveDoc,
   fileIndex: number,
   localPath: string
 ) {
+  if (await tryRestoreThumbFromBundle(archive, fileIndex, localPath)) {
+    return true;
+  }
+
+  // Legacy fallback: archives whose thumbnails were uploaded one-per-file
+  // before the bundle migration ran still carry the old provider details.
   const thumb = archive.files?.[fileIndex]?.thumbnail;
   if (!thumb) {
     return false;
@@ -355,67 +378,10 @@ async function generateThumbFromFile(sourcePath: string, fileName: string, outPa
   throw new Error("thumbnail_unsupported");
 }
 
-async function uploadThumbBackup(archiveId: string, fileIndex: number, localPath: string) {
-  const content = `thumb archive:${archiveId} file:${fileIndex}`;
-  const filename = `thumb_${archiveId}_${fileIndex}.webp`;
-  const buffer = await fs.promises.readFile(localPath);
-  const copies: Array<{
-    provider: "discord" | "telegram";
-    url: string;
-    messageId: string;
-    webhookId: string;
-    telegramFileId: string;
-    telegramChatId: string;
-  }> = [];
-
-  const hooks = await Webhook.find({ enabled: true }).lean();
-  if (hooks.length > 0) {
-    const pick = hooks[Math.abs(fileIndex) % hooks.length];
-    try {
-      const uploaded = await uploadBufferToWebhook(buffer, filename, pick.url, content);
-      copies.push({
-        provider: "discord",
-        url: uploaded.url,
-        messageId: uploaded.messageId,
-        webhookId: pick._id.toString(),
-        telegramFileId: "",
-        telegramChatId: ""
-      });
-    } catch {
-      // Continue; Telegram copy may still succeed.
-    }
-  }
-
-  if (isTelegramReady()) {
-    try {
-      const uploaded = await uploadBufferToTelegram(buffer, filename, content);
-      copies.push({
-        provider: "telegram",
-        url: uploaded.url,
-        messageId: uploaded.messageId,
-        webhookId: "telegram",
-        telegramFileId: uploaded.fileId,
-        telegramChatId: uploaded.chatId
-      });
-    } catch {
-      // Keep any successful Discord copy.
-    }
-  }
-
-  if (copies.length === 0) {
-    return null;
-  }
-
-  const primary =
-    copies.find((copy) => copy.provider === "discord")
-    || copies[0];
-  const mirror = copies.find((copy) => copy.provider !== primary.provider) || null;
-  return { primary, mirror };
-}
-
 async function persistThumbMeta(archiveId: string, fileIndex: number, localPath: string): Promise<ThumbnailResult> {
   const stat = await fs.promises.stat(localPath);
-  const backup = await uploadThumbBackup(archiveId, fileIndex, localPath);
+  // New thumbnails are stored only as encrypted bundles. Per-file provider fields
+  // are cleared so the migration knows this entry no longer has a stand-alone upload.
   await Archive.updateOne(
     { _id: archiveId },
     {
@@ -423,23 +389,24 @@ async function persistThumbMeta(archiveId: string, fileIndex: number, localPath:
         [`files.${fileIndex}.thumbnail.contentType`]: "image/webp",
         [`files.${fileIndex}.thumbnail.size`]: stat.size,
         [`files.${fileIndex}.thumbnail.localPath`]: localPath,
-        [`files.${fileIndex}.thumbnail.provider`]: backup?.primary?.provider || "discord",
-        [`files.${fileIndex}.thumbnail.url`]: backup?.primary?.url || "",
-        [`files.${fileIndex}.thumbnail.messageId`]: backup?.primary?.messageId || "",
-        [`files.${fileIndex}.thumbnail.webhookId`]: backup?.primary?.webhookId || "",
-        [`files.${fileIndex}.thumbnail.telegramFileId`]: backup?.primary?.telegramFileId || "",
-        [`files.${fileIndex}.thumbnail.telegramChatId`]: backup?.primary?.telegramChatId || "",
-        [`files.${fileIndex}.thumbnail.mirrorProvider`]: backup?.mirror?.provider || null,
-        [`files.${fileIndex}.thumbnail.mirrorUrl`]: backup?.mirror?.url || "",
-        [`files.${fileIndex}.thumbnail.mirrorMessageId`]: backup?.mirror?.messageId || "",
-        [`files.${fileIndex}.thumbnail.mirrorWebhookId`]: backup?.mirror?.webhookId || "",
-        [`files.${fileIndex}.thumbnail.mirrorTelegramFileId`]: backup?.mirror?.telegramFileId || "",
-        [`files.${fileIndex}.thumbnail.mirrorTelegramChatId`]: backup?.mirror?.telegramChatId || "",
+        [`files.${fileIndex}.thumbnail.provider`]: null,
+        [`files.${fileIndex}.thumbnail.url`]: "",
+        [`files.${fileIndex}.thumbnail.messageId`]: "",
+        [`files.${fileIndex}.thumbnail.webhookId`]: "",
+        [`files.${fileIndex}.thumbnail.telegramFileId`]: "",
+        [`files.${fileIndex}.thumbnail.telegramChatId`]: "",
+        [`files.${fileIndex}.thumbnail.mirrorProvider`]: null,
+        [`files.${fileIndex}.thumbnail.mirrorUrl`]: "",
+        [`files.${fileIndex}.thumbnail.mirrorMessageId`]: "",
+        [`files.${fileIndex}.thumbnail.mirrorWebhookId`]: "",
+        [`files.${fileIndex}.thumbnail.mirrorTelegramFileId`]: "",
+        [`files.${fileIndex}.thumbnail.mirrorTelegramChatId`]: "",
         [`files.${fileIndex}.thumbnail.mirrorPending`]: false,
         [`files.${fileIndex}.thumbnail.mirrorError`]: "",
         [`files.${fileIndex}.thumbnail.updatedAt`]: new Date(),
         [`files.${fileIndex}.thumbnail.failedAt`]: null,
-        [`files.${fileIndex}.thumbnail.error`]: ""
+        [`files.${fileIndex}.thumbnail.error`]: "",
+        "thumbnailBundle.needsRebuild": true
       }
     }
   );
@@ -463,7 +430,8 @@ async function hydrateThumbMetaFromLocal(
           [`files.${fileIndex}.thumbnail.localPath`]: localPath,
           [`files.${fileIndex}.thumbnail.updatedAt`]: new Date(),
           [`files.${fileIndex}.thumbnail.failedAt`]: null,
-          [`files.${fileIndex}.thumbnail.error`]: ""
+          [`files.${fileIndex}.thumbnail.error`]: "",
+          "thumbnailBundle.needsRebuild": true
         }
       }
     );

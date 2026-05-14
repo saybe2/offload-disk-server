@@ -9,6 +9,11 @@ import {
   isPermanentThumbnailFailureMessage,
   supportsThumbnail
 } from "./thumbnails.js";
+import {
+  archiveBundleIsStale,
+  buildAndUploadBundleForArchive,
+  isPermanentBundleFailure
+} from "./thumbnailBundle.js";
 
 const queued = new Set<string>();
 const active = new Set<string>();
@@ -60,6 +65,10 @@ function archiveNeedsThumbnail(archive: any) {
   return false;
 }
 
+function archiveNeedsBundleRebuild(archive: any) {
+  return archiveBundleIsStale(archive);
+}
+
 async function markThumbnailPermanentFailure(archiveId: string, fileIndex: number, message: string) {
   await Archive.updateOne(
     { _id: archiveId },
@@ -92,11 +101,12 @@ async function refillQueue() {
     "files.0": { $exists: true },
     $or: [
       { "files.thumbnail.updatedAt": { $exists: false } },
-      { "files.thumbnail.failedAt": { $exists: true } }
+      { "files.thumbnail.failedAt": { $exists: true } },
+      { "thumbnailBundle.needsRebuild": true }
     ]
   })
     .sort({ createdAt: 1 })
-    .select("_id files")
+    .select("_id files thumbnailBundle")
     .limit(config.thumbBackfillScanLimit)
     .lean();
 
@@ -104,7 +114,7 @@ async function refillQueue() {
     if (queued.size >= config.thumbWorkerConcurrency * 6) {
       break;
     }
-    if (!archiveNeedsThumbnail(archive)) {
+    if (!archiveNeedsThumbnail(archive) && !archiveNeedsBundleRebuild(archive)) {
       continue;
     }
     const id = archive._id.toString();
@@ -209,6 +219,32 @@ async function processArchive(archiveId: string) {
 
   if (generated > 0) {
     log(`ready ${archiveId} generated=${generated}`);
+  }
+
+  if (!waitingForReady && archiveBundleIsStale(archive)) {
+    try {
+      const result = await buildAndUploadBundleForArchive(archive);
+      if (result.uploaded) {
+        log(`bundle uploaded ${archiveId}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isPermanentBundleFailure(message)) {
+        await Archive.updateOne(
+          { _id: archiveId },
+          { $set: { "thumbnailBundle.rebuildError": message.slice(0, 500), "thumbnailBundle.needsRebuild": false } }
+        );
+        log(`bundle permanent failure ${archiveId} ${message}`);
+      } else {
+        await Archive.updateOne(
+          { _id: archiveId },
+          { $set: { "thumbnailBundle.rebuildError": message.slice(0, 500) } }
+        );
+        log(`bundle error ${archiveId} ${message}`);
+        retryAt.set(archiveId, Date.now() + config.thumbRetryMs);
+        queued.add(archiveId);
+      }
+    }
   }
 }
 
