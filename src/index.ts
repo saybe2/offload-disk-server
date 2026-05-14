@@ -21,6 +21,7 @@ import { uniqueParts } from "./services/parts.js";
 import { startFuse } from "./smb/fuse.js";
 import { startCacheCleanup } from "./services/cleanup.js";
 import { startThumbnailWorker } from "./services/thumbnailWorker.js";
+import { startThumbnailBundleMigration } from "./services/thumbnailBundleMigration.js";
 import { startSubtitleWorker } from "./services/subtitleWorker.js";
 import { startTranscodeWorker } from "./services/transcodeWorker.js";
 import { getOutboundProxyStatus } from "./services/outbound.js";
@@ -423,6 +424,7 @@ async function main() {
   startTranscodeWorker();
   startFuse();
   startCacheCleanup();
+  startThumbnailBundleMigration();
 
   const proxyStatus = getOutboundProxyStatus();
   if (proxyStatus.enabled) {
