@@ -96,6 +96,11 @@ function isPermanentTranscodeFailure(message: string) {
   if (lower.includes("ffmpeg_failed") && lower.includes("error opening input file")) {
     return true;
   }
+  // ffmpeg exit code 176 indicates the encoder produced zero frames (skip:100.0%).
+  // Retrying the same source will keep failing, so treat it as permanent.
+  if (/ffmpeg_failed:\s*176\b/.test(lower)) {
+    return true;
+  }
   if (lower.includes("source_archive_id_missing") || lower.includes("source_user_id_missing")) {
     return true;
   }
