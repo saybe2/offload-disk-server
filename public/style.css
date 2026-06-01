@@ -45,8 +45,6 @@ th, td { padding: 8px; border-bottom: 1px solid #2b3240; text-align: left; }
 th { color: #9aa4b2; font-weight: 600; }
 tr:hover { background: #1c2330; }
 td button { margin-right: 6px; }
-.folder-path-cell { color: #b8c2d1; font-size: 13px; font-family: "JetBrains Mono", "Consolas", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
-.folder-path-root { color: #7f8a99; font-size: 13px; }
 .folder-row-item { cursor: pointer; }
 .drop { outline: 2px dashed #6ea8fe; }
 .row-selected { background: #1b2638; }
@@ -118,6 +116,16 @@ th.counter-head .counter-icon { color: #9aa4b2; vertical-align: middle; }
 .share-links-item:last-child { border-bottom: none; }
 .share-links-url { color: #9cc2ff; overflow-wrap: anywhere; }
 .share-links-empty { color: #9aa4b2; }
+.share-folder-nav { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.share-breadcrumbs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.share-breadcrumbs button { background: #1c2330; border-color: #2b3240; }
+.share-breadcrumbs button.active { background: #24304a; border-color: #3b4f70; }
+.share-breadcrumb-sep { color: #6f7a89; }
+.share-children { display: flex; flex-wrap: wrap; gap: 10px; }
+.share-folder-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; background: #11151d; border: 1px solid #2b3240; border-radius: 999px; color: #d9e2ef; }
+.share-folder-chip:hover { background: #1c2330; }
+.share-folder-chip .folder-icon { width: 18px; height: 14px; flex: 0 0 auto; }
+.share-folder-empty { color: #8e99a8; font-size: 13px; }
 
 .grid-view { display: grid; gap: 18px; align-content: flex-start; justify-content: flex-start; }
 .grid-view.mode-tile { grid-template-columns: repeat(auto-fill, minmax(116px, 116px)); }

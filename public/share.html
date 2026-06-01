@@ -20,8 +20,11 @@
     </section>
 
     <section class="card">
-      <h2>Files</h2>
-      <div class="status">Folder shares keep nested paths grouped by folder.</div>
+      <div id="shareFolderNav" class="share-folder-nav hidden">
+        <div id="shareBreadcrumbs" class="share-breadcrumbs"></div>
+        <div id="shareChildren" class="share-children"></div>
+      </div>
+      <h2 id="shareSectionTitle">Files</h2>
       <table>
         <thead id="shareHead"></thead>
         <tbody id="shareList"></tbody>

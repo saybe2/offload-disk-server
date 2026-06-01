@@ -3,6 +3,10 @@ const shareMeta = document.getElementById('shareMeta');
 const shareActions = document.getElementById('shareActions');
 const shareHead = document.getElementById('shareHead');
 const shareList = document.getElementById('shareList');
+const shareFolderNav = document.getElementById('shareFolderNav');
+const shareBreadcrumbs = document.getElementById('shareBreadcrumbs');
+const shareChildren = document.getElementById('shareChildren');
+const shareSectionTitle = document.getElementById('shareSectionTitle');
 
 const sharePreviewModal = document.getElementById('sharePreviewModal');
 const sharePreviewTitle = document.getElementById('sharePreviewTitle');
@@ -25,6 +29,7 @@ const thumbFailureUntil = new Map();
 const THUMB_RETRY_MS = 2 * 60 * 1000;
 let shareToken = '';
 let previewObjectUrl = null;
+let currentShareFolderPath = '';
 
 function formatDate(iso) {
   if (!iso) return 'Never';
@@ -139,7 +144,6 @@ function renderHead() {
   shareHead.innerHTML = `
     <tr>
       <th>Name</th>
-      <th>Folder</th>
       <th>Size</th>
       <th>Date</th>
       <th>Actions</th>
@@ -147,14 +151,13 @@ function renderHead() {
   `;
 }
 
-function formatFolderLabel(folderPath) {
-  const normalized = String(folderPath || '').trim();
-  return normalized || '/';
+function normalizeFolderPath(folderPath) {
+  return String(folderPath || '').trim().replace(/^\/+|\/+$/g, '');
 }
 
 function comparePathSegments(aPath, bPath) {
-  const aParts = String(aPath || '').split('/').filter(Boolean);
-  const bParts = String(bPath || '').split('/').filter(Boolean);
+  const aParts = normalizeFolderPath(aPath).split('/').filter(Boolean);
+  const bParts = normalizeFolderPath(bPath).split('/').filter(Boolean);
   const max = Math.max(aParts.length, bParts.length);
   for (let i = 0; i < max; i += 1) {
     const aPart = (aParts[i] || '').toLocaleLowerCase();
@@ -174,6 +177,110 @@ function sortFolderEntries(entries) {
     if (aName < bName) return -1;
     if (aName > bName) return 1;
     return 0;
+  });
+}
+
+function folderPathMatchesScope(folderPath, scopePath) {
+  const normalizedFolder = normalizeFolderPath(folderPath);
+  const normalizedScope = normalizeFolderPath(scopePath);
+  if (!normalizedScope) {
+    return !normalizedFolder.includes('/');
+  }
+  if (normalizedFolder === normalizedScope) return true;
+  return normalizedFolder.startsWith(`${normalizedScope}/`) && !normalizedFolder.slice(normalizedScope.length + 1).includes('/');
+}
+
+function getFolderNameFromPath(folderPath) {
+  const normalized = normalizeFolderPath(folderPath);
+  if (!normalized) return '';
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || '';
+}
+
+function buildShareFolderChildren(archives) {
+  const currentPath = normalizeFolderPath(currentShareFolderPath);
+  const seen = new Set();
+  const children = [];
+  for (const archive of archives) {
+    const relativePath = normalizeFolderPath(archive.relativePath);
+    if (!relativePath) continue;
+    if (currentPath) {
+      if (!relativePath.startsWith(`${currentPath}/`)) continue;
+      const rest = relativePath.slice(currentPath.length + 1);
+      const nextSegment = rest.split('/')[0] || '';
+      if (!nextSegment) continue;
+      const childPath = `${currentPath}/${nextSegment}`;
+      if (seen.has(childPath)) continue;
+      seen.add(childPath);
+      children.push(childPath);
+      continue;
+    }
+    const nextSegment = relativePath.split('/')[0] || '';
+    if (!nextSegment || seen.has(nextSegment)) continue;
+    seen.add(nextSegment);
+    children.push(nextSegment);
+  }
+  return children.sort(comparePathSegments);
+}
+
+function renderShareFolderNav(archives, rootName) {
+  shareFolderNav.classList.remove('hidden');
+  shareBreadcrumbs.innerHTML = '';
+  shareChildren.innerHTML = '';
+
+  const crumbs = [{ label: rootName || 'Root', path: '' }];
+  const currentPath = normalizeFolderPath(currentShareFolderPath);
+  if (currentPath) {
+    const parts = currentPath.split('/');
+    let acc = '';
+    for (const part of parts) {
+      acc = acc ? `${acc}/${part}` : part;
+      crumbs.push({ label: part, path: acc });
+    }
+  }
+
+  crumbs.forEach((crumb, index) => {
+    if (index > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'share-breadcrumb-sep';
+      sep.textContent = '/';
+      shareBreadcrumbs.appendChild(sep);
+    }
+    const btn = document.createElement('button');
+    btn.textContent = crumb.label;
+    if (normalizeFolderPath(crumb.path) === currentPath) {
+      btn.classList.add('active');
+    }
+    btn.addEventListener('click', () => {
+      currentShareFolderPath = crumb.path;
+      renderSharedFolderView(archives, rootName);
+    });
+    shareBreadcrumbs.appendChild(btn);
+  });
+
+  const children = buildShareFolderChildren(archives);
+  if (!children.length) {
+    const empty = document.createElement('div');
+    empty.className = 'share-folder-empty';
+    empty.textContent = 'No nested folders here';
+    shareChildren.appendChild(empty);
+    return;
+  }
+
+  children.forEach((childPath) => {
+    const btn = document.createElement('button');
+    btn.className = 'share-folder-chip';
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    const text = document.createElement('span');
+    text.textContent = getFolderNameFromPath(childPath);
+    btn.appendChild(icon);
+    btn.appendChild(text);
+    btn.addEventListener('click', () => {
+      currentShareFolderPath = childPath;
+      renderSharedFolderView(archives, rootName);
+    });
+    shareChildren.appendChild(btn);
   });
 }
 
@@ -431,7 +538,6 @@ async function openPreviewModal(item) {
 function addRow(item) {
   const tr = document.createElement('tr');
   const nameTd = document.createElement('td');
-  const folderTd = document.createElement('td');
   const sizeTd = document.createElement('td');
   const dateTd = document.createElement('td');
   const actionTd = document.createElement('td');
@@ -470,15 +576,6 @@ function addRow(item) {
   }
   nameTd.appendChild(nameWrap);
 
-  const folderPath = formatFolderLabel(item.relativePath);
-  folderTd.textContent = folderPath;
-  if (folderPath === '/') {
-    folderTd.className = 'folder-path-root';
-  } else {
-    folderTd.className = 'folder-path-cell';
-    folderTd.title = folderPath;
-  }
-
   sizeTd.textContent = formatSize(item.size);
   dateTd.textContent = item.date ? new Date(item.date).toLocaleString() : '';
 
@@ -514,11 +611,85 @@ function addRow(item) {
   }
 
   tr.appendChild(nameTd);
-  tr.appendChild(folderTd);
   tr.appendChild(sizeTd);
   tr.appendChild(dateTd);
   tr.appendChild(actionTd);
   shareList.appendChild(tr);
+}
+
+function renderSharedFolderView(archives, rootName) {
+  const sortedArchives = sortFolderEntries(archives || []);
+  shareList.innerHTML = '';
+  renderShareFolderNav(sortedArchives, rootName);
+  shareSectionTitle.textContent = currentShareFolderPath ? `${getFolderNameFromPath(currentShareFolderPath)} files` : 'Files';
+
+  for (const archive of sortedArchives) {
+    const archivePath = normalizeFolderPath(archive.relativePath);
+    if (!folderPathMatchesScope(archivePath, currentShareFolderPath)) continue;
+    if (archive.isBundle && archive.files?.length) {
+      archive.files.forEach((file, index) => {
+        const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
+        const isReady = archive.status === 'ready';
+        const canPreview = !!file.previewSupported;
+        const mediaKind = getMediaKind(file.originalName || file.name, file.detectedKind);
+        addRow({
+          archiveId: String(archive.id),
+          fileIndex,
+          isBundle: true,
+          name: file.originalName || file.name,
+          detectedKind: file.detectedKind || '',
+          size: file.size,
+          date: archive.createdAt,
+          status: archive.status,
+          downloadUrl: isReady
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`
+            : null,
+          convertedDownloadUrl: (isReady && hasReadyTranscode(file))
+            ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`)
+            : null,
+          thumbUrl: isReady
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
+            : null,
+          mediaUrl: (isReady && canPreview && mediaKind)
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media`
+            : null,
+          forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name, mediaKind)),
+          subtitleUrl: (isReady && canPreview && mediaKind === 'video')
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt`
+            : null,
+          subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video')
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle-tracks`
+            : null,
+          previewUrl: (isReady && canPreview && !mediaKind)
+            ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
+            : null
+        });
+      });
+    } else {
+      const isReady = archive.status === 'ready';
+      const file = archive.files?.[0] || {};
+      const canPreview = !!file.previewSupported;
+      const mediaKind = getMediaKind(file.originalName || file.name || archive.name, file.detectedKind);
+      addRow({
+        archiveId: String(archive.id),
+        fileIndex: 0,
+        isBundle: false,
+        name: archive.name,
+        detectedKind: file.detectedKind || '',
+        size: archive.originalSize,
+        date: archive.createdAt,
+        status: archive.status,
+        downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
+        convertedDownloadUrl: (isReady && hasReadyTranscode(file)) ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download`) : null,
+        thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
+        mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
+        forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),
+        subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
+        subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
+        previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
+      });
+    }
+  }
 }
 
 async function loadShare() {
@@ -535,6 +706,11 @@ async function loadShare() {
   shareMeta.textContent = `Expires: ${formatDate(data.expiresAt)}`;
   shareActions.innerHTML = '';
   shareList.innerHTML = '';
+  shareFolderNav.classList.add('hidden');
+  shareBreadcrumbs.innerHTML = '';
+  shareChildren.innerHTML = '';
+  shareSectionTitle.textContent = 'Files';
+  currentShareFolderPath = '';
 
   if (data.type === 'archive') {
     const downloadUrl = `/api/public/shares/${shareToken}/download`;
@@ -598,74 +774,7 @@ async function loadShare() {
   }
 
   if (data.type === 'folder') {
-    const archives = sortFolderEntries(data.archives || []);
-    for (const archive of archives) {
-      if (archive.isBundle && archive.files?.length) {
-        archive.files.forEach((file, index) => {
-          const fileIndex = Number.isInteger(file.fileIndex) ? file.fileIndex : index;
-          const isReady = archive.status === 'ready';
-          const canPreview = !!file.previewSupported;
-          const mediaKind = getMediaKind(file.originalName || file.name, file.detectedKind);
-          addRow({
-            archiveId: String(archive.id),
-            fileIndex,
-            isBundle: true,
-            name: file.originalName || file.name,
-            relativePath: archive.relativePath || '',
-            detectedKind: file.detectedKind || '',
-            size: file.size,
-            date: archive.createdAt,
-            status: archive.status,
-            downloadUrl: isReady
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`
-              : null,
-            convertedDownloadUrl: (isReady && hasReadyTranscode(file))
-              ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download?fileIndex=${fileIndex}`)
-              : null,
-            thumbUrl: isReady
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/thumbnail`
-              : null,
-            mediaUrl: (isReady && canPreview && mediaKind)
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/media`
-              : null,
-            forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name, mediaKind)),
-            subtitleUrl: (isReady && canPreview && mediaKind === 'video')
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle.vtt`
-              : null,
-            subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video')
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/${fileIndex}/subtitle-tracks`
-              : null,
-            previewUrl: (isReady && canPreview && !mediaKind)
-              ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=${fileIndex}`
-              : null
-          });
-        });
-      } else {
-        const isReady = archive.status === 'ready';
-        const file = archive.files?.[0] || {};
-        const canPreview = !!file.previewSupported;
-        const mediaKind = getMediaKind(file.originalName || file.name || archive.name, file.detectedKind);
-        addRow({
-          archiveId: String(archive.id),
-          fileIndex: 0,
-          isBundle: false,
-          name: archive.name,
-          relativePath: archive.relativePath || '',
-          detectedKind: file.detectedKind || '',
-          size: archive.originalSize,
-          date: archive.createdAt,
-          status: archive.status,
-          downloadUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/download` : null,
-          convertedDownloadUrl: (isReady && hasReadyTranscode(file)) ? getConvertedDownloadUrl(`/api/public/shares/${shareToken}/archive/${archive.id}/download`) : null,
-          thumbUrl: isReady ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/thumbnail` : null,
-          mediaUrl: (isReady && canPreview && mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/media` : null,
-          forceMediaPreview: Boolean(isReady && canPreview && mediaKind && !isMediaPreviewSupported(file.originalName || file.name || archive.name, mediaKind)),
-          subtitleUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle.vtt` : null,
-          subtitleTracksUrl: (isReady && canPreview && mediaKind === 'video') ? `/api/public/shares/${shareToken}/archive/${archive.id}/files/0/subtitle-tracks` : null,
-          previewUrl: (isReady && canPreview && !mediaKind) ? `/api/public/shares/${shareToken}/archive/${archive.id}/preview?fileIndex=0` : null
-        });
-      }
-    }
+    renderSharedFolderView(data.archives || [], data.name || 'Root');
   }
 }
 
