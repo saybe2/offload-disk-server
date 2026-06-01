@@ -45,6 +45,8 @@ th, td { padding: 8px; border-bottom: 1px solid #2b3240; text-align: left; }
 th { color: #9aa4b2; font-weight: 600; }
 tr:hover { background: #1c2330; }
 td button { margin-right: 6px; }
+.folder-path-cell { color: #b8c2d1; font-size: 13px; font-family: "JetBrains Mono", "Consolas", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
+.folder-path-root { color: #7f8a99; font-size: 13px; }
 .folder-row-item { cursor: pointer; }
 .drop { outline: 2px dashed #6ea8fe; }
 .row-selected { background: #1b2638; }

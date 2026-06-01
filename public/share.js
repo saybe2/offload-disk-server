@@ -139,11 +139,42 @@ function renderHead() {
   shareHead.innerHTML = `
     <tr>
       <th>Name</th>
+      <th>Folder</th>
       <th>Size</th>
       <th>Date</th>
       <th>Actions</th>
     </tr>
   `;
+}
+
+function formatFolderLabel(folderPath) {
+  const normalized = String(folderPath || '').trim();
+  return normalized || '/';
+}
+
+function comparePathSegments(aPath, bPath) {
+  const aParts = String(aPath || '').split('/').filter(Boolean);
+  const bParts = String(bPath || '').split('/').filter(Boolean);
+  const max = Math.max(aParts.length, bParts.length);
+  for (let i = 0; i < max; i += 1) {
+    const aPart = (aParts[i] || '').toLocaleLowerCase();
+    const bPart = (bParts[i] || '').toLocaleLowerCase();
+    if (aPart < bPart) return -1;
+    if (aPart > bPart) return 1;
+  }
+  return 0;
+}
+
+function sortFolderEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const pathOrder = comparePathSegments(a.relativePath, b.relativePath);
+    if (pathOrder !== 0) return pathOrder;
+    const aName = String(a.name || '').toLocaleLowerCase();
+    const bName = String(b.name || '').toLocaleLowerCase();
+    if (aName < bName) return -1;
+    if (aName > bName) return 1;
+    return 0;
+  });
 }
 
 function resetPreviewContent(message) {
@@ -400,6 +431,7 @@ async function openPreviewModal(item) {
 function addRow(item) {
   const tr = document.createElement('tr');
   const nameTd = document.createElement('td');
+  const folderTd = document.createElement('td');
   const sizeTd = document.createElement('td');
   const dateTd = document.createElement('td');
   const actionTd = document.createElement('td');
@@ -438,6 +470,15 @@ function addRow(item) {
   }
   nameTd.appendChild(nameWrap);
 
+  const folderPath = formatFolderLabel(item.relativePath);
+  folderTd.textContent = folderPath;
+  if (folderPath === '/') {
+    folderTd.className = 'folder-path-root';
+  } else {
+    folderTd.className = 'folder-path-cell';
+    folderTd.title = folderPath;
+  }
+
   sizeTd.textContent = formatSize(item.size);
   dateTd.textContent = item.date ? new Date(item.date).toLocaleString() : '';
 
@@ -473,6 +514,7 @@ function addRow(item) {
   }
 
   tr.appendChild(nameTd);
+  tr.appendChild(folderTd);
   tr.appendChild(sizeTd);
   tr.appendChild(dateTd);
   tr.appendChild(actionTd);
@@ -556,7 +598,7 @@ async function loadShare() {
   }
 
   if (data.type === 'folder') {
-    const archives = data.archives || [];
+    const archives = sortFolderEntries(data.archives || []);
     for (const archive of archives) {
       if (archive.isBundle && archive.files?.length) {
         archive.files.forEach((file, index) => {
@@ -569,6 +611,7 @@ async function loadShare() {
             fileIndex,
             isBundle: true,
             name: file.originalName || file.name,
+            relativePath: archive.relativePath || '',
             detectedKind: file.detectedKind || '',
             size: file.size,
             date: archive.createdAt,
@@ -607,6 +650,7 @@ async function loadShare() {
           fileIndex: 0,
           isBundle: false,
           name: archive.name,
+          relativePath: archive.relativePath || '',
           detectedKind: file.detectedKind || '',
           size: archive.originalSize,
           date: archive.createdAt,

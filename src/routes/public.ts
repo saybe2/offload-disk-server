@@ -157,6 +157,22 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
     const folder = await Folder.findById(share.folderId).lean();
     if (!folder) return res.status(404).json({ error: "not_found" });
     const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
+    const folderDocs = await Folder.find({ _id: { $in: descendants } })
+      .select("_id name parentId")
+      .lean();
+    const folderMap = new Map(folderDocs.map((entry) => [entry._id.toString(), entry]));
+    const buildRelativePath = (folderId: any) => {
+      const currentId = folderId ? folderId.toString() : "";
+      if (!currentId || currentId === folder._id.toString()) return "";
+      const parts: string[] = [];
+      let current = folderMap.get(currentId) || null;
+      while (current && current._id.toString() !== folder._id.toString()) {
+        parts.unshift(current.name);
+        const parentId = current.parentId ? current.parentId.toString() : null;
+        current = parentId ? folderMap.get(parentId) || null : null;
+      }
+      return parts.join("/");
+    };
     const archives = await Archive.find({
       archiveKind: { $ne: "transcoded" },
       folderId: { $in: descendants },
@@ -172,6 +188,7 @@ publicRouter.get("/api/public/shares/:token", async (req, res) => {
       archives: archives.map((a) => ({
         id: a._id,
         name: a.displayName || a.name,
+        relativePath: buildRelativePath(a.folderId),
         status: a.status,
         originalSize: a.originalSize,
         createdAt: a.createdAt,
