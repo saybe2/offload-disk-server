@@ -570,6 +570,12 @@ function normalizeTranscodeErrorType(reason?: string) {
   if (msg.includes("transcode_output_empty")) return "output_empty";
   // ffmpeg exit code 176: encoder produced 0 frames (skip:100.0%) -> permanent failure
   if (/ffmpeg_failed:\s*176\b/.test(msg)) return "ffmpeg_no_frames_encoded";
+  if (msg.includes("ffmpeg_failed") && msg.includes("could not open encoder before eof")) {
+    return "ffmpeg_no_frames_encoded";
+  }
+  if (msg.includes("ffmpeg_failed") && msg.includes("nothing was written into output file")) {
+    return "ffmpeg_no_frames_encoded";
+  }
   if (msg.includes("ffmpeg_failed") && msg.includes("invalid data found when processing input")) return "ffmpeg_invalid_input";
   if (msg.includes("ffmpeg_failed") && msg.includes("does not contain any stream")) return "ffmpeg_no_stream";
   if (msg.includes("ffmpeg_missing")) return "ffmpeg_missing";

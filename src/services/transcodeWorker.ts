@@ -101,6 +101,12 @@ function isPermanentTranscodeFailure(message: string) {
   if (/ffmpeg_failed:\s*176\b/.test(lower)) {
     return true;
   }
+  if (lower.includes("ffmpeg_failed") && lower.includes("could not open encoder before eof")) {
+    return true;
+  }
+  if (lower.includes("ffmpeg_failed") && lower.includes("nothing was written into output file")) {
+    return true;
+  }
   if (lower.includes("source_archive_id_missing") || lower.includes("source_user_id_missing")) {
     return true;
   }
