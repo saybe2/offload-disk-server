@@ -23,6 +23,7 @@ import { queueArchiveSubtitles } from "./subtitleWorker.js";
 import { queueArchiveTranscodes } from "./transcodeWorker.js";
 import { isTelegramReady } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
+import { safeOutboundFetch } from "./ssrfGuard.js";
 import { archiveNeedsTranscodeCopies, syncSourceTranscodeStateFromArchive } from "./transcodes.js";
 import {
   getMirrorSyncState,
@@ -233,7 +234,7 @@ async function generateLocalThumbnails(archive: any) {
 }
 
 async function fetchBuffer(url: string) {
-  const res = await outboundFetch(url);
+  const res = await safeOutboundFetch(url);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`download_failed:${res.status}:${text}`);

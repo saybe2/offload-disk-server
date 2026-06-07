@@ -31,6 +31,7 @@ import { getDescendantFolderIds } from "../services/folders.js";
 import { Webhook } from "../models/Webhook.js";
 import { deriveKey } from "../services/crypto.js";
 import { refreshPartUrl, saveMirrorResult, toPartDocument, uploadPartMirrored } from "../services/partProvider.js";
+import { assertSafeOutboundUrl, SsrfBlockedError } from "../services/ssrfGuard.js";
 import { sanitizeFilename } from "../utils/names.js";
 import { bumpDownloadCounts } from "../services/downloadCounts.js";
 import { bumpPreviewCount } from "../services/previewCounts.js";
@@ -563,6 +564,22 @@ apiRouter.post("/archives/import-external", expressJson({ limit: "64mb" }), requ
     }
     if (uploadEncrypted && (!part.iv || !part.authTag)) {
       return res.status(400).json({ error: "missing_part_crypto" });
+    }
+  }
+
+  // SSRF guard: the server later fetches and relays these URLs, so reject any
+  // URL that points at a non-public/internal address before persisting it.
+  for (const part of parts) {
+    for (const candidate of [part.url, part.mirrorUrl]) {
+      if (!candidate) continue;
+      try {
+        await assertSafeOutboundUrl(candidate);
+      } catch (err) {
+        if (err instanceof SsrfBlockedError) {
+          return res.status(400).json({ error: "blocked_part_url", reason: err.message });
+        }
+        return res.status(400).json({ error: "blocked_part_url" });
+      }
     }
   }
 
@@ -2513,12 +2530,19 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
     return res.status(404).json({ error: "part_not_found" });
   }
 
+  // SSRF guard at fetch time: validate the URL right before each outbound
+  // request to defend against DNS-rebinding and any legacy/unsafe stored URLs.
+  const safeOutboundFetch = async (url: string) => {
+    await assertSafeOutboundUrl(url);
+    return outboundFetch(url);
+  };
+
   const fetchWithRetry = async () => {
-    let response = await outboundFetch(part.url);
+    let response = await safeOutboundFetch(part.url);
     if (response.status === 404 || response.status === 401 || response.status === 403) {
       try {
         await refreshPartUrl(archive.id, part);
-        response = await outboundFetch(part.url);
+        response = await safeOutboundFetch(part.url);
       } catch {
         // fall through with original response
       }
@@ -2526,7 +2550,15 @@ apiRouter.get("/archives/:id/parts/:index/relay", requireAuth, async (req, res) 
     return response;
   };
 
-  const response = await fetchWithRetry();
+  let response;
+  try {
+    response = await fetchWithRetry();
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return res.status(400).json({ error: "blocked_part_url", reason: err.message });
+    }
+    throw err;
+  }
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
     return res.status(502).json({ error: `relay_failed:${response.status}:${text}` });

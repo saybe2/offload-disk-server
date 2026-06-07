@@ -4,6 +4,7 @@ import { pipeline } from "stream/promises";
 import { FormData, File } from "undici";
 import { config } from "../config.js";
 import { outboundFetch } from "./outbound.js";
+import { safeOutboundFetch } from "./ssrfGuard.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -129,7 +130,7 @@ export async function uploadBufferToWebhook(buffer: Buffer, filename: string, we
 
 export async function downloadToFile(url: string, destPath: string) {
   await withDiscordRetry("download", async () => {
-    const res = await outboundFetch(url);
+    const res = await safeOutboundFetch(url);
     if (!res.ok || !res.body) {
       const text = await res.text();
       if (shouldRetryStatus(res.status)) {

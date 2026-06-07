@@ -17,6 +17,7 @@ import {
   uploadBufferToTelegram
 } from "./telegram.js";
 import { outboundFetch } from "./outbound.js";
+import { safeOutboundFetch } from "./ssrfGuard.js";
 
 const MAGIC = Buffer.from("TBND", "ascii");
 const HEADER_BYTES = 16;
@@ -451,7 +452,7 @@ export function markBundleNeedsRebuild(archiveId: string) {
 }
 
 async function fetchBuffer(url: string) {
-  const res = await outboundFetch(url);
+  const res = await safeOutboundFetch(url);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`download_failed:${res.status}:${text}`);
