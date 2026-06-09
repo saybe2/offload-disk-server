@@ -32,6 +32,7 @@ import { initAnalyticsPersistence } from "./services/analytics.js";
 import { initRealtimeServer } from "./services/realtime.js";
 import { bumpCacheVersion, getRedisRuntimeState, startRedis } from "./services/redis.js";
 import { rateLimit } from "./services/rateLimit.js";
+import { csrfProtection, csrfTokenIssuer } from "./services/csrf.js";
 
 function isMongoTransientRuntimeError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err || "");
@@ -147,6 +148,8 @@ const sessionMiddleware = session({
 });
 
 app.use(sessionMiddleware);
+// Mirror a per-session CSRF token into a readable cookie for authenticated users.
+app.use(csrfTokenIssuer);
 
 app.get("/api/ui-config", (_req, res) => {
   res.json({
@@ -230,9 +233,20 @@ const publicShareRateLimiter = rateLimit({
 });
 
 app.use("/api/auth/login", loginRateLimiter);
-app.use("/api/auth", authRouter);
-app.use("/api", apiRouter);
-app.use("/api/admin", adminRouter);
+// CSRF protection on all session-backed, state-changing API requests. Excludes
+// the login endpoint (no session exists yet) and the public share routes
+// (authorised by an unguessable share token, not the session cookie).
+const csrfGuardedApi = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // req.path is relative to this mount point ("/api/auth"), so the login
+  // endpoint appears as "/login". Skip CSRF there (no session exists yet).
+  if (req.method === "POST" && (req.path === "/login" || req.path === "/api/auth/login")) {
+    return next();
+  }
+  return csrfProtection(req, res, next);
+};
+app.use("/api/auth", csrfGuardedApi, authRouter);
+app.use("/api", csrfProtection, apiRouter);
+app.use("/api/admin", csrfProtection, adminRouter);
 app.use("/api/public", publicShareRateLimiter);
 app.use(publicRouter);
 
