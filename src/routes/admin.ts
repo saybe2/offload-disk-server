@@ -18,6 +18,7 @@ import {
 import { getAnalyticsSnapshot } from "../services/analytics.js";
 import { config } from "../config.js";
 import { supportsSubtitle } from "../services/subtitles.js";
+import { assertSafeOutboundUrl, SsrfBlockedError } from "../services/ssrfGuard.js";
 
 export const adminRouter = Router();
 
@@ -248,7 +249,7 @@ adminRouter.post("/users", requireAdmin, async (req, res) => {
   if (config.smbEnabled && !/^[a-zA-Z0-9._-]{1,32}$/.test(username)) {
     return res.status(400).json({ error: "invalid_username" });
   }
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, config.bcryptRounds);
   const user = await User.create({
     username,
     passwordHash: hash,
@@ -265,7 +266,7 @@ adminRouter.patch("/users/:id", requireAdmin, async (req, res) => {
   const update: Record<string, unknown> = {};
   if (typeof quotaBytes === "number") update.quotaBytes = quotaBytes;
   if (role) update.role = role;
-  if (password) update.passwordHash = await bcrypt.hash(password, 10);
+  if (password) update.passwordHash = await bcrypt.hash(password, config.bcryptRounds);
   const user = await User.findByIdAndUpdate(req.params.id, update, { new: true });
   if (password && user) {
     await ensureSmbUser(user.username, password);
@@ -305,10 +306,18 @@ adminRouter.get("/webhooks", requireAdmin, async (_req, res) => {
 
 adminRouter.post("/webhooks", requireAdmin, async (req, res) => {
   const { url } = req.body as { url?: string };
-  if (!url) {
+  if (typeof url !== "string" || !url.trim()) {
     return res.status(400).json({ error: "missing_url" });
   }
-  const hook = await Webhook.create({ url, enabled: true });
+  try {
+    await assertSafeOutboundUrl(url.trim());
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return res.status(400).json({ error: "blocked_url", reason: err.message });
+    }
+    throw err;
+  }
+  const hook = await Webhook.create({ url: url.trim(), enabled: true });
   res.json({ id: hook.id });
 });
 

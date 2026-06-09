@@ -2377,7 +2377,12 @@ apiRouter.get("/archives/:id/preview", requireAuth, async (req, res) => {
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
   const fileSize = Number(file.size || 0);
   const heifPreview = isHeifFileName(fileName, detectedType);
-  if (fileSize > previewMaxBytes && !heifPreview) {
+  const heifPreviewMaxBytes = Math.max(1, Math.floor(config.heifPreviewMaxMiB * 1024 * 1024));
+  if (heifPreview) {
+    if (fileSize > heifPreviewMaxBytes) {
+      return res.status(413).json({ error: "preview_too_large", maxBytes: heifPreviewMaxBytes });
+    }
+  } else if (fileSize > previewMaxBytes) {
     return res.status(413).json({ error: "preview_too_large", maxBytes: previewMaxBytes });
   }
   if (detectedKind === "code" || (!detectedKind && ext === ".ts")) {

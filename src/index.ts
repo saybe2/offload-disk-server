@@ -257,7 +257,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 async function ensureAdminUser() {
   const existing = await User.findOne({ username: config.adminUsername });
   if (existing) return;
-  const hash = await bcrypt.hash(config.adminPassword, 10);
+  const hash = await bcrypt.hash(config.adminPassword, config.bcryptRounds);
   await User.create({
     username: config.adminUsername,
     passwordHash: hash,
@@ -514,6 +514,12 @@ async function main() {
   server.requestTimeout = 0;
   // Keep node from killing long-lived upload sockets due inactivity timeout.
   server.timeout = 0;
+  // Slowloris guard: bound only how long a client may take to send the request
+  // HEADERS (not the body), so a trickle of header bytes can't hold a socket
+  // open indefinitely. This does NOT limit large/slow upload bodies.
+  server.headersTimeout = Math.max(5000, config.headersTimeoutMs);
+  // Bound idle keep-alive sockets so abandoned connections are reclaimed.
+  server.keepAliveTimeout = Math.max(5000, config.keepAliveTimeoutMs);
 }
 
 main().catch((err) => {

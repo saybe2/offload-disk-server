@@ -114,6 +114,20 @@ export const config = {
   streamUseDisk: (process.env.STREAM_USE_DISK || "false") === "true",
   deleteStagingAfterEncrypt: (process.env.DELETE_STAGING_AFTER_ENCRYPT || "true") === "true",
   previewMaxMiB: toNumber(process.env.PREVIEW_MAX_MIB, 5),
+  // HEIF previews skip the regular preview size cap because they must be
+  // re-rendered to JPEG; bound them with their own hard limit so a public
+  // viewer cannot force the server to download+decode an arbitrarily large file.
+  heifPreviewMaxMiB: Math.max(1, toNumber(process.env.HEIF_PREVIEW_MAX_MIB, 64)),
+  // Max number of expensive public-share operations (full restore + ffmpeg
+  // remux/re-render) allowed to run concurrently for unauthenticated viewers.
+  publicHeavyOpConcurrency: Math.max(1, toNumber(process.env.PUBLIC_HEAVY_OP_CONCURRENCY, 3)),
+  // bcrypt cost factor for new/updated password hashes. Existing hashes carry
+  // their own cost in the hash string, so raising this needs no migration.
+  bcryptRounds: Math.min(15, Math.max(10, toNumber(process.env.BCRYPT_ROUNDS, 12))),
+  // Slowloris protection: max time to receive request headers, and idle
+  // keep-alive socket lifetime. These bound headers/idle only, not upload bodies.
+  headersTimeoutMs: Math.max(5000, toNumber(process.env.HEADERS_TIMEOUT_MS, 60000)),
+  keepAliveTimeoutMs: Math.max(5000, toNumber(process.env.KEEP_ALIVE_TIMEOUT_MS, 75000)),
   thumbnailSizePx: toNumber(process.env.THUMBNAIL_SIZE_PX, 320),
   thumbnailQuality: toNumber(process.env.THUMBNAIL_QUALITY, 76),
   thumbWorkerEnabled: (process.env.THUMB_WORKER_ENABLED || "true") === "true",

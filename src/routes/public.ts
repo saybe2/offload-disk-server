@@ -52,8 +52,13 @@ import {
   notePreviewError,
   notePreviewStarted
 } from "../services/analytics.js";
+import { ConcurrencyLimiter } from "../services/concurrencyLimiter.js";
 
 export const publicRouter = Router();
+
+// Caps simultaneous expensive operations (full restore to disk + ffmpeg
+// remux / image re-render) triggered by UNAUTHENTICATED public-share viewers.
+const heavyPublicOps = new ConcurrencyLimiter(config.publicHeavyOpConcurrency);
 type ResolveArchiveSuccess = { share: any; archive: any };
 type ResolveArchiveError = { status: number; error: "not_found" | "expired" | "archive_required" };
 type ResolveArchiveResult = ResolveArchiveSuccess | ResolveArchiveError;
@@ -476,6 +481,13 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
     ? path.join(config.cacheDir, "preview_media", `${mediaArchive.id}_${fileIndex}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
     : null;
 
+  const needsHeavyOp = (needsTsRemux || needsAudioTrackRemux) && !!remuxTempDir;
+  const releaseHeavyOp = needsHeavyOp ? heavyPublicOps.tryAcquire() : (() => {});
+  if (needsHeavyOp && !releaseHeavyOp) {
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ error: "server_busy" });
+  }
+
   try {
     void bumpPreviewCount(archive.id, fileIndex, `share:${req.params.token}`).catch(() => undefined);
     if ((needsTsRemux || needsAudioTrackRemux) && remuxTempDir) {
@@ -542,6 +554,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/files/:index/medi
     }
     return res.status(500).json({ error: "media_failed" });
   } finally {
+    if (releaseHeavyOp) releaseHeavyOp();
     if (remuxTempDir) {
       await fs.promises.rm(remuxTempDir, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -722,7 +735,12 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
   const previewMaxBytes = Math.max(1, Math.floor(config.previewMaxMiB * 1024 * 1024));
   const fileSize = Number(file.size || 0);
   const heifPreview = isHeifFileName(fileName, detectedType);
-  if (fileSize > previewMaxBytes && !heifPreview) {
+  const heifPreviewMaxBytes = Math.max(1, Math.floor(config.heifPreviewMaxMiB * 1024 * 1024));
+  if (heifPreview) {
+    if (fileSize > heifPreviewMaxBytes) {
+      return res.status(413).json({ error: "preview_too_large", maxBytes: heifPreviewMaxBytes });
+    }
+  } else if (fileSize > previewMaxBytes) {
     return res.status(413).json({ error: "preview_too_large", maxBytes: previewMaxBytes });
   }
   if (detectedKind === "code" || (!detectedKind && ext === ".ts")) {
@@ -742,6 +760,12 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   );
   const outputPath = path.join(tempDir, `${fileIndex}_${sanitizeFilename(fileName)}`);
+
+  const releaseHeavyOp = heavyPublicOps.tryAcquire();
+  if (!releaseHeavyOp) {
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ error: "server_busy" });
+  }
   await fs.promises.mkdir(tempDir, { recursive: true });
 
   try {
@@ -780,6 +804,7 @@ publicRouter.get("/api/public/shares/:token/archive/:archiveId/preview", async (
     log("preview", `public error ${archive.id} file=${fileIndex} ${(err as Error).message}`);
     return res.status(500).json({ error: "preview_failed" });
   } finally {
+    releaseHeavyOp();
     await fs.promises.rm(tempDir, { recursive: true, force: true });
   }
 });
