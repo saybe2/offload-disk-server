@@ -7,19 +7,38 @@ import { log } from "../logger.js";
 
 export const authRouter = Router();
 
+// A fixed bcrypt hash used to spend roughly the same time on the "no such user"
+// path as on a real comparison, removing the username-enumeration timing oracle.
+const DUMMY_BCRYPT_HASH = "$2a$10$CwTycUXWue0Thq9StjUM0uJ8DvL3aB2j6pQ1aQ6m3y3O9q1zS7Hy";
+
 authRouter.post("/login", async (req, res) => {
-  const { username, password } = req.body as { username?: string; password?: string };
+  // Force string types: with the JSON body parser, an object value like
+  // {"username":{"$gt":""}} would otherwise become a Mongo operator and allow
+  // NoSQL operator injection / arbitrary user selection.
+  const rawUsername = (req.body as any)?.username;
+  const rawPassword = (req.body as any)?.password;
+  if (typeof rawUsername !== "string" || typeof rawPassword !== "string") {
+    return res.status(400).json({ error: "missing_credentials" });
+  }
+  const username = rawUsername;
+  const password = rawPassword;
   if (!username || !password) {
     return res.status(400).json({ error: "missing_credentials" });
   }
   const user = await User.findOne({ username });
   if (!user) {
+    // Spend comparable time to avoid leaking whether the username exists.
+    await bcrypt.compare(password, DUMMY_BCRYPT_HASH).catch(() => false);
     return res.status(401).json({ error: "invalid_credentials" });
   }
   const ok = await bcrypt.compare(password, user.passwordHash);
   if (!ok) {
     return res.status(401).json({ error: "invalid_credentials" });
   }
+  // Prevent session fixation: issue a fresh session id on privilege change.
+  await new Promise<void>((resolve, reject) => {
+    req.session.regenerate((err) => (err ? reject(err) : resolve()));
+  });
   // Keep SMB credentials in sync with web credentials for existing accounts.
   try {
     await ensureSmbUser(username, password);

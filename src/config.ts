@@ -105,6 +105,10 @@ export const config = {
   uploadRetryBaseMs: toNumber(process.env.UPLOAD_RETRY_BASE_MS, 1500),
   uploadRetryMaxMs: toNumber(process.env.UPLOAD_RETRY_MAX_MS, 15000),
   uploadMaxFiles: toNumber(process.env.UPLOAD_MAX_FILES, 10000),
+  // Per-file size cap for multipart uploads (0 = unlimited). Default 0 keeps
+  // backward compatibility; set UPLOAD_MAX_FILE_GIB to enforce a ceiling so a
+  // single request cannot fill the cache disk before the quota check fires.
+  uploadMaxFileBytes: Math.floor(toNumber(process.env.UPLOAD_MAX_FILE_GIB, 0) * 1024 * 1024 * 1024),
   uploadTmpTtlHours: toNumber(process.env.UPLOAD_TMP_TTL_HOURS, 6),
   uploadTmpCleanupMinutes: toNumber(process.env.UPLOAD_TMP_CLEANUP_MINUTES, 30),
   streamUseDisk: (process.env.STREAM_USE_DISK || "false") === "true",

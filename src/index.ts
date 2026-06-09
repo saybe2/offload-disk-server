@@ -2,6 +2,7 @@ import express from "express";
 import session from "express-session";
 import MongoStore from "connect-mongo";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import path from "path";
 import fs from "fs";
 import { connectDb } from "./db.js";
@@ -30,6 +31,7 @@ import { getPrometheusContentType, getPrometheusMetrics } from "./services/metri
 import { initAnalyticsPersistence } from "./services/analytics.js";
 import { initRealtimeServer } from "./services/realtime.js";
 import { bumpCacheVersion, getRedisRuntimeState, startRedis } from "./services/redis.js";
+import { rateLimit } from "./services/rateLimit.js";
 
 function isMongoTransientRuntimeError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err || "");
@@ -91,6 +93,16 @@ app.use((req, _res, next) => {
   next();
 });
 
+// Baseline security headers (dependency-free; avoids pulling in helmet).
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-DNS-Prefetch-Control", "off");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  next();
+});
+
 // Default limit kept tight to reduce DoS surface; specific routes that need
 // larger JSON payloads (e.g. archives/import-external for migration) opt in
 // to a higher limit at the route level via express.json({ limit: ... }).
@@ -128,7 +140,9 @@ const sessionMiddleware = session({
     // "auto" => Secure flag is set when the request was made over HTTPS
     // (works behind nginx via trust proxy and over plain HTTP on LAN)
     secure: "auto",
-    maxAge: 90 * 24 * 60 * 60 * 1000
+    // Shortened from 90d: a long-lived bearer cookie that can travel over plain
+    // HTTP on LAN is a meaningful sniffing window, so cap the session lifetime.
+    maxAge: 14 * 24 * 60 * 60 * 1000
   }
 });
 
@@ -146,14 +160,28 @@ app.get("/api/ui-config", (_req, res) => {
   });
 });
 
+function timingSafeStringEqual(a: string, b: string) {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Still compare against self to keep timing roughly constant.
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 if (config.metricsEnabled) {
+  if (!config.metricsToken) {
+    log("server", "WARNING metrics endpoint is enabled without METRICS_TOKEN; metrics are publicly accessible");
+  }
   app.get(config.metricsPath, async (req, res) => {
     const token = config.metricsToken;
     if (token) {
       const auth = String(req.headers.authorization || "");
       const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
       const queryToken = String(req.query.token || "");
-      if (bearer !== token && queryToken !== token) {
+      if (!timingSafeStringEqual(bearer, token) && !timingSafeStringEqual(queryToken, token)) {
         return res.status(403).send("forbidden");
       }
     }
@@ -184,10 +212,36 @@ app.get("/share/:token", (_req, res) => {
   return res.sendFile(path.join(publicDir, "share.html"));
 });
 
+// Brute-force protection on authentication: cap login attempts per client IP.
+const loginRateLimiter = rateLimit({
+  scope: "login",
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: "too_many_login_attempts"
+});
+
+// Throttle unauthenticated public share access to slow token enumeration and
+// amplification of expensive preview/restore work behind public endpoints.
+const publicShareRateLimiter = rateLimit({
+  scope: "public-share",
+  windowMs: 60 * 1000,
+  max: 120,
+  message: "too_many_requests"
+});
+
+app.use("/api/auth/login", loginRateLimiter);
 app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/public", publicShareRateLimiter);
 app.use(publicRouter);
+
+// Explicit 404 for unknown /api routes so requests don't silently fall through
+// the router chain.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "not_found" });
+});
+
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = err instanceof Error ? err.message : String(err);
   const code = err && typeof err === "object" ? (err as any).code : undefined;

@@ -230,11 +230,19 @@ function parseByteRange(rangeHeader: string, size: number) {
 async function decryptPartToBuffer(
   partPath: string,
   part: { iv?: string; authTag?: string; index: number },
-  key: Buffer
+  key: Buffer,
+  encryptionVersion: number
 ) {
   const ivB64 = part.iv || "";
   const authTagB64 = part.authTag || "";
   if (!ivB64 || !authTagB64) {
+    // Only archives explicitly stored unencrypted (version 0) may be returned
+    // as-is. For an encrypted archive a missing IV/authTag means tampering or
+    // corruption: fail closed instead of silently returning unauthenticated
+    // (and possibly attacker-supplied) bytes.
+    if (encryptionVersion >= 1) {
+      throw new Error(`part_crypto_missing:${part.index}`);
+    }
     return await fs.promises.readFile(partPath);
   }
   const iv = Buffer.from(ivB64, "base64");
@@ -317,7 +325,7 @@ export async function streamArchiveRangeToResponse(
       if (actualHash !== part.hash) {
         throw new Error(`part_hash_mismatch:${part.index}`);
       }
-      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      const plain = await decryptPartToBuffer(partPath, part as any, key, archive.encryptionVersion ?? 2);
       await fs.promises.unlink(partPath).catch(() => undefined);
 
       const from = Math.max(range.start, partStart) - partStart;
@@ -388,7 +396,7 @@ async function restoreArchiveToFileInternal(
         throw new Error(`part_hash_mismatch:${part.index}`);
       }
 
-      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      const plain = await decryptPartToBuffer(partPath, part as any, key, archive.encryptionVersion ?? 2);
       await fs.promises.unlink(partPath).catch(() => undefined);
       noteRestoreBytes(plain.length);
       if (!output.write(plain)) {
@@ -571,7 +579,7 @@ export async function streamArchiveToResponse(
         throw new Error(`part_hash_mismatch:${part.index}`);
       }
 
-      const plain = await decryptPartToBuffer(partPath, part as any, key);
+      const plain = await decryptPartToBuffer(partPath, part as any, key, archive.encryptionVersion ?? 2);
       await fs.promises.unlink(partPath).catch(() => undefined);
       noteRestoreBytes(plain.length);
       if (!res.write(plain)) {

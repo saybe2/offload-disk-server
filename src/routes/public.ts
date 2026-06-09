@@ -3,6 +3,7 @@ import mime from "mime-types";
 import path from "path";
 import { pipeline } from "stream/promises";
 import { Router } from "express";
+import { Types } from "mongoose";
 import { Archive } from "../models/Archive.js";
 import { Folder } from "../models/Folder.js";
 import { Share } from "../models/Share.js";
@@ -89,6 +90,14 @@ function estimateArchiveDownloadBytes(archive: any) {
 }
 
 async function resolveArchiveByShare(token: string, archiveId?: string): Promise<ResolveArchiveResult> {
+  // Tokens and ids arrive as path params (always strings), but guard against
+  // malformed values so they never reach the DB as an invalid ObjectId.
+  if (typeof token !== "string" || !token) {
+    return { status: 404, error: "not_found" as const };
+  }
+  if (archiveId !== undefined && (typeof archiveId !== "string" || !Types.ObjectId.isValid(archiveId))) {
+    return { status: 404, error: "not_found" as const };
+  }
   const share = await Share.findOne({ token }).lean();
   if (!share) return { status: 404, error: "not_found" as const };
   if (isExpired(share.expiresAt)) return { status: 410, error: "expired" as const };
@@ -111,6 +120,7 @@ async function resolveArchiveByShare(token: string, archiveId?: string): Promise
     const descendants = await getDescendantFolderIds(folder.userId.toString(), folder._id.toString());
     const archive = await Archive.findOne({
       _id: archiveId,
+      userId: folder.userId,
       archiveKind: { $ne: "transcoded" },
       folderId: { $in: descendants },
       deletedAt: null,

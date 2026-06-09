@@ -93,7 +93,10 @@ import {
 
 const upload = multer({
   dest: path.join(config.cacheDir, "uploads_tmp"),
-  limits: config.uploadMaxFiles > 0 ? { files: config.uploadMaxFiles } : undefined
+  limits: {
+    ...(config.uploadMaxFiles > 0 ? { files: config.uploadMaxFiles } : {}),
+    ...(config.uploadMaxFileBytes > 0 ? { fileSize: config.uploadMaxFileBytes } : {})
+  }
 });
 
 export const apiRouter = Router();
@@ -1449,7 +1452,12 @@ apiRouter.get("/archives", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "bad_user" });
   }
   const isTrash = req.query.trash === "1";
-  const folderId = (req.query.folderId as string) || null;
+  // Only accept a string folderId; reject objects to prevent NoSQL operator
+  // injection via ?folderId[$ne]=... turning the filter field into an operator.
+  const folderId = typeof req.query.folderId === "string" && req.query.folderId ? req.query.folderId : null;
+  if (folderId && !Types.ObjectId.isValid(folderId)) {
+    return res.status(400).json({ error: "invalid_folder" });
+  }
   const rootOnly = req.query.root === "1";
   const queryRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const sortSpec = resolveArchiveSort(req.query.sort, req.query.dir);
